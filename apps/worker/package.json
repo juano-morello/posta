@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "nest build",
     "start": "node dist/main.js"
   },
   "dependencies": {
@@ -19,6 +19,6 @@
     "@nestjs/cli": "^11.0.24",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
-    "typescript": "7.0.2"
+    "typescript": "5.9.3"
   }
 }
