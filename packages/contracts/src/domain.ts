@@ -14,7 +14,10 @@
 // change at runtime), so building the closures once and calling the
 // returned functions repeatedly keeps call sites clean — no domain
 // object threaded through every buildLinkUrl() call on the redirect hot
-// path — and keeps the config's shape centralized in one place.
+// path — and keeps the config's shape centralized in one place. This is
+// also why the normalization below happens once, inside
+// makeUrlBuilders, rather than inside each returned function: see the
+// comment at the top of makeUrlBuilders.
 
 /** `POSTA_PROTOCOL` — "http" locally, "https" everywhere else. */
 export type Protocol = 'http' | 'https';
@@ -42,7 +45,16 @@ export interface UrlBuilders {
   buildBioUrl(handle: string): string;
   /** `<protocol>://<appSubdomain>.<domain><path>` — the dashboard. */
   buildAppUrl(path?: string): string;
-  /** `<protocol>://<apiSubdomain>.<domain><path>` — the API. */
+  /**
+   * `<protocol>://<apiSubdomain>.<domain><path>` — the API. Does NOT
+   * prepend a version segment itself: CRUD, analytics, and a future
+   * `/v2` all live under this one builder, so the *caller* is
+   * responsible for including it in `path` — e.g.
+   * `buildApiUrl('/v1/links')`, not `buildApiUrl('/links')`. A call
+   * site that forgets the prefix gets back a valid-looking but
+   * unversioned URL with no error; there is nothing in this function
+   * that could catch that for you.
+   */
   buildApiUrl(path?: string): string;
   /**
    * The inverse of buildLinkUrl/buildBioUrl and the redirect hot path's
@@ -67,42 +79,6 @@ function normalizeLabel(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function isReservedSubdomain(label: string, config: DomainConfig): boolean {
-  return (
-    label === normalizeLabel(config.appSubdomain) ||
-    label === normalizeLabel(config.apiSubdomain)
-  );
-}
-
-/**
- * Validates and normalizes a handle for use in a constructed URL.
- * Throws on anything that could never be a real tenant handle: empty,
- * multi-label, invalid characters, or one of this config's own reserved
- * subdomains (app/api) — a link can never be built for a handle that
- * would collide with the dashboard or the API host.
- */
-function assertClaimableHandle(handle: string, config: DomainConfig): string {
-  const normalized = normalizeLabel(handle);
-
-  if (!HANDLE_PATTERN.test(normalized)) {
-    throw new Error(`Invalid handle: "${handle}"`);
-  }
-
-  if (isReservedSubdomain(normalized, config)) {
-    throw new Error(`Handle "${handle}" is reserved and cannot be used`);
-  }
-
-  return normalized;
-}
-
-function hostFor(label: string, config: DomainConfig): string {
-  return `${label}.${config.domain}`;
-}
-
-function originFor(hostname: string, config: DomainConfig): string {
-  return `${config.protocol}://${hostname}`;
-}
-
 function normalizePath(path: string): string {
   if (path.length === 0) return '';
   return path.startsWith('/') ? path : `/${path}`;
@@ -123,58 +99,110 @@ function stripPort(host: string): string {
   return /^\d+$/.test(maybePort) ? host.slice(0, colonIndex) : host;
 }
 
-function parseHandleFromHostImpl(rawHost: string, config: DomainConfig): string | undefined {
-  const host = stripPort(normalizeLabel(rawHost));
-  const domain = normalizeLabel(config.domain);
-
-  if (host.length === 0) return undefined;
-  if (host === domain) return undefined; // apex domain — no handle
-
-  const suffix = `.${domain}`;
-  if (!host.endsWith(suffix)) return undefined; // not our domain at all
-
-  const label = host.slice(0, -suffix.length);
-  if (label.length === 0 || label.includes('.')) return undefined; // empty or multi-level
-  if (isReservedSubdomain(label, config)) return undefined; // app./api.
-
-  return label;
-}
-
 /**
  * Builds the five host-construction helpers from a single, small,
  * typed config. This is the ONLY place in the codebase a host string is
  * assembled from a domain — see T0.3.9's grep test.
+ *
+ * Everything derived from `config` alone (the normalized domain, the
+ * normalized app/api subdomain labels, and the two fully-assembled
+ * dashboard/API origins) is computed once, right here, and closed over
+ * by the returned functions — not recomputed inside them. `config` is
+ * fixed for the life of these builders, so re-deriving the same strings
+ * on every call would be pure waste, and `parseHandleFromHost` in
+ * particular runs on the redirect hot path, where that waste happens on
+ * every single request.
  */
 export function makeUrlBuilders(config: DomainConfig): UrlBuilders {
+  const domain = normalizeLabel(config.domain);
+  const protocol = config.protocol;
+  const appSubdomain = normalizeLabel(config.appSubdomain);
+  const apiSubdomain = normalizeLabel(config.apiSubdomain);
+  const domainSuffix = `.${domain}`;
+  const appOrigin = `${protocol}://${appSubdomain}.${domain}`;
+  const apiOrigin = `${protocol}://${apiSubdomain}.${domain}`;
+
+  function isReservedSubdomain(label: string): boolean {
+    return label === appSubdomain || label === apiSubdomain;
+  }
+
+  /**
+   * Validates and normalizes a handle for use in a constructed URL.
+   * Throws on anything that could never be a real tenant handle: empty,
+   * multi-label, invalid characters, or a collision with *this
+   * deployment's* app/api subdomain — a link can never be built for a
+   * handle that would collide with the dashboard or the API host. This
+   * is not the full reserved-word policy: only 2 of the 11
+   * RESERVED_HANDLES (T0.3.4) are checked here, because only those two
+   * are hosts this module itself constructs. The remaining words
+   * (www, admin, static, …) are blocked at handle *creation* time
+   * instead (S5.3) — buildBioUrl('admin') succeeding here is expected,
+   * not a bug.
+   */
+  function assertClaimableHandle(handle: string): string {
+    const normalized = normalizeLabel(handle);
+
+    if (!HANDLE_PATTERN.test(normalized)) {
+      throw new Error(`Invalid handle: "${handle}"`);
+    }
+
+    if (isReservedSubdomain(normalized)) {
+      throw new Error(
+        `Handle "${handle}" collides with this deployment's app/api host ` +
+          '(POSTA_APP_SUBDOMAIN/POSTA_API_SUBDOMAIN) and cannot be used. ' +
+          'This does not check the full reserved-handle list — that gate ' +
+          'lives at handle creation time (S5.3).',
+      );
+    }
+
+    return normalized;
+  }
+
+  function hostFor(label: string): string {
+    return `${label}.${domain}`;
+  }
+
+  function originFor(hostname: string): string {
+    return `${protocol}://${hostname}`;
+  }
+
   return {
     buildLinkUrl(handle: string, slug: string): string {
-      const normalizedHandle = assertClaimableHandle(handle, config);
+      const normalizedHandle = assertClaimableHandle(handle);
       const normalizedSlug = slug.trim();
 
       if (normalizedSlug.length === 0) {
         throw new Error('slug must not be empty');
       }
 
-      return `${originFor(hostFor(normalizedHandle, config), config)}/${normalizedSlug}`;
+      return `${originFor(hostFor(normalizedHandle))}/${normalizedSlug}`;
     },
 
     buildBioUrl(handle: string): string {
-      const normalizedHandle = assertClaimableHandle(handle, config);
-      return `${originFor(hostFor(normalizedHandle, config), config)}/`;
+      const normalizedHandle = assertClaimableHandle(handle);
+      return `${originFor(hostFor(normalizedHandle))}/`;
     },
 
     buildAppUrl(path = ''): string {
-      const appHost = hostFor(normalizeLabel(config.appSubdomain), config);
-      return `${originFor(appHost, config)}${normalizePath(path)}`;
+      return `${appOrigin}${normalizePath(path)}`;
     },
 
     buildApiUrl(path = ''): string {
-      const apiHost = hostFor(normalizeLabel(config.apiSubdomain), config);
-      return `${originFor(apiHost, config)}${normalizePath(path)}`;
+      return `${apiOrigin}${normalizePath(path)}`;
     },
 
-    parseHandleFromHost(host: string): string | undefined {
-      return parseHandleFromHostImpl(host, config);
+    parseHandleFromHost(rawHost: string): string | undefined {
+      const host = stripPort(normalizeLabel(rawHost));
+
+      if (host.length === 0) return undefined;
+      if (host === domain) return undefined; // apex domain — no handle
+      if (!host.endsWith(domainSuffix)) return undefined; // not our domain, or a trailing-dot FQDN
+
+      const label = host.slice(0, -domainSuffix.length);
+      if (label.length === 0 || label.includes('.')) return undefined; // empty or multi-level
+      if (isReservedSubdomain(label)) return undefined; // app./api.
+
+      return label;
     },
   };
 }

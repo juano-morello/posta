@@ -155,6 +155,17 @@ describe('makeUrlBuilders', () => {
     it('returns undefined for an empty string', () => {
       expect(parseHandleFromHost('')).toBeUndefined();
     });
+
+    it('returns undefined for a trailing-dot FQDN host', () => {
+      // Some resolvers send a fully-qualified host with the root dot,
+      // e.g. "juano.example.test." — current behavior falls through to
+      // undefined, because the domainSuffix check (".example.test")
+      // doesn't match a host ending in ".example.test." (extra trailing
+      // dot). Safe: the hot path treats "no handle" as a 404, not an
+      // exception. Pinned down here so a future change to this logic
+      // has to touch this assertion deliberately, not drift by accident.
+      expect(parseHandleFromHost('juano.example.test.')).toBeUndefined();
+    });
   });
 });
 
