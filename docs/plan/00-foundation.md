@@ -109,26 +109,31 @@ Allowed: `web→contracts` · `api→core,contracts` · `worker→core,contracts
 
 ---
 
-## S0.6 — Reconcile the source documents
+## S0.6 — Reconcile the source documents ✅ done 2026-07-21
 
 **As a** future reader **I want** the docs to agree with the build **so that** `CLAUDE.md` stays trustworthy as the contract it claims to be.
 
-The design resolved three contradictions. The docs still contain the losing side of each.
+The design resolved three contradictions. The docs still contained the losing side of each.
 
 **Acceptance:**
-- [ ] `CLAUDE.md` invariant 11 replaced with the amended one-frontend-surface text (spec §11)
-- [ ] `CLAUDE.md` gains the Cloudflare Origin Rule routing note
-- [ ] `POSTA.md` §0 — links are `juano.posta.lat/<slug>`, bio is `juano.posta.lat/`; the `juano.lbt.works` reference is removed
-- [ ] `POSTA.md` §2 microcopy examples updated to the longer host
-- [ ] `POSTA.md` §8 reframed: SCSS is the **token source**, Tailwind + shadcn is the component layer
-- [ ] A decision-log section links back to the spec
+- [x] `CLAUDE.md` invariant 11 replaced with the amended one-frontend-surface text (spec §11)
+- [x] `CLAUDE.md` gains the Cloudflare Origin Rule routing note
+- [x] `POSTA.md` §0 — links are `juano.posta.lat/<slug>`, bio is `juano.posta.lat/`; the `juano.lbt.works` reference is removed
+- [x] `POSTA.md` §2 microcopy examples updated to the longer host
+- [x] `POSTA.md` §8 reframed: SCSS is the **token source**, Tailwind + shadcn is the component layer
+- [x] A decision-log section links back to the spec
 
 **Tasks:**
-- [ ] T0.6.1 rewrite `CLAUDE.md` invariant 11 [INV-11]
-- [ ] T0.6.2 add routing table to `CLAUDE.md`
-- [ ] T0.6.3 fix `POSTA.md` §0 domains
-- [ ] T0.6.4 sweep `POSTA.md` for `posta.lat/` examples
-- [ ] T0.6.5 reframe `POSTA.md` §8 SCSS scope
-- [ ] T0.6.6 add decision log pointing at the spec
+- [x] T0.6.1 rewrite `CLAUDE.md` invariant 11 [INV-11]
+- [x] T0.6.2 add routing table to `CLAUDE.md`
+- [x] T0.6.3 fix `POSTA.md` §0 domains
+- [x] T0.6.4 sweep `POSTA.md` for `posta.lat/` examples
+- [x] T0.6.5 reframe `POSTA.md` §8 SCSS scope
+- [x] T0.6.6 add decision log pointing at the spec
+
+**Found during execution, beyond the planned scope:**
+- [x] A second `juano.lbt.works` in `POSTA.md` §2 screen 6 (Settings), which the plan had not caught
+- [x] `POSTA.md` §5 declared `Link.id: number`, contradicting the ULID convention — changed to `string`
+- [x] `POSTA.md` §7 screen 7 said "SSR"; now Next SSG + on-demand ISR, with a note that the editor preview must stay the real page component
 
 > The longer host has a UI consequence, so it is not a pure find-and-replace: `juano.posta.lat/promo` does not fit a list row the way `posta.lat/promo` did. The links list truncates to `…/promo`, showing the full host on hover and copying the full URL. Carry this into S7.2.

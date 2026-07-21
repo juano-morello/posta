@@ -19,7 +19,15 @@ Posta reuses JuanoDev's *visual system* but is its **own product**:
 - It stays **lime** (`#B4FF39` dark / `#3F9142` light). Never LBT's orange.
 - UI language is **Spanish (rioplatense, direct)** — "Nuevo link", "clicks reales", "todavía no hay links". Never corporate.
 
-Short-link domain: **`posta.lat/<slug>`**. Public bio subdomain (read-only in v1): **`juano.lbt.works`**.
+Links and bio share the user's own subdomain, built from `POSTA_LINK_DOMAIN` (never hardcoded):
+
+| | |
+|---|---|
+| short link | **`juano.posta.lat/<slug>`** |
+| public bio (read-only in v1) | **`juano.posta.lat/`** |
+| dashboard | `app.posta.lat` |
+
+> The host is longer than a bare `posta.lat/promo`, which is a real UI cost: the links list truncates to `…/promo`, shows the full host on hover, and copies the complete URL.
 
 ---
 
@@ -58,13 +66,13 @@ Single **terminal card** (always-dark island): chrome 3-dots, title `~/posta $ l
 
 ### 2 · Links overview (`/`) — home & workhorse
 - Top: slim band of **bordered stat cards** — clicks reales · % no humano (global) · mejor link · top fuente. Border, no shadow.
-- **Links list**, each row = mono slug (`posta.lat/promo`), destination (favicon + host), **real clicks (bold)**, bot % (muted), 7-day **sparkline**, copy button.
+- **Links list**, each row = mono slug (`juano.posta.lat/promo`, truncated to `…/promo` with the full host on hover), destination (favicon + host), **real clicks (bold)**, bot % (muted), 7-day **sparkline**, copy button.
 - Toolbar: client-side **search filter** + lime **Nuevo link**.
 - **Empty state** is terminal: `~/posta $ todavía no hay links` (dark island block).
 - Interactions: search-filter, copy-to-clipboard with a **mono toast**, hover lifts the row's left border to lime. Row click → analytics.
 
 ### 3 · Create / edit link — shadcn **sheet** over the list
-Fields: destination URL; slug toggle **Aleatorio / Personalizado**; when personalizado, a vanity input showing the live domain prefix (`posta.lat/____`) with a reroll for random; optional title. **Inline validation** (slug taken → lime-error border + halo + mono message). Sheet header shows `~/posta $ new` / `~/posta $ edit <slug>`. On save: row appears highlighted with the short link + copy button surfaced.
+Fields: destination URL; slug toggle **Aleatorio / Personalizado**; when personalizado, a vanity input showing the live domain prefix (`juano.posta.lat/____`) with a reroll for random; optional title. **Inline validation** (slug taken → lime-error border + halo + mono message). Sheet header shows `~/posta $ new` / `~/posta $ edit <slug>`. On save: row appears highlighted with the short link + copy button surfaced.
 
 ### 4 · Link analytics (`/l/:id`) — the honesty screen
 This is where the thesis is felt or missed.
@@ -79,10 +87,12 @@ This is where the thesis is felt or missed.
 - **Right:** a **live mobile preview** of the public page, updating as you edit. Lime **Guardar**.
 
 ### 6 · Settings (`/settings`)
-Handle/subdomain read-only (`juano.lbt.works`), account (email + **Free** plan badge), appearance (theme toggle), and **dimmed "próximamente"** placeholders for *Dominio propio* (v1.5) and *API keys* (v2) — present so the layout anticipates them, not built.
+Handle/subdomain read-only (`juano.posta.lat`), account (email + **Free** plan badge), appearance (theme toggle), and **dimmed "próximamente"** placeholders for *Dominio propio* (v1.5) and *API keys* (v2) — present so the layout anticipates them, not built.
 
-### 7 · Bio page (public, SSR) — mobile-first, visitor-facing
-Dark terminal theme (always): avatar with lime ring, `@handle` in mono, display name, bio, a vertical stack of **terminal-styled link buttons** (lime `→` cursor, hover lifts border to lime + translateY), subtle background grid, mono footer `hecho con Posta`. This is what the world opens from Instagram — design **mobile-first** and unfurl cleanly (OG tags). One of the 2–3 themes.
+### 7 · Bio page (public, Next SSG + on-demand ISR) — mobile-first, visitor-facing
+Dark terminal theme (always): avatar with lime ring, `@handle` in mono, display name, bio, a vertical stack of **terminal-styled link buttons** (lime `→` cursor, hover lifts border to lime + translateY), subtle background grid, mono footer `hecho con Posta`. This is what the world opens from Instagram — design **mobile-first** and unfurl cleanly (OG tags via `generateMetadata`). One of the 2–3 themes.
+
+Rendered by `web`, not the API (`CLAUDE.md` invariant 11, amended 2026-07-21): statically generated, revalidated on save, served from a CDN edge near the visitor. Themes are React components, so the bio editor's live preview in screen 5 **is this page's component** — not a lookalike. If it ever becomes "a simplified preview for performance", drift is back and the amendment bought nothing.
 
 ### 8 · 404 / link no encontrado — on-brand system page
 Terminal shell: `~/posta $ cd /<slug>` → `error: no existe ese link`, blinking cursor, a quiet link back to Posta.
@@ -110,7 +120,7 @@ Terminal shell: `~/posta $ cd /<slug>` → `error: no existe ese link`, blinking
 
 ```ts
 type Link = {
-  id: number; slug: string;          // posta.lat/<slug>
+  id: string; slug: string;          // ULID · juano.posta.lat/<slug>
   dest: string; host: string;        // destination + display host
   favLetter: string; favColor: string;
   realClicks: number;                // HUMANS only — the hero number
@@ -137,7 +147,7 @@ type Recibo = {
 Rioplatense, direct, no corporate tone (BRAND.md §7). Examples in use:
 - `Nuevo link` · `clicks reales` · `% no humano` · `solo humanos` / `todo` · `no hum.`
 - Validation: `✕ ese slug ya existe — probá otro`
-- Toasts: `copiado: posta.lat/promo` · `link creado: …` · `bio guardada`
+- Toasts: `copiado: juano.posta.lat/promo` · `link creado: …` · `bio guardada`
 - Empty/system: `~/posta $ todavía no hay links` · `error: no existe ese link`
 - Login tagline: `links honestos. clicks reales.` · Footer: `hecho con Posta`
 
@@ -156,9 +166,16 @@ Rioplatense, direct, no corporate tone (BRAND.md §7). Examples in use:
 
 ---
 
-## 8. SCSS setup
+## 8. Tokens (SCSS) + components (Tailwind + shadcn)
 
-Stack uses **SCSS**. Keep tokens as CSS custom properties (so runtime theme switching works via a `.light` class), and use **SCSS only for authoring ergonomics** — maps, mixins, the breakpoint, and the honesty components. Do **not** hardcode hex in components; read `var(--*)`.
+Two layers, and the split is the whole point:
+
+- **SCSS is the token source, and nothing else.** `_tokens.scss` emits CSS custom properties so runtime theme switching stays a `.light` class toggle. Maps, mixins and the breakpoint live here.
+- **Components are React + Tailwind + shadcn/ui**, per `DESIGN.md`. The Tailwind config reads those same CSS variables, so `bg-primary` and `var(--primary)` resolve to one value rather than two definitions that drift.
+
+Do **not** hardcode hex in components; read `var(--*)`. A grep test enforces this — and it matters beyond tidiness: light mode drops `primary` from `#B4FF39` to `#3F9142` because pure lime on white fails AA, so a hardcoded dark lime breaks accessibility silently.
+
+> **On §8.4 below:** those SCSS blocks are the **visual spec** for the honesty primitives — sizes, colors, states. Build them as React components using Tailwind and the tokens, not as literal stylesheets. shadcn supplies sheet, toast and dialog, which §2 and §3 explicitly ask for; hand-rolling them in SCSS would be weeks for no gain.
 
 ### 8.1 Tokens → CSS custom properties
 
@@ -238,4 +255,17 @@ Keep `color-mix()` in the emitted CSS (don't let SCSS try to evaluate it — int
 
 ---
 
-_Posta v1 · honesty-first analytics · visual system in [`DESIGN.md`](./DESIGN.md) · identity in [`BRAND.md`](./BRAND.md)._
+## 9. Decision log
+
+Reconciled 2026-07-21 against [`docs/superpowers/specs/2026-07-21-posta-design.md`](./docs/superpowers/specs/2026-07-21-posta-design.md), which **wins on conflict** with this file.
+
+| Was | Now | Why |
+|---|---|---|
+| `posta.lat/<slug>`, bio on `juano.lbt.works` | `juano.posta.lat/<slug>` and `juano.posta.lat/` | One host per user; slug unique per tenant instead of globally. `lbt.works` was a leftover from another project. |
+| "SCSS setup" (§8) | SCSS = tokens; Tailwind + shadcn = components | `DESIGN.md` already specified React + Tailwind + shadcn. This file contradicted it. |
+| Bio page "SSR", rendered by the API | Next SSG + on-demand ISR, rendered by `web` | One frontend surface. Invariant 11 amended — the editor preview is now the real page component. |
+| `Link.id: number` | `Link.id: string` (ULID) | `CLAUDE.md` conventions specify ULID. |
+
+---
+
+_Posta v1 · honesty-first analytics · visual system in [`DESIGN.md`](./DESIGN.md) · identity in [`BRAND.md`](./BRAND.md) · build plan in [`docs/plan/`](./docs/plan/)._
