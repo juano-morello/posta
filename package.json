@@ -7,10 +7,12 @@
   },
   "scripts": {
     "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "depcruise": "depcruise --config .dependency-cruiser.js apps packages"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "dependency-cruiser": "^18.1.0",
     "eslint": "^9.39.5",
     "turbo": "2.10.5",
     "typescript": "5.9.3",
