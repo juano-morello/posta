@@ -156,15 +156,28 @@ describe('makeUrlBuilders', () => {
       expect(parseHandleFromHost('')).toBeUndefined();
     });
 
-    it('returns undefined for a trailing-dot FQDN host', () => {
-      // Some resolvers send a fully-qualified host with the root dot,
-      // e.g. "juano.example.test." — current behavior falls through to
-      // undefined, because the domainSuffix check (".example.test")
-      // doesn't match a host ending in ".example.test." (extra trailing
-      // dot). Safe: the hot path treats "no handle" as a 404, not an
-      // exception. Pinned down here so a future change to this logic
-      // has to touch this assertion deliberately, not drift by accident.
-      expect(parseHandleFromHost('juano.example.test.')).toBeUndefined();
+    it('resolves a trailing-dot FQDN host to the same handle', () => {
+      // A single trailing dot is the DNS root label — "example.test."
+      // and "example.test" are the same host, and some clients do send
+      // the FQDN form in a Host header. This is the redirect hot path's
+      // first step, so a real link 404ing over a trailing dot would be
+      // exactly the kind of silent failure Posta exists to catch, not
+      // commit.
+      expect(parseHandleFromHost('juano.example.test.')).toBe('juano');
+    });
+
+    it('returns undefined for a double-trailing-dot host', () => {
+      // Only one trailing dot is stripped — "juano.example.test.." is
+      // malformed (a double-rooted name), not a valid FQDN, and must
+      // still fall through to undefined rather than being treated the
+      // same as a single trailing dot.
+      expect(parseHandleFromHost('juano.example.test..')).toBeUndefined();
+    });
+
+    it('returns undefined for the apex domain with a trailing dot', () => {
+      // Normalizes to the bare apex ("example.test"), which correctly
+      // has no handle — same as the no-dot apex case above.
+      expect(parseHandleFromHost('example.test.')).toBeUndefined();
     });
   });
 });

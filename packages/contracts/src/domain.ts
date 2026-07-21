@@ -192,11 +192,17 @@ export function makeUrlBuilders(config: DomainConfig): UrlBuilders {
     },
 
     parseHandleFromHost(rawHost: string): string | undefined {
-      const host = stripPort(normalizeLabel(rawHost));
+      const withoutPort = stripPort(normalizeLabel(rawHost));
+      // A single trailing dot is the DNS root label — "example.test."
+      // and "example.test" are the same host, and some clients do send
+      // the FQDN form in a Host header. Strip at most one: a host ending
+      // in ".." is malformed and must still fall through to undefined
+      // below, not be treated as a valid double-rooted name.
+      const host = withoutPort.endsWith('.') ? withoutPort.slice(0, -1) : withoutPort;
 
       if (host.length === 0) return undefined;
-      if (host === domain) return undefined; // apex domain — no handle
-      if (!host.endsWith(domainSuffix)) return undefined; // not our domain, or a trailing-dot FQDN
+      if (host === domain) return undefined; // apex domain (with or without a trailing dot) — no handle
+      if (!host.endsWith(domainSuffix)) return undefined; // not our domain at all
 
       const label = host.slice(0, -domainSuffix.length);
       if (label.length === 0 || label.includes('.')) return undefined; // empty or multi-level
