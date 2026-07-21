@@ -48,9 +48,38 @@ E0 ──┬── E1 ── E2 ── E3 ── E4 ──── E5 ──┬─
 
 **IDs.** `E<n>` epic · `S<n>.<m>` story · `T<n>.<m>.<k>` task. Stable — referenced from commits and PRs.
 
-**Commits.** `<type>: <description>` per the global git-workflow rule. Reference the story: `feat: resolve slug from redis cache (S2.2)`.
+### One task = one commit
+
+Every task is sized so that it lands as a single commit leaving the repo green. The task heading **is** the commit subject:
+
+```
+#### T0.4.2 · `chore: add redis service with volatile-lru`
+Redis 7 with an explicit maxmemory and maxmemory-policy volatile-lru, set via a
+mounted redis.conf rather than a CLI flag so the value is reviewable in a diff.
+→ **files** `docker-compose.yml`, `docker/redis.conf` · **verify** `docker compose exec
+  redis redis-cli config get maxmemory-policy` returns `volatile-lru` · **after** T0.4.1
+```
+
+- **heading** — conventional-commit subject (`feat` `fix` `test` `chore` `refactor` `docs` `ci` `perf`). Copy it verbatim into the commit.
+- **body** — what the task does, concrete enough to start without asking questions.
+- **files** — roughly what it touches. More than ~3 files usually means the task should split.
+- **verify** — a runnable command or observable outcome. Never "looks right".
+- **after** — task IDs that must land first, or `—`.
+
+**TDD happens inside a task, not across two.** Write the test, watch it fail, implement, commit once. A separate RED commit would break "main is always deployable" and trip the coverage gate. Tasks whose entire purpose is test infrastructure still get their own `test:` commit.
+
+**Status markers.** `✅ done (<sha>)` on completed tasks · `⛔ blocked` with the reason inline.
 
 **Definition of done for a story.** Every acceptance box ticked · tests written first and passing · 80% coverage on touched code · the parallel review fan-out run (`code-reviewer` + `silent-failure-hunter` + `typescript-reviewer`, plus `security-reviewer` when the story touches auth, input handling, secrets, queries or external calls).
+
+### Refinement depth
+
+Epics are refined to commit-level granularity **just in time**, not all at once — task detail written months ahead goes stale before it is read.
+
+| Epics | State |
+|---|---|
+| E0, E1, E6 | Refined to atomic tasks |
+| E2–E5, E7–E10 | Story-level. Refine each as its dependencies land. |
 
 **Invariant tags.** Tasks that implement or protect a `CLAUDE.md` invariant are tagged `[INV-n]`. Those tasks may not be simplified away without amending the invariant in writing first — that is what happened to invariant 11 in this design, and it was done deliberately, in the open.
 
