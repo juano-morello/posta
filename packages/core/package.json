@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@posta/contracts": "workspace:*"
+    "@posta/contracts": "workspace:*",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "typescript": "5.9.3"
