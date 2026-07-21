@@ -5,6 +5,9 @@
   "engines": {
     "node": ">=24.0.0 <25"
   },
+  "scripts": {
+    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck"
+  },
   "devDependencies": {
     "turbo": "2.10.5",
     "typescript": "7.0.2"
