@@ -48,7 +48,7 @@ Root `package.json` (private, `packageManager` pinned to an exact pnpm version) 
 → **files** `packages/contracts/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/contracts build` exits 0 · **after** T0.1.5
 
 #### T0.1.7 · `feat: scaffold core package`
-`@posta/core`, depends on `@posta/contracts` via `workspace:*`. Empty `src/index.ts`. Server-only marking comes in T0.2.6.
+`@posta/core`, depends on `@posta/contracts` via `workspace:*`. Empty `src/index.ts`. Client-bundle protection comes in T0.2.6 (a dependency-cruiser rule, not the `server-only` package — see that task).
 → **files** `packages/core/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/core build` exits 0 · **after** T0.1.6
 
 #### T0.1.8 · `feat: scaffold api app`
