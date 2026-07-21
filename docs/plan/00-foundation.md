@@ -65,7 +65,12 @@ Next.js App Router, TypeScript, no Tailwind yet (that lands in E6/S6.1). Depends
 
 #### T0.1.11 · `chore: wire typescript project references`
 Composite builds so `tsc` resolves workspace packages from source in dev and from `dist` in CI. Prevents the "works in dev, fails in build" split.
-→ **files** all five `tsconfig.json` files · **verify** `pnpm typecheck` passes from a clean `pnpm install` with no prior build · **after** T0.1.10
+→ **files** all five `tsconfig.json` files, `package.json` · **verify** `pnpm typecheck` passes from a clean `pnpm install` with no prior build · **after** T0.1.10
+
+> The root `package.json` is in this task's file list because `pnpm typecheck` has
+> nowhere else to resolve from — a root script is what makes this task's own verify
+> runnable. The original list named only the tsconfigs, which made the task
+> unsatisfiable within its declared scope.
 
 ---
 
