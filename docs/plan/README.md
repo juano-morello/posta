@@ -76,10 +76,14 @@ mounted redis.conf rather than a CLI flag so the value is reviewable in a diff.
 
 Epics are refined to commit-level granularity **just in time**, not all at once — task detail written months ahead goes stale before it is read.
 
-| Epics | State |
-|---|---|
-| E0, E1, E6 | Refined to atomic tasks |
-| E2–E5, E7–E10 | Story-level. Refine each as its dependencies land. |
+| Epics | State | Tasks |
+|---|---|---|
+| E0–E6 | Refined to atomic tasks | 308 |
+| E7–E10 | Story-level. Refine each as its dependencies land. | — |
+
+E0–E5 are refined because the spec pins them tightly — the hot path, every capture signal, the eight classification rules in order, batching thresholds, the R2 layout. Little there can go stale. E6 is refined because it is the parallel track and unblocks nothing else.
+
+E7–E10 stay coarse deliberately: dashboard tasks depend on component decisions E6 has not made yet, and deploy tasks depend on providers not yet chosen. Refining them now would be inventing detail, not capturing it.
 
 **Invariant tags.** Tasks that implement or protect a `CLAUDE.md` invariant are tagged `[INV-n]`. Those tasks may not be simplified away without amending the invariant in writing first — that is what happened to invariant 11 in this design, and it was done deliberately, in the open.
 

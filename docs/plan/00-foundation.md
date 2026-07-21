@@ -144,7 +144,7 @@ Zod schema for the API's variables: DB, Redis, R2, MaxMind, auth, domain, ports.
 → **files** `apps/api/src/env.ts` · **verify** `pnpm test apps/api/src/env.test.ts` asserts a missing key produces a named error · **after** T0.3.4
 
 #### T0.3.6 · `feat: add worker env schema`
-Worker's subset plus `EVENT_BATCH_SIZE` and `EVENT_BATCH_INTERVAL_MS`.
+Worker's subset plus `EVENT_BATCH_SIZE` and `EVENT_BATCH_INTERVAL_MS`. Also `DATABASE_URL_WORKER` — the worker connects as the **writer** role while the API connects as a reader that has no `SELECT` on raw `events` (T4.2.4). Two roles means two URLs, and the split only bites if both are actually wired.
 → **files** `apps/worker/src/env.ts` · **verify** `pnpm test apps/worker/src/env.test.ts` · **after** T0.3.4
 
 #### T0.3.7 · `feat: add web env schema`

@@ -158,7 +158,9 @@ Two signals do disproportionate work and are easy to forget:
 
 ### 5.2 ASN without a Cloudflare Worker
 
-`CF-IPCountry` is free on a proxied domain, but ASN (`request.cf.asn`) requires Cloudflare Workers. Rather than take that dependency, the API performs a local **MaxMind GeoLite2-ASN** mmdb lookup at capture, while it still holds the IP — in-memory, ~1 µs, free, self-contained. It also supplies country as a fallback when CF headers are absent.
+`CF-IPCountry` is free on a proxied domain, but ASN (`request.cf.asn`) requires Cloudflare Workers. Rather than take that dependency, the API performs a local **MaxMind GeoLite2-ASN** mmdb lookup at capture, while it still holds the IP — in-memory, ~1 µs, free, self-contained.
+
+**Corrected 2026-07-21.** This section previously claimed the ASN database also supplies country as a fallback. It does not — GeoLite2-ASN contains no country data. Country fallback requires a second file, **GeoLite2-Country**, on the same licence and the same download script (~8 MB more). Without it, `country` would have silently been null on every request where CF headers were absent, and nothing would have failed loudly.
 
 Datacenter-origin traffic is one of the strongest bot signals, and detecting bots better is the entire product. Worth the 8 MB file.
 
@@ -185,8 +187,10 @@ No cookies. Ever.
 
 **Batching.** Accumulate N=100 events or T=2000 ms, whichever first, then:
 
-1. one multi-row `INSERT ... ON CONFLICT (event_id, occurred_at) DO NOTHING` (invariant 8)
-2. one R2 NDJSON PUT
+1. one R2 NDJSON PUT
+2. one multi-row `INSERT ... ON CONFLICT (event_id, occurred_at) DO NOTHING` (invariant 8)
+
+**Corrected 2026-07-21 — the order matters and was listed backwards.** §6.1 requires that a permanent R2 failure must not leave Postgres committed. Postgres-first cannot satisfy that without holding a database transaction open across an R2 network call. R2-first can, and the asymmetry it leaves — R2 briefly ahead of Postgres when the insert fails — is the **recoverable** direction, which is exactly what invariant 7 and the replay path already assume. Postgres-first would leave events in the projection that the source of truth never recorded, which replay cannot fix.
 
 R2 bills per PUT. One object per click is real money at any volume.
 
@@ -208,7 +212,7 @@ The view returns **both the verdict and the reason**, from two parallel `CASE` e
 
 | # | Rule | Verdict |
 |---|---|---|
-| 1 | `purpose`/`x_moz`/`sec_purpose` declares prefetch or preview | `prefetch` |
+| 1 | `purpose`/`x_purpose`/`x_moz`/`sec_purpose` declares prefetch or preview | `prefetch` |
 | 2 | UA matches known unfurlers (`facebookexternalhit`, `WhatsApp`, `Twitterbot`, `Slackbot`, `Discordbot`, `TelegramBot`, `LinkedInBot`, `Applebot`, `SkypeUriPreview`, `redditbot`, `Iframely`, `embedly`) | `unfurler` |
 | 3 | `http_method = 'HEAD'` | `unfurler` |
 | 4 | UA self-declares automation (`bot`, `crawl`, `spider`, `curl`, `wget`, `python-requests`, `go-http-client`, `okhttp`, `axios`, `headlesschrome`, `puppeteer`, `playwright`, …) | `bot` |
@@ -218,6 +222,12 @@ The view returns **both the verdict and the reason**, from two parallel `CASE` e
 | 8 | otherwise | `humano` |
 
 Rule 1 precedes everything because a prefetch carries a real browser UA. Rule 2 precedes rule 4 because `WhatsApp` does not match `/bot/`.
+
+`x_purpose` was added to rule 1 on 2026-07-21. It is captured in §5.1 and present in the §8 DDL, but the rule table omitted it — and Safari declares previews via `X-Purpose: preview`, so leaving it out would have counted Safari link previews as humans.
+
+**Rule 6 has a known false-positive class:** a real person browsing from a VPS matches "datacenter ASN + no client hints". The corpus carries same-ASN-with-client-hints controls that must stay `humano`, so the boundary is measured rather than assumed.
+
+**`recibos` is an explicit exception to the humans-only default** (§7 and invariant 10). A receipts feed that hid bots would defeat its own purpose — it exists precisely to show what was filtered and why. The exception is enumerated by name in the query layer, not left to drift.
 
 Datacenter ASNs live in a lookup table `asn_datacenter (asn, name)`, joined by the view — so adding an ASN is an insert, not a migration.
 
