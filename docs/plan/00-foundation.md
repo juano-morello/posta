@@ -110,9 +110,11 @@ A fixture file importing `@posta/core` from `apps/web`, plus a test asserting `d
 Reads `packages/contracts/package.json` and asserts `dependencies` is exactly `["zod"]`. Guards invariant "contracts is isomorphic, zero server deps" against a casual `pnpm add`.
 → **files** `tests/boundaries/contracts-deps.test.ts` · **verify** `pnpm test tests/boundaries/contracts-deps.test.ts` · **after** T0.2.4
 
-#### T0.2.6 · `feat: mark core as server-only`
-Add the `server-only` package and import it from `packages/core/src/index.ts`, so any accidental client-bundle import fails at build with a clear Next.js error rather than leaking DB code into the browser.
-→ **files** `packages/core/{package.json,src/index.ts}` · **verify** importing `@posta/core` from a client component fails `pnpm --filter @posta/web build` · **after** T0.2.5
+#### T0.2.6 · `feat: guard core against client bundles via dependency-cruiser`
+Guard `packages/core` against client-bundle imports with the `no-illegal-core-import` dependency-cruiser rule (T0.2.3), hardened to catch static *and* dynamic imports and to see edges that actually resolve (through a package's `dist/`), not just ones nobody has added to a `package.json` yet. This is the *only* guard — no runtime package involved.
+→ **files** `packages/core/{package.json,src/index.ts}`, `.dependency-cruiser.js` · **verify** `pnpm depcruise` fails when `apps/web` imports `@posta/core`, statically or dynamically, and `node -e "require('@posta/core')"` run from `apps/api`/`apps/worker` succeeds · **after** T0.2.5
+
+> **Note:** an earlier version of this task added the npm `server-only` package to `packages/core/src/index.ts` instead. Rejected: `server-only`'s only non-`react-server` export is an unconditional `throw`, and plain Node (api, worker) never sets the `react-server` condition — importing core for real would have crashed both services at boot the moment E1/E2 wired up real Drizzle usage. A build-time check that runs in CI beats a runtime throw that only fires after the bad import has shipped.
 
 ---
 
