@@ -6,10 +6,14 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck"
+    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck",
+    "lint": "eslint ."
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
     "turbo": "2.10.5",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.65.0"
   }
 }
