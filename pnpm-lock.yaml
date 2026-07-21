@@ -25,6 +25,16 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/core:
+    dependencies:
+      '@posta/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
 packages:
 
   '@turbo/darwin-64@2.10.5':
