@@ -84,8 +84,20 @@ function scanForLiteralDomains(
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return; // scan root doesn't exist in this tree — nothing to do
+    } catch (error: unknown) {
+      // Only a missing directory (ENOENT — e.g. a fresh checkout with
+      // no apps/ yet) is a benign "nothing to scan here". Anything else
+      // (permissions, I/O, a path that isn't a directory) must fail
+      // loudly: silently treating every readdirSync error as "empty"
+      // would let an unreadable apps/ or packages/ subtree report as a
+      // clean scan instead of the false negative it actually is.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return;
+
+      throw new Error(
+        `Failed to read directory "${dir}" while scanning for literal ` +
+          `domains: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     for (const entry of entries) {
@@ -247,6 +259,22 @@ describe('scanForLiteralDomains detection (synthetic fixtures, never committed)'
       );
 
       expect(scanForLiteralDomains(tmpRoot, SCAN_ROOTS)).toEqual([]);
+    });
+  });
+
+  it('does not silently swallow a non-ENOENT directory read error', () => {
+    withTempScanRoot((tmpRoot) => {
+      // "apps" exists but is a plain file, not a directory —
+      // readdirSync on it throws ENOTDIR, not ENOENT. A catch-all here
+      // would make an unreadable real apps/ or packages/ subtree
+      // (permissions, I/O) report as a false-clean scan instead of
+      // failing loudly. ENOTDIR is used (rather than a chmod'd
+      // permission error) because it is deterministic and portable —
+      // permission bits are ignored when tests run as root, which a
+      // permission-based fixture would silently pass under.
+      writeFileSync(path.join(tmpRoot, 'apps'), 'not a directory\n');
+
+      expect(() => scanForLiteralDomains(tmpRoot, SCAN_ROOTS)).toThrow();
     });
   });
 });
