@@ -4,6 +4,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "moduleResolution": "bundler",
-    "isolatedModules": true
+    "isolatedModules": true,
+    "esModuleInterop": true
   }
 }
