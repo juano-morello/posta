@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { makeUrlBuilders, type DomainConfig } from './domain';
 
-// Deliberately NOT posta.lat — packages/contracts must never contain a
-// literal domain (CLAUDE.md), and using the real domain in these tests
-// would let a hardcoded literal in the implementation pass unnoticed.
+// Deliberately NOT the real production link domain — packages/contracts
+// must never contain a literal domain (CLAUDE.md), and using the real
+// domain in these tests would let a hardcoded literal in the
+// implementation pass unnoticed.
 // T0.3.9's grep test is the enforcement; this file is the proof the
 // helpers themselves take the domain as data, not as a constant.
 const config: DomainConfig = {

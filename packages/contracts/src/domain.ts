@@ -25,7 +25,7 @@ export type Protocol = 'http' | 'https';
  * batch); nothing in this module reads process.env itself.
  */
 export interface DomainConfig {
-  /** `POSTA_LINK_DOMAIN`, e.g. "posta.lat" (never hardcoded here). */
+  /** `POSTA_LINK_DOMAIN` — see .env.example (never hardcoded here). */
   readonly domain: string;
   /** `POSTA_PROTOCOL`. */
   readonly protocol: Protocol;
@@ -110,9 +110,10 @@ function normalizePath(path: string): string {
 
 /**
  * Strips a `:port` suffix from a Host header value, e.g.
- * `juano.posta.lat:3000` (the dev case, since local dev serves every
- * host off one port) → `juano.posta.lat`. Only strips when the suffix is
- * actually numeric, so a bare colon-free host passes through untouched.
+ * `juano.example.test:3000` (the dev case, since local dev serves every
+ * host off one port) → `juano.example.test`. Only strips when the
+ * suffix is actually numeric, so a bare colon-free host passes through
+ * untouched.
  */
 function stripPort(host: string): string {
   const colonIndex = host.lastIndexOf(':');
