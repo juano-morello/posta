@@ -93,13 +93,15 @@ export default {
         'an unconditional throw, and plain Node (api, worker) never sets ' +
         'the react-server condition — it crashed both services the moment ' +
         'either genuinely imported core, so it was removed. This rule ' +
-        'catches static *and* dynamic imports, so there is no gap left for ' +
-        'a runtime check to cover. Only api and worker (real Node ' +
-        'processes) may import core; core importing core is how its own ' +
-        'barrel file re-exports internally. If you landed on this rule ' +
-        'from apps/web, that is invariant-breaking by design — read the ' +
-        'dependency-arrow block in CLAUDE.md before adding the import ' +
-        'anyway.',
+        'catches static *and* dynamic imports, so there is no ' +
+        '*statically-detectable* gap left for a runtime check to cover — ' +
+        'a fully computed import path (e.g. `require(someVariable)`) is ' +
+        'still outside what any static analyzer can see. Only api and ' +
+        'worker (real Node processes) may import core; core importing ' +
+        'core is how its own barrel file re-exports internally. If you ' +
+        'landed on this rule from apps/web, that is invariant-breaking by ' +
+        'design — read the dependency-arrow block in CLAUDE.md before ' +
+        'adding the import anyway.',
       from: { pathNot: '^(packages/core|apps/api|apps/worker)(/|$)' },
       to: { path: '^(packages/core(/|$)|@posta/core($|/))' },
     },
@@ -128,13 +130,19 @@ export default {
     // `dist` is deliberately NOT excluded, even though it is build
     // output: a real (not just unresolved) illegal import resolves
     // through a package's `main` field, i.e. into its `dist/*.js` — api
-    // and worker's `@posta/core` dependency resolves the same way. `dist`
-    // files never get scanned as separate *entry points* (the CLI is only
-    // ever pointed at `apps packages`, i.e. it discovers files by walking
-    // from each package's real source — `dist` is generated, so nothing
-    // outside that walk imports it as a starting point), so it is never
-    // double-counted; it only ever shows up as the *destination* half of
-    // an edge, which is exactly where a rule needs to be able to see it.
+    // and worker's `@posta/core` dependency resolves the same way, and a
+    // rule needs to be able to see that. `dist` files are NOT merely the
+    // destination half of an edge, though — dependency-cruiser's
+    // directory-glob discovery (given `apps packages` on the CLI) scans
+    // every file matching `includeOnly` under those folders directly, so
+    // `packages/core/dist/index.js` shows up as its own module in the
+    // graph exactly like `packages/core/src/index.ts` does, whether or
+    // not anything actually imports it. It is `collapse`, not this
+    // discovery walk, that keeps `pnpm depcruise`'s module count at five
+    // despite that (see collapse below) — src and dist both fold into
+    // the same per-package node, so scanning both never inflates the
+    // count, but they are genuinely two separately-discovered modules
+    // under the hood, not one.
     exclude: {
       path: '(^|/)(node_modules|\\.next|\\.turbo)/',
     },
