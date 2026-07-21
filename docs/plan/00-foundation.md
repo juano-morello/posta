@@ -256,6 +256,19 @@ Fails the build below 80% lines and branches.
 The arrow rules from S0.2 only protect the architecture if CI runs them.
 → **files** `.github/workflows/ci.yml` · **verify** a PR planting a `web→core` import fails CI · **after** T0.5.4
 
+#### T0.5.7 · `chore: type-check test files, not just source`
+Test files (`*.test.ts`) are currently invisible to every checker in the repo: the
+composite `pnpm typecheck` excludes them (`packages/contracts/tsconfig.json` — Vitest's
+ambient globals clash with the package's `node10` resolution), `vitest run` transpiles
+with esbuild and does not type-check, and ESLint is non-type-aware. So a type error in a
+test — wrong argument order to `buildLinkUrl`, a mistyped `DomainConfig` — passes
+`typecheck`, `test` and `lint` all green as long as it still runs. Surfaced by the S0.3
+batch-4 review. Close it repo-wide with a dedicated test tsconfig (`bundler` resolution +
+Vitest globals) checked via a separate `tsc --noEmit` step, wired into `pnpm typecheck`,
+so `core`/`api`/`worker` inherit the pattern instead of each copying the exclude. Do this
+**before** E1 adds the first tests beside `core`'s source.
+→ **files** `tsconfig.*` (a test variant), each package's tsconfig, `package.json` · **verify** a deliberate type error planted in a `*.test.ts` fails `pnpm typecheck` · **after** T0.5.4
+
 #### T0.5.6 · `chore: enable branch protection on main` ⛔ blocked
 Require CI green and no direct pushes. **Blocked until a remote exists** — the repo is local-only today. Pair with the first `git push -u`.
 → **files** *(GitHub settings, not the repo)* · **verify** a direct push to main is rejected · **after** T0.5.5
