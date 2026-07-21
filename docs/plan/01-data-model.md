@@ -27,7 +27,9 @@ Tables: `users` (Better Auth owns its own), `links`, `bio_pages`, `bio_links`, `
 
 #### T1.1.1 · `chore: postgres client and drizzle-kit config in packages/core`
 Create the db seam every later task builds on: a `pg` Pool from `DATABASE_URL` (already validated in E0), `db = drizzle(pool)`, a `closeDb()` for test teardown, and a programmatic drizzle migrator. `drizzle.config.ts` points `schema` at `src/schema/*.ts` and `out` at `migrations/drizzle/`, and adds `db:generate` / `db:migrate` scripts.
-→ **files** `packages/core/src/db/client.ts` · `packages/core/src/db/index.ts` · `packages/core/drizzle.config.ts` · **verify** `pnpm test db/client.test.ts` connects to the compose Postgres and asserts `SELECT 1` plus `SHOW server_version` ≥ 16 · **after** —
+
+Pool `max` is **explicit and env-supplied** (`DB_POOL_MAX`), never left to the driver default. Under Kubernetes the api scales horizontally, so total connections are `pool.max × replicas + worker + migration Job` — and that product has to stay under the managed tier's connection cap. Left implicit, the HPA scaling up under load is what exhausts the database: the autoscaler succeeding *is* the outage. E10/S10.7 checks the arithmetic against the chosen tier.
+→ **files** `packages/core/src/db/client.ts` · `packages/core/src/db/index.ts` · `packages/core/drizzle.config.ts` · **verify** `pnpm test db/client.test.ts` connects to the compose Postgres, asserts `SELECT 1` plus `SHOW server_version` ≥ 16, and asserts the pool reports the configured `max` rather than the driver default · **after** —
 
 #### T1.1.2 · `test: testcontainers Postgres 16 harness for packages/core`
 Shared integration-test helper that boots Postgres 16 via testcontainers, applies drizzle migrations through the programmatic migrator from T1.1.1, and returns `{ db, url, stop }`. Every integration test in E1–E4 reuses this one helper instead of each booting its own container. Vitest hook timeout raised to 120s for cold image pulls.

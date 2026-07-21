@@ -150,6 +150,8 @@
 - [ ] Save → live page updated within seconds, asserted in an E2E test
 - [ ] **Routing proof:** an E2E test against the real domain asserting `juano.posta.lat/` serves the bio and `juano.posta.lat/<slug>` 307s [INV-11]
 - [ ] The same test asserts `/:slug` did **not** touch Next — the Origin Rule must not be over-matching
+- [ ] **Revalidation reaches every replica**, not just the pod that received the webhook [INV-11]
+- [ ] A fan-out test proves a save is visible from every `web` replica, not from a single sampled one
 
 **Tasks:**
 - [ ] T8.6.1 revalidation webhook with secret auth [security]
@@ -159,3 +161,9 @@
 - [ ] T8.6.5 E2E: path-split proof on the real domain [INV-11]
 
 > The Origin Rule is configuration living outside the repo, which makes it the most likely thing to be silently wrong after a Cloudflare change. T8.6.5 is the tripwire — it is also why E10 keeps it in the post-deploy smoke suite.
+
+> **Multi-replica ISR breaks this invariant silently, and it is not obvious.** Next's default incremental cache is the pod's own filesystem. Under Kubernetes with more than one `web` replica, the revalidation webhook invalidates **only the pod that happens to receive it**; every other replica keeps serving the old bio indefinitely — at 200, fast, with nothing in any log. The user sees "I saved it and it didn't update… sometimes", which is close to unfalsifiable from the outside.
+>
+> The fix is a shared `cacheHandler` backed by Redis, so invalidation is cluster-wide (E10/S10.4). The test has to assert the save is visible from **every** replica: sampling one replica passes roughly `1/n` of the time by luck and is worse than no test, because it manufactures confidence.
+>
+> Found while writing E10, not E8 — the failure only exists once there is more than one replica, which is exactly why it would have reached production.

@@ -14,6 +14,8 @@ Honest-analytics link shortener + link-in-bio. LATAM / Spanish-first. Built in p
 ## Stack
 pnpm + Turborepo monorepo. NestJS (`api`, `worker`), Next.js (`web`), Drizzle ORM + Postgres, Redis (hot cache **and** BullMQ event bus), Cloudflare R2 (event log + avatars), Better Auth. API deploy region: **São Paulo** (LATAM latency).
 
+**Everything ships as a container image.** Local runs docker-compose; production is **Kubernetes with managed Postgres, Redis and R2**. The cloud provider is deliberately unchosen — images plus plain manifests keep that binding late. Consequences that are not optional: config comes only from env, logs go only to stdout, every service handles SIGTERM, and `terminationGracePeriodSeconds` must exceed the worker's batch-flush timeout or Kubernetes eats buffered events on every rollout.
+
 ## Structure — dependency arrows are one-way, enforce them
 ```
 packages/contracts  Pure types/DTOs (Zod). Isomorphic, ZERO server deps. The web↔api seam.
@@ -73,5 +75,9 @@ Recorded so the reasoning survives, not just the conclusion. Full detail in the 
 | 2026-07-21 | Links at `<handle>.<domain>/:slug`, slug unique per tenant | apex `<domain>/:slug`, globally unique | Multi-tenant from day one; no land-grab on good slugs. Cost: longer URLs, so the links list truncates to `…/promo`. |
 | 2026-07-21 | Tailwind + shadcn/ui | hand-authored SCSS components | shadcn supplies sheet/toast/dialog, which POSTA.md explicitly asks for. SCSS stays as the **token source** feeding CSS custom properties. |
 | 2026-07-21 | Next renders bio pages (**invariant 11 amended**) | API-rendered HTML templates | One frontend surface. SSG on a CDN edge beats a live round-trip to São Paulo, and the editor preview becomes the real page component. |
-| 2026-07-21 | MaxMind GeoLite2-ASN at capture | Cloudflare Worker for `request.cf.asn` | Keeps the Worker out of the hot path entirely. In-memory lookup while the API still holds the IP, before it is dropped. |
+| 2026-07-21 | Local **DB-IP** mmdb lookup at capture | Cloudflare Worker for `request.cf.asn`, or a hosted IP-lookup API | Keeps the Worker off the hot path. A *hosted* lookup would send every visitor IP to a third party on every click — invariant 6 honoured in letter, gutted in spirit. |
+| 2026-07-21 | **DB-IP** over MaxMind GeoLite2 | GeoLite2 (better coverage, weekly) | GeoLite2's EULA forbids redistribution, so it cannot live in a container image — it would need a licence Secret plus a `geoipupdate` init container. DB-IP lite is CC BY 4.0 and bakes straight in. Same `.mmdb` format, so switching back is a download-script change. Cost: monthly updates, thinner long tail. |
+| 2026-07-21 | **Kubernetes + container images**, provider unchosen | Picking a PaaS now | Images and plain manifests make provider choice bind late instead of early. Also forces SIGTERM handling and env-only config, which the worker needed regardless. |
+| 2026-07-21 | Sign-up reachable only via a **route allowlist** | `disableSignUp: true` alone | Better Auth's provider ships a `sign-up/email` handler inside the dependency, so "no signup route exists" is not literally achievable. The allowlist means it is never routed; `disableSignUp` is defense in depth, not the mechanism. Invariant 9 is met in effect, not in letter — recorded here so nobody later "fixes" the allowlist. |
+| 2026-07-21 | Reject private-range **literals** in destinations, never DNS-resolve | Full SSRF resolution-time checking | A redirect destination is fetched by the *visitor's* browser, not our infrastructure, so this is not classic SSRF. Resolving hostnames would itself be an outbound request and a DNS-rebinding vector — the check would create the class of bug it claims to prevent. |
 | 2026-07-21 | Redis `volatile-lru` | `allkeys-lru` | Cache keys have TTLs, BullMQ keys do not. Under `allkeys-lru` a queue backlog silently evicts its own jobs. |

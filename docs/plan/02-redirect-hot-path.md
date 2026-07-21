@@ -111,7 +111,7 @@ Boots the app, then stops the Redis container mid-suite and asserts requests kee
 - [ ] `http_method` captured — `HEAD` is a primary unfurler tell and is trivially lost
 - [ ] `purpose` / `x-purpose` / `x-moz` / `sec-purpose` captured — browsers self-declare prefetches, and a prefetch carries a real browser UA
 - [ ] `country` from `CF-IPCountry`, falling back to mmdb
-- [ ] `asn` from a local **MaxMind GeoLite2-ASN** mmdb lookup, in-memory
+- [ ] `asn` from a local **DB-IP ASN** mmdb lookup, in-memory
 - [ ] `visitor_hash = sha256(ip + user_agent + salt).slice(0,32)`
 - [ ] Daily salt at `salt:YYYY-MM-DD` in Redis, TTL 48h, generated on first use, cryptographically random
 - [ ] **The IP is dropped immediately after hashing** [INV-6] — never stored, never queued, never logged, including in error handlers
@@ -128,12 +128,12 @@ Boots the app, then stops the Redis container mid-suite and asserts requests kee
 `readSignals(req)` in `capture.ts` reads the 18 signals by explicit name — never by spreading `req.headers`, which would drag `cookie` and `x-forwarded-for` into the payload the first time someone widens the type. Absent → `null`. `http_method` comes from `req.method` and `sec-purpose` / `purpose` / `x-purpose` / `x-moz` are read as a group, since those four are the prefetch tells that do the most work in classification and are the easiest to drop in a refactor.
 → **files** `apps/api/src/redirect/capture.ts` · `apps/api/src/redirect/capture.test.ts` · **verify** `pnpm test redirect/capture.test.ts` asserts a request carrying only `Host` yields every signal `null`; a `HEAD` with `x-moz: prefetch`, `purpose: prefetch` and `sec-purpose: prefetch` yields exactly those four set; and a request with a `Cookie` header yields a payload with no cookie value anywhere · **after** T2.3.1
 
-#### T2.3.3 · `chore: geolite2 download script with license and attribution`
-`scripts/fetch-geolite.sh` pulls **GeoLite2-ASN and GeoLite2-Country** (ASN alone carries no country, so the CF-IPCountry fallback in spec §5.2 needs both) using `MAXMIND_LICENSE_KEY`, verifies the published sha256, and extracts to `GEOIP_DB_DIR`. `*.mmdb` is already git-ignored (T0.1.1); the required MaxMind attribution line goes in the README next to the signup step from T0.3.11 (spec §14 risk).
-→ **files** `scripts/fetch-geolite.sh` · `README.md` · **verify** running it with `MAXMIND_LICENSE_KEY` unset exits non-zero naming the variable; with a key it leaves two `.mmdb` files whose checksums match, and `git status` stays clean · **after** T0.3.11
+#### T2.3.3 · `chore: db-ip download script with attribution`
+`scripts/fetch-geoip.sh` pulls **`dbip-asn-lite` and `dbip-country-lite`** (the ASN database carries no country, so the CF-IPCountry fallback in spec §5.2 needs both), verifies the published checksum, and extracts to `GEOIP_DB_DIR`. No account and no licence key — DB-IP lite is CC BY 4.0, which is exactly why it can be baked into the container image in T0.7.x with no Secret and no init container. The required attribution line goes in the bio-page footer and the README.
+→ **files** `scripts/fetch-geoip.sh` · `README.md` · **verify** running the script from clean leaves two `.mmdb` files whose checksums match the published values, and `git status` stays clean (`*.mmdb` is git-ignored from T0.1.1) · **after** T0.3.11
 
 #### T2.3.4 · `feat: boot-time mmdb loader that fails startup loudly`
-`openGeoDatabases()` reads both mmdb files once at boot into memory (`maxmind.openSync`), returns a frozen `{ asn, country }` reader pair, and is called from the API entrypoint before `listen`. A missing, unreadable or corrupt file throws naming the path **and** the env var that points at it. Silent degradation is the failure mode to design against: an API that boots with no ASN reader produces `asn: null` on every event, and rule 6 of the classification view then never fires — a broken product that looks healthy.
+`openGeoDatabases()` reads both mmdb files once at boot into memory and returns a frozen `{ asn, country }` reader pair, called from the API entrypoint before `listen`. The reader is the `maxmind` npm package — named for the format's originator, but it reads any `.mmdb` file, DB-IP's included. The publisher is a download-script choice (T2.3.3), not a code dependency. A missing, unreadable or corrupt file throws naming the path **and** the env var that points at it. Silent degradation is the failure mode to design against: an API that boots with no ASN reader produces `asn: null` on every event, and rule 6 of the classification view then never fires — a broken product that looks healthy.
 → **files** `packages/core/src/geoip/loader.ts` · `packages/core/src/geoip/loader.test.ts` · **verify** `pnpm test geoip/loader.test.ts` asserts a missing path throws with the path and env var in the message, a truncated file throws rather than returning a reader, and two calls return the identical object · **after** T2.3.3
 
 #### T2.3.5 · `feat: asn and country lookup with cf-ipcountry fallback ordering`

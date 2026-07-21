@@ -4,7 +4,7 @@
 
 **Goal:** a monorepo where the dependency arrows are enforced by the build, the environment is validated at startup, and `pnpm dev` brings up the full local stack.
 
-**Done when:** a fresh clone runs `pnpm install && pnpm dev` and gets Postgres, Redis and an R2-compatible store running with all four packages building; and a deliberate `web → core` import **fails CI**.
+**Done when:** a fresh clone runs `pnpm install && pnpm dev` and gets Postgres, Redis and an R2-compatible store running with all five packages building; a deliberate `web → core` import **fails CI**; and `docker compose up` runs the same images production will run.
 
 **Package names:** `@posta/contracts` · `@posta/core` · `@posta/api` · `@posta/worker` · `@posta/web`
 
@@ -140,7 +140,7 @@ Reusable Zod primitives: `zPort`, `zUrl`, `zNonEmpty`, `zBooleanish`, `zCsvList`
 → **files** `packages/contracts/src/reserved.ts` · **verify** `pnpm test packages/contracts/src/reserved.test.ts` · **after** T0.3.3
 
 #### T0.3.5 · `feat: add api env schema`
-Zod schema for the API's variables: DB, Redis, R2, MaxMind, auth, domain, ports.
+Zod schema for the API's variables: DB, Redis, R2, DB-IP database paths, auth, domain, ports. The DB-IP keys are filesystem paths, not credentials — the lite databases are CC BY 4.0 and ship inside the image (S0.7), so there is no licence key to validate.
 → **files** `apps/api/src/env.ts` · **verify** `pnpm test apps/api/src/env.test.ts` asserts a missing key produces a named error · **after** T0.3.4
 
 #### T0.3.6 · `feat: add worker env schema`
@@ -164,7 +164,7 @@ Drives the logger with a populated env and asserts no secret value appears in ou
 → **files** `tests/conventions/no-secret-logging.test.ts` · **verify** `pnpm test tests/conventions/no-secret-logging.test.ts` · **after** T0.3.8
 
 #### T0.3.11 · `docs: add root README with setup steps`
-Clone → `pnpm install` → copy `.env.example` → `pnpm dev`. Includes the MaxMind signup step, since without that key the datacenter classification rule cannot fire.
+Clone → `pnpm install` → copy `.env.example` → `pnpm dev`. Includes `pnpm geo:fetch` to pull the DB-IP lite databases, since without those files the datacenter classification rule cannot fire. No signup and no licence key — that step exists only because the `.mmdb` files are git-ignored, not because they are gated.
 → **files** `README.md` · **verify** a clean clone followed literally reaches a running stack · **after** T0.4.7
 
 ---
@@ -283,3 +283,81 @@ The design resolved three contradictions. The docs still contained the losing si
 - [x] `POSTA.md` §7 screen 7 said "SSR"; now Next SSG + on-demand ISR, with a note that the editor preview must stay the real page component
 
 > The longer host has a UI consequence, so it is not a pure find-and-replace: `juano.posta.lat/promo` does not fit a list row the way `posta.lat/promo` did. The links list truncates to `…/promo`, showing the full host on hover and copying the full URL. Carry this into S7.2.
+
+---
+
+## S0.7 — Container images
+
+**As an** operator **I want** each app to ship as a self-contained image **so that** what Kubernetes runs is the same artifact I ran locally, not a re-resolved approximation of it.
+
+**Acceptance:**
+- [ ] `turbo prune --scope=<pkg> --docker` gives each app its own build context, so a dependency layer invalidates only when *that* app's dependencies change
+- [ ] A multi-stage image per app — deps → build → slim runtime — for `api`, `worker` and `web`
+- [ ] Every runtime stage runs as a non-root user, and every base image is pinned by digest [security]
+- [ ] `dbip-asn-lite.mmdb` and `dbip-country-lite.mmdb` are baked in at build time — no init container, no secret, no runtime download
+- [ ] `docker compose up` builds and runs these images rather than host Node
+- [ ] CI builds all three and pushes them tagged with the git SHA
+- [ ] Both an image-size budget and a start-and-answer-health smoke test run in CI
+- [ ] Images are config-via-env only, log to stdout, and exit cleanly on `SIGTERM`
+
+> **Data source decision:** DB-IP lite, not MaxMind GeoLite2. Same `.mmdb` format, so the reader library is unchanged — but DB-IP's lite databases are CC BY 4.0, which means no account, no licence key, and free redistribution. That single licence difference is what lets the database live *inside* the image. MaxMind's EULA forbids redistribution, which forces either a build-time secret or an init container that downloads on every pod start — a network dependency on the boot path of a service whose whole point is not blocking. The cost is an attribution line in the bio-page footer (E8). Cheap.
+
+**Tasks:**
+
+#### T0.7.1 · `chore: add a shared .dockerignore`
+Root `.dockerignore` excluding `node_modules`, `.next`, `dist`, `.turbo`, `.env*`, `.git`, `docs`, `*.mmdb`. The build context is the repo root for all three images, so without this every `docker build` uploads the entire workspace and busts the cache on any file change at all.
+→ **files** `.dockerignore` · **verify** `docker build -f /dev/null . 2>&1 | head -1` reports a context under 5MB · **after** T0.4.7
+
+#### T0.7.2 · `chore: pin container base images by digest`
+`docker/base-images.env` holding `NODE_BASE` and `NODE_RUNTIME_BASE` as `node:<major from .nvmrc>-alpine@sha256:…`, consumed by every Dockerfile via `ARG`. Plus `scripts/refresh-base-digests.sh` to re-resolve them deliberately. A floating tag means two builds of the same commit can differ, which turns "works on my machine" into a Kubernetes rollback.
+→ **files** `docker/base-images.env`, `scripts/refresh-base-digests.sh` · **verify** `grep -c '@sha256:' docker/base-images.env` returns 2; `bash scripts/refresh-base-digests.sh --check` exits 0 · **after** T0.7.1
+
+#### T0.7.3 · `chore: produce a pruned per-app build context with turbo prune`
+`scripts/docker-prune.sh <scope>` wrapping `pnpm turbo prune --scope=@posta/<app> --docker`, emitting `out/json` (manifests + pruned `pnpm-lock.yaml`) and `out/full` (sources). This is the hard part of Dockerising a pnpm monorepo: a naive `COPY . .` ships every workspace package, so touching a `web` component reinstalls the `api`'s dependencies. The pruned lockfile is what makes the deps layer stable.
+→ **files** `scripts/docker-prune.sh`, `package.json` · **verify** `bash scripts/docker-prune.sh api` writes `out/json/apps/api/package.json` and `out/json/pnpm-lock.yaml`, and `out/json/apps/web` does **not** exist · **after** T0.7.2
+
+#### T0.7.4 · `chore: multi-stage Dockerfile for the api`
+Four stages: `pruner` (runs T0.7.3's prune), `deps` (`pnpm install --frozen-lockfile` over `out/json` only), `builder` (`pnpm --filter @posta/api build`), `runner` (prod deps + `dist/` on the runtime base). Nothing from `builder` but `dist/` and `node_modules` crosses into `runner`.
+→ **files** `apps/api/Dockerfile` · **verify** `docker build -f apps/api/Dockerfile .` succeeds, and a second build after touching `apps/web/src/app/page.tsx` reuses the cached `deps` layer · **after** T0.7.3
+
+#### T0.7.5 · `chore: multi-stage Dockerfile for the worker`
+Same four-stage shape as the api, scoped to `@posta/worker`. No HTTP port exposed beyond the health endpoint (E3) — the worker is a BullMQ consumer, and exposing a service port it does not serve invites a Kubernetes readiness probe pointed at nothing.
+→ **files** `apps/worker/Dockerfile` · **verify** `docker build -f apps/worker/Dockerfile .` succeeds and `docker run --rm <img> node -e "process.exit(0)"` exits 0 · **after** T0.7.4
+
+#### T0.7.6 · `chore: multi-stage Dockerfile for the web app`
+Differs from the other two: set `output: 'standalone'` in `next.config.ts`, then copy only `.next/standalone`, `.next/static` and `public/` into the runtime stage. Without standalone the image carries the full workspace `node_modules` and lands several hundred MB heavier.
+→ **files** `apps/web/Dockerfile`, `apps/web/next.config.ts` · **verify** `docker build -f apps/web/Dockerfile .` succeeds and `docker run --rm -p 3000:3000 <img>` serves `/` · **after** T0.7.5
+
+#### T0.7.7 · `chore: run every runtime stage as a non-root user` [security]
+Add a `posta` user (uid 10001) in each runtime stage, `chown` the app directory, and `USER posta` before `CMD`. Kubernetes can enforce this with `runAsNonRoot`, but an image that only works as root fails that admission check at deploy time rather than here.
+→ **files** `apps/{api,worker,web}/Dockerfile` · **verify** `docker run --rm <img> id -u` returns `10001` for all three · **after** T0.7.6
+
+#### T0.7.8 · `feat: shut down cleanly on SIGTERM in api and worker`
+`app.enableShutdownHooks()` plus an explicit `SIGTERM` handler that stops accepting work, drains in-flight requests and closes the Redis and Postgres pools. Node as PID 1 does **not** get default signal handling, so without this every rolling deploy kills in-flight redirects at the 30s grace timeout.
+→ **files** `apps/api/src/main.ts`, `apps/worker/src/main.ts` · **verify** `docker stop` on a running container exits within 5s, not at the 10s SIGKILL fallback · **after** T0.7.7
+
+#### T0.7.9 · `chore: add the DB-IP database download script`
+`scripts/fetch-geoip.sh` pulling `dbip-asn-lite` (~6MB) and `dbip-country-lite` from DB-IP's monthly free release into `data/geoip/`, exposed as `pnpm geo:fetch`. Both files are needed — the ASN database carries no country data. `docs/ops/geoip.md` records the monthly refresh cadence and the CC BY 4.0 attribution string the bio-page footer must carry (E8).
+→ **files** `scripts/fetch-geoip.sh`, `package.json`, `docs/ops/geoip.md` · **verify** `pnpm geo:fetch` writes both `.mmdb` files and a reader opens each without error · **after** T0.7.8
+
+#### T0.7.10 · `chore: bake the DB-IP databases into the api image only` [INV-6]
+Run `fetch-geoip.sh` in the builder stage and `COPY` both `.mmdb` files into the **api** runtime stage at the paths the env schema expects (T0.3.5). The licence permits redistribution, so this replaces what would otherwise be an init container — the lookup reads a local file and the pod has no boot-time network dependency.
+
+**The worker image deliberately does not get them.** Geo lookup happens at capture, in the API, because that is the only instant the IP exists — invariant 6 drops it there and never queues it. A worker holding geo databases could only use them if someone first queued an IP, so their absence is a structural reminder that the worker has no business doing geolocation. This is also why T0.3.5 carries `GEOIP_DB_DIR` and T0.3.6 does not.
+→ **files** `apps/api/Dockerfile` · **verify** `docker run --rm <api-img> ls /app/data/geoip` lists both files, and `docker run --rm <worker-img> ls /app/data/geoip` fails with no such directory · **after** T0.7.9
+
+#### T0.7.11 · `chore: build app images from docker-compose`
+Give `api`, `worker` and `web` `build:` blocks pointing at their Dockerfiles, alongside the existing Postgres/Redis/MinIO services. Tradeoff, on purpose: `pnpm dev` keeps running watch mode on the host because container rebuilds are too slow for an edit loop — compose-built images are the artifact CI and production use, and the thing you reach for when a bug smells environmental.
+→ **files** `docker-compose.yml`, `package.json` · **verify** `docker compose up --build -d` reaches `healthy` on all six services · **after** T0.7.10
+
+#### T0.7.12 · `test: smoke-test that each built image starts and answers health`
+Starts each image against the compose datastores and polls its health endpoint (defined in E2/E3) until ready or a 30s timeout. A green `docker build` proves the layers assembled, nothing more — a missing runtime dependency or a bad `CMD` only surfaces here.
+→ **files** `tests/containers/image-smoke.test.ts` · **verify** `pnpm test tests/containers/image-smoke.test.ts` passes, and fails when `CMD` is pointed at a nonexistent entrypoint · **after** T0.7.11
+
+#### T0.7.13 · `test: enforce a per-image size budget`
+Reads `docker image inspect --format '{{.Size}}'` and fails above threshold: api 300MB, worker 300MB, web 250MB. Bloat is invisible until a rollout is slow — a stray `devDependency` in the runtime stage costs nothing locally and costs pull time on every node.
+→ **files** `tests/containers/image-size.test.ts` · **verify** `pnpm test tests/containers/image-size.test.ts` passes; lowering a threshold by 1MB fails it · **after** T0.7.12
+
+#### T0.7.14 · `ci: build and push all three images tagged with the git sha`
+Buildx job on push to main: build `api`, `worker`, `web`, run the smoke and size tests against them, then push as `<registry>/posta-<app>:<sha>` with a GitHub Actions layer cache. `latest` may move as a convenience tag, never as the only one — a deploy pinned to `latest` cannot be rolled back to a known artifact.
+→ **files** `.github/workflows/images.yml` · **verify** a merge to main pushes three digests whose tags match `git rev-parse HEAD` · **after** T0.7.13

@@ -158,9 +158,18 @@ Two signals do disproportionate work and are easy to forget:
 
 ### 5.2 ASN without a Cloudflare Worker
 
-`CF-IPCountry` is free on a proxied domain, but ASN (`request.cf.asn`) requires Cloudflare Workers. Rather than take that dependency, the API performs a local **MaxMind GeoLite2-ASN** mmdb lookup at capture, while it still holds the IP — in-memory, ~1 µs, free, self-contained.
+`CF-IPCountry` is free on a proxied domain, but ASN (`request.cf.asn`) requires Cloudflare Workers. Rather than take that dependency, the API performs a local **DB-IP** mmdb lookup at capture, while it still holds the IP — in-memory, ~1 µs, free, self-contained.
 
-**Corrected 2026-07-21.** This section previously claimed the ASN database also supplies country as a fallback. It does not — GeoLite2-ASN contains no country data. Country fallback requires a second file, **GeoLite2-Country**, on the same licence and the same download script (~8 MB more). Without it, `country` would have silently been null on every request where CF headers were absent, and nothing would have failed loudly.
+Two files are needed, both `dbip-*-lite`: **ASN** (which network owns the IP) and **Country**. The ASN database carries no country data, so one file cannot serve both.
+
+A local file is not merely convenient — it is the only design compatible with the privacy stance. A hosted IP-lookup API would mean transmitting every visitor's IP to a third party on every click, which would hollow out invariant 6 while appearing to honour it.
+
+**Amended 2026-07-21 (twice).** Originally this said MaxMind GeoLite2, and claimed the ASN database also supplied country. Both were wrong:
+
+- *Country* was never in the ASN database, under either publisher. It has always needed a second file. Left uncorrected, `country` would have been silently null whenever CF headers were absent, with nothing failing loudly.
+- *MaxMind* was replaced by **DB-IP** because GeoLite2's EULA forbids redistribution, and every Posta service now ships as a container image. Under MaxMind the database could not live in the image: it would need a licence key as a Kubernetes Secret plus a `geoipupdate` init container writing to a shared volume. DB-IP's lite databases are **CC BY 4.0** — redistributable, no account, no key — so they bake straight into the image and both moving parts disappear. Same `.mmdb` binary format, so the reader code is unchanged.
+
+The costs of DB-IP, accepted knowingly: monthly rather than weekly updates, and thinner coverage of small hosting providers. Rule 6 catches the major clouds either way, and the corpus (§7.2) is what measures whether that gap ever matters. Attribution is required and belongs in the bio-page footer.
 
 Datacenter-origin traffic is one of the strongest bot signals, and detecting bots better is the entire product. Worth the 8 MB file.
 
@@ -377,7 +386,8 @@ The two tests that matter most are the **queue-is-down redirect test** and the *
 | R2 "source of truth" is never actually exercised | The replay test (§6.1) |
 | Analytics queries slow as `events` grows | Partition pruning + covering indexes; the escape hatch is replaying R2 into a columnar store, deliberately deferred |
 | Cloudflare Origin Rule misconfigured → bio 404s or slugs hit Next | An E2E smoke test asserting both paths on the real domain post-deploy |
-| GeoLite2 license/attribution | Requires a free MaxMind account and attribution; verify terms before launch |
+| DB-IP coverage gaps on small hosting providers | Monthly updates and thinner long-tail coverage than MaxMind. The corpus (§7.2) is what measures whether the gap matters. Both publishers emit `.mmdb` read by the same library, so switching is a change to the download script — no code, no abstraction needed |
+| DB-IP attribution (CC BY 4.0) | Required. Bio-page footer. Cheap, but a licence breach if forgotten |
 
 ---
 

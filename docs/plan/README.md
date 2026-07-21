@@ -78,12 +78,14 @@ Epics are refined to commit-level granularity **just in time**, not all at once 
 
 | Epics | State | Tasks |
 |---|---|---|
-| E0–E6 | Refined to atomic tasks | 308 |
-| E7–E10 | Story-level. Refine each as its dependencies land. | — |
+| E0–E6, E10 | Refined to atomic tasks | **416** |
+| E7–E9 | Story-level. Refine as dependencies land. | — |
 
-E0–E5 are refined because the spec pins them tightly — the hot path, every capture signal, the eight classification rules in order, batching thresholds, the R2 layout. Little there can go stale. E6 is refined because it is the parallel track and unblocks nothing else.
+E0–E5 are refined because the spec pins them tightly — the hot path, every capture signal, the eight classification rules in order, batching thresholds, the R2 layout. E6 is refined because it is the parallel track.
 
-E7–E10 stay coarse deliberately: dashboard tasks depend on component decisions E6 has not made yet, and deploy tasks depend on providers not yet chosen. Refining them now would be inventing detail, not capturing it.
+**E10 was refined once the deployment model became containers + Kubernetes.** It had been deferred as "blocked on provider choice", but images and plain manifests are precisely what makes provider choice bind *late* — so the block dissolved. Five tasks remain `⛔ blocked` on a cloud account existing; every manifest, test and runbook can be built today against `kind`.
+
+E7–E9 stay coarse: dashboard and polish tasks depend on component decisions E6 has specified but not yet built. Refining them now would be inventing detail rather than capturing it — though that argument has already been wrong once, so it is worth re-testing rather than assuming.
 
 **Invariant tags.** Tasks that implement or protect a `CLAUDE.md` invariant are tagged `[INV-n]`. Those tasks may not be simplified away without amending the invariant in writing first — that is what happened to invariant 11 in this design, and it was done deliberately, in the open.
 
@@ -93,19 +95,27 @@ E7–E10 stay coarse deliberately: dashboard tasks depend on component decisions
 
 Where each invariant is implemented and where it is *tested*. An invariant with no test row is decoration.
 
+Task-level, generated from the `[INV-n]` tags rather than maintained by hand — so it cannot quietly drift from the plan it indexes. Truncated to five per cell.
+
 | # | Invariant | Implemented | Tested |
 |---|---|---|---|
-| 1 | Redirect never blocks on analytics | S2.4 | S2.6 — queue-down test |
-| 2 | Redirect route is lean, no DI | S2.1 | S2.6 — latency budget |
-| 3 | 307, never 301 | S2.4 | S2.6 |
-| 4 | Worker enriches, never judges | S3.2 | S1.2 — no verdict column exists |
-| 5 | Verdict is a read-time view | S4.1 | S4.4 — the corpus |
-| 6 | Raw IP never stored or queued | S2.3 | S2.6 — payload assertion |
-| 7 | R2 is source of truth | S3.4 | S3.6 — the replay test |
-| 8 | Event writes idempotent | S3.3 | S3.5 |
-| 9 | `tenant_id == user_id` | S1.1, S5.1 | S5.5 |
-| 10 | Hero metric is real humans | S6.4, S7.4 | S9.4 — the screen gate |
-| 11 | *(amended)* One frontend surface | S8.1 | S8.6 |
+| 1 | Redirect never blocks on analytics | T2.4.3, T10.2.7, T10.9.2, T10.9.3, T10.10.3 | T2.6.2 — queue-down |
+| 2 | Redirect route is lean, no DI | T2.1.4, T4.5.10, T10.2.7, T10.9.2 | T2.6.7, T5.2.7 |
+| 3 | 307, never 301 | T2.4.1 | T2.6.4 |
+| 4 | Worker enriches, never judges | T1.3.4, T3.2.3, T3.4.2 | T1.2.5 — no verdict column, T3.2.7 |
+| 5 | Verdict is a read-time view | T4.1.1, T10.7.7, T10.9.6, T10.10.7 | T4.1.4, T4.2.1 |
+| 6 | Raw IP never stored or queued | T0.7.10, T2.3.1, T2.3.7, T3.4.2, T10.9.7 | T1.2.5, T2.3.8, T2.6.3, T10.9.8 |
+| 7 | R2 is source of truth | T0.4.2, T3.4.6, T10.4.4, T10.7.3, T10.7.4 | T0.4.8, T3.4.7, T3.5.2, T3.5.7, **T3.6.6 — the replay test** |
+| 8 | Event writes idempotent | T1.2.2, T2.3.1, T3.3.2, T10.6.4 | T2.6.4, T3.3.5, T3.5.2, T3.5.3, T3.6.7 |
+| 9 | `tenant_id == user_id` | T1.1.4, T1.1.5, T1.5.5, T4.3.1, T4.5.1 | T4.5.9, T5.4.12, T5.5.2, T5.5.3, T5.5.5 |
+| 10 | Hero metric is real humans | T4.3.1, T4.3.2 | T4.3.10 |
+| 11 | *(amended)* One frontend surface | T10.2.2, T10.4.4 | T10.2.6, T10.4.5 |
+
+Two things this map makes visible that prose would not:
+
+**Invariant 3 has the thinnest coverage** — one implementation task, one test. That is proportionate: `307` versus `301` is a single constant, and the test asserts the status code directly. Thin here means small, not neglected.
+
+**Invariant 11's enforcement lives entirely in E10**, not in E8 where the bio page is built. That is because its real failure mode is multi-replica cache divergence, which does not exist until there is more than one pod. An invariant whose only teeth are in the deploy epic is worth watching — if E10 slips, invariant 11 becomes unenforced without anyone deciding to unenforce it.
 
 ---
 
