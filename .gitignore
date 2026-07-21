@@ -1,0 +1,61 @@
+# --- secrets ---------------------------------------------------------------
+# .env.example is committed; every other .env flavour is not.
+.env
+.env.*
+!.env.example
+
+# --- dependencies ----------------------------------------------------------
+node_modules/
+.pnpm-store/
+.pnp.*
+.yarn/
+
+# --- build output ----------------------------------------------------------
+dist/
+build/
+out/
+.next/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- test & coverage -------------------------------------------------------
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# --- data files ------------------------------------------------------------
+# GeoLite2 ASN database (S2.3) — downloaded at build time, MaxMind-licensed,
+# ~8MB binary. Never commit it.
+*.mmdb
+data/geoip/
+
+# --- local infrastructure --------------------------------------------------
+# docker-compose volumes (S0.4)
+.docker/
+postgres-data/
+redis-data/
+minio-data/
+
+# --- logs ------------------------------------------------------------------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+logs/
+
+# --- editors & OS ----------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- misc ------------------------------------------------------------------
+.cache/
+tmp/
+*.local
