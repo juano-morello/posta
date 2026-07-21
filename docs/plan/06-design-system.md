@@ -44,8 +44,8 @@ shadcn primitives read `--background`, `--card`, `--muted-foreground`, `--destru
 → **files** `apps/web/src/styles/_tokens.scss` · **verify** `pnpm test tokens.test.ts` asserts `--destructive` resolves to the same computed colour as `--error` in both themes · **after** T6.1.3
 
 #### T6.1.5 · `feat: add radius, spacing and $bp-mobile scales`
-Add `$radius-sm: 4px / $radius: 8px / $radius-lg: 12px`, the `$space` map (`4 8 12 16 24 32 48 64`), `$bp-mobile: 800px` and the `@mixin mobile` wrapper from POSTA.md §8.2.
-→ **files** `apps/web/src/styles/_tokens.scss` · **verify** `pnpm test tokens.test.ts` asserts the emitted `--radius`, `--radius-sm`, `--radius-lg` values and that `$bp-mobile` is `800px` · **after** T6.1.1
+Add `$radius-sm: 4px / $radius-badge: 6px / $radius: 8px / $radius-lg: 12px`, the `$space` map (`4 8 12 16 24 32 48 64`), `$bp-mobile: 800px` and the `@mixin mobile` wrapper from POSTA.md §8.2. `$radius-badge` is the named 6px used by badges, chips and thin data bars (DESIGN.md §2.3) — it exists so no component carries a bare `6px`.
+→ **files** `apps/web/src/styles/_tokens.scss` · **verify** `pnpm test tokens.test.ts` asserts the emitted `--radius`, `--radius-sm`, `--radius-badge`, `--radius-lg` values and that `$bp-mobile` is `800px` · **after** T6.1.1
 
 #### T6.1.6 · `feat: bind the Tailwind config to the CSS custom properties`
 Point every `theme.extend.colors` entry at `var(--token)` and map `borderRadius`, `spacing` and the `mobile` screen at the same variables, so `bg-primary` and `var(--primary)` resolve to one value. No hex appears in the Tailwind config.
@@ -245,7 +245,7 @@ Map each verdict to its semantic token — humano→`primary`, bot→`error`, un
 → **files** `packages/contracts/src/classification.ts` · **verify** `pnpm test classification.test.ts` asserts the map is total over `Clasificacion` and holds token names, never hex · **after** T6.4.1
 
 #### T6.4.3 · `feat: add HumanoBar with the lime/gray-ramp segments`
-Build `HumanoBar` as a 16px flex bar with 2px gaps and tight radius, rendering humans on `--primary` and bots/unfurlers/prefetch on `--n1/--n2/--n3`. Segment widths are percentages of the total.
+Build `HumanoBar` as a 16px flex bar with 2px gaps and `--radius-badge`, rendering humans on `--primary` and bots/unfurlers/prefetch on `--n1/--n2/--n3`. Segment widths are percentages of the total. No bare `6px` — the token or nothing.
 → **files** `apps/web/src/components/honesty/humano-bar.tsx` · **verify** `pnpm test humano-bar.test.tsx` asserts four segments render with widths proportional to the counts · **after** T6.4.2
 
 #### T6.4.4 · `feat: HumanoBar handles zero, all-human and no-human inputs`

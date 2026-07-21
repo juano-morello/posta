@@ -67,9 +67,9 @@ CSS variables con el **mismo esquema que shadcn/ui**. El nombre semántico no ca
 }
 
 .light {
-  --background: 0 0% 100%;
+  --background: 210 29% 97%;       /* #F6F8FA — página en tono sutil */
   --foreground: 213 27% 7%;
-  --card: 210 29% 97%;
+  --card: 0 0% 100%;               /* #FFFFFF — cards en blanco puro */
   --card-foreground: 213 27% 7%;
   --popover: 0 0% 100%;
   --popover-foreground: 213 27% 7%;
@@ -77,7 +77,7 @@ CSS variables con el **mismo esquema que shadcn/ui**. El nombre semántico no ca
   --primary-foreground: 0 0% 100%;
   --secondary: 210 20% 92%;
   --secondary-foreground: 213 27% 7%;
-  --muted: 210 29% 97%;
+  --muted: 0 0% 100%;              /* = surface, igual que en dark */
   --muted-foreground: 213 8% 39%;
   --accent: 210 20% 92%;
   --accent-foreground: 213 27% 7%;
@@ -90,10 +90,13 @@ CSS variables con el **mismo esquema que shadcn/ui**. El nombre semántico no ca
 ```
 
 > Nota: los HEX se convirtieron a HSL aproximado para shadcn. Para exactitud absoluta, usá un plugin que acepte HEX o `oklch`.
+>
+> **Corregido 2026-07-21.** Este bloque tenía `--background` y `--card` invertidos en light (página blanca, cards grises), contradiciendo §1 —*"Nunca cards más grises que el fondo"*— y §2.1. Los valores estaban literalmente intercambiados. Si copiaste este bloque antes de esa fecha, revisá el light mode.
 
 ### 2.3 Radius, spacing, sombras
 
-- **Radius:** base `8px` (`--radius: 0.5rem`). Escala: `sm 4px · md 8px · lg 12px · full`. Terminal-look = esquinas ajustadas, nunca pill salvo badges/avatars.
+- **Radius:** base `8px` (`--radius: 0.5rem`). Escala: `sm 4px · badge 6px · base 8px · lg 12px · full`. Terminal-look = esquinas ajustadas, nunca pill salvo badges/avatars.
+  - `badge 6px` es el radio de badges, chips y barras de datos finas (§4, y la `humano-bar` de Posta). Es un token con nombre, no un valor suelto: cualquier 6px hardcodeado falla el test de valores fuera de escala.
 - **Spacing:** escala de 4 → `4 8 12 16 24 32 48 64`. Densidad **media**.
 - **Sombras:** mínimas. Elevación real solo en overlays (dropdown, modal, drawer, toast): `0 8px 28px rgba(0,0,0,.35)` en dark. En superficies planas, preferir borde a sombra.
 
@@ -110,10 +113,20 @@ CSS variables con el **mismo esquema que shadcn/ui**. El nombre semántico no ca
 | Caption | Space Grotesk | 400 | 12–13px |
 | Code / mono | JetBrains Mono | 400–600 | 12–14px |
 
-Import:
-```html
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+**Las fuentes se self-hostean. No se piden a Google en runtime.**
+
+Vendorizá los subsets `latin` + `latin-ext` en `woff2` bajo `public/fonts/` y declarálas con `@font-face` + `font-display: swap`, precargando los pesos 400 de cada familia:
+
+```css
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('/fonts/space-grotesk-400.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
+/* … 500/600/700, y JetBrains Mono 400/500/600 */
 ```
+
+> **Corregido 2026-07-21.** Acá había un `<link>` a `fonts.googleapis.com`. Un pedido a un tercero en el head bloquea el render, filtra la IP del visitante a Google en cada carga, y en Posta contradice el "sin cookies, sin terceros" de la página pública. Los proyectos que usen este sistema deberían tener un test que falle ante cualquier referencia a `fonts.googleapis.com` o `fonts.gstatic.com`.
 
 **Video vertical (1080×1920):** hook 96–120px/700 · subtítulo 52–64px/600 · lower third 40px · handle 32px · captions 44–52px/600.
 **Thumbnail (1280×720):** título 90–130px/700 (máx 5 palabras) · prompt 26–32px mono · handle 24px mono.
@@ -127,7 +140,7 @@ Ver `JuanoDev UI Kit.dc.html` para el render exacto. Reglas transversales:
 - **Botones:** `primary` (lime, texto grafito) · `secondary` (surface-2) · `outline` · `ghost` · `destructive`. Estados: hover (`brightness 1.08` en filled, `border-color: primary` en outline), disabled (`opacity .5`, `cursor:not-allowed`), loading (spinner). Tamaños sm/md/lg.
 - **Inputs:** borde `--border`, focus = `--ring` + halo `0 0 0 3px ring/25%`. Error = borde `--error` + halo. Disabled = surface-2 + opacity.
 - **Cards:** `surface` + `border`. Hover opcional: `translateY(-3px)` + `border-color: primary`.
-- **Badges:** mono, `6px` radius. Variantes: primary, default, outline, success/warning/error (con `color-mix` al ~15% de fondo), con dot, removibles.
+- **Badges:** mono, radius `badge` (6px, §2.3). Variantes: primary, default, outline, success/warning/error (con `color-mix` al ~15% de fondo), con dot, removibles.
 - **Tabs:** underline lime en el activo (`border-bottom: 2px primary`). Vertical: `border-left` lime.
 - **Dropdown / modal / drawer / toast:** overlays con sombra real; modal con backdrop `rgba(0,0,0,.6)` + blur. Drawer: backdrop separado del panel.
 - **Terminal/code block:** signature. **Siempre oscuro** (fondo `#0D1117`, chrome `#161B22`, texto `#E6EDF3`, muted `#8B949E`). Sintaxis: keywords violeta `#8B5CF6`, tags/componentes `#58A6FF`, atributos `#E3B341`, strings lime `#B4FF39`, comentarios muted. Cursor lime parpadeante, typing effect.
@@ -136,7 +149,7 @@ Ver `JuanoDev UI Kit.dc.html` para el render exacto. Reglas transversales:
 - **Skeleton:** bloques `surface-2` con `@keyframes pulse` (opacity 1↔.45, 1.6s). Respetá la forma del contenido real.
 - **Breadcrumbs:** mono, separador `/`, último ítem en `--fg`, resto `--fg-muted`.
 - **Pagination:** botones `32px`, activo en lime, resto con `border`; flechas `‹ ›` en muted.
-- **Tooltip:** fondo `--fg` / texto `--bg` (invertido), mono `11px`, con flechita.
+- **Tooltip:** fondo `--fg` / texto `--bg` (invertido), mono `12px`, con flechita.
 - **Tabla:** header `surface-2` mono uppercase muted; filas con `border-subtle` y hover `surface-2`; columna de estado con badges.
 
 ### 4.1 Inventario v1 (todos en dark + light)

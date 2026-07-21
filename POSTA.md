@@ -210,7 +210,9 @@ $themes: (
 ### 8.2 Radius / spacing / breakpoint
 
 ```scss
-$radius-sm: 4px; $radius: 8px; $radius-lg: 12px;   // terminal look = tight corners
+$radius-sm: 4px; $radius-badge: 6px; $radius: 8px; $radius-lg: 12px;  // tight corners
+// $radius-badge is for badges, chips and thin data bars (DESIGN.md §2.3).
+// A hardcoded 6px anywhere fails the off-scale-value test.
 $space: (1:4px, 2:8px, 3:12px, 4:16px, 6:24px, 8:32px, 12:48px, 16:64px);
 $bp-mobile: 800px;                                  // sidebar → bottom tabs below this
 @mixin mobile { @media (max-width: #{$bp-mobile - 1px}) { @content; } }
@@ -234,7 +236,7 @@ $bp-mobile: 800px;                                  // sidebar → bottom tabs b
 
 ```scss
 .humano-bar {                        // real-vs-no-humano segmented bar
-  display:flex; height:16px; gap:2px; border-radius:$radius-sm; overflow:hidden; background:t(bg);
+  display:flex; height:16px; gap:2px; border-radius:$radius-badge; overflow:hidden; background:t(bg);
   > i { height:100%; display:block; }
   .is-human   { background:t(primary); }
   .is-bot     { background:t(n1); }
@@ -242,7 +244,7 @@ $bp-mobile: 800px;                                  // sidebar → bottom tabs b
   .is-prefetch{ background:t(n3); }
 }
 .badge-humano {                      // "% humano"
-  @include mono; font-weight:600; padding:6px 11px; border-radius:$radius-sm;
+  @include mono; font-weight:600; padding:6px 11px; border-radius:$radius-badge;
   color:t(primary);
   background:color-mix(in srgb, #{t(primary)} 16%, transparent);
   border:1px solid color-mix(in srgb, #{t(primary)} 40%, transparent);
