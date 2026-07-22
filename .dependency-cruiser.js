@@ -106,6 +106,21 @@ export default {
       to: { path: '^(packages/core(/|$)|@posta/core($|/))' },
     },
     {
+      name: 'no-core-to-apps',
+      severity: 'error',
+      comment:
+        'packages/core is a server-only shared library (Drizzle schema, ' +
+        'Postgres/R2 clients, enrichment, classification) consumed BY apps/api ' +
+        'and apps/worker — the dependency direction only ever runs one way. If ' +
+        "core needs something from an app, that direction is inverted: move " +
+        'the shared piece into core (or contracts) and have the app depend on ' +
+        'it, never the reverse. Low-probability today (core is a leaf with no ' +
+        'reason to reach into an app), but nothing else in this file forbade ' +
+        'it, which left a real hole in a matrix CLAUDE.md sells as complete.',
+      from: { path: '^packages/core(/|$)' },
+      to: { path: '^(apps/(api|worker|web)(/|$)|@posta/(api|worker|web)($|/))' },
+    },
+    {
       name: 'no-contracts-importing-server-code',
       severity: 'error',
       comment:

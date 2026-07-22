@@ -137,16 +137,32 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # NOTE: no `--` before --coverage. Unlike npm, pnpm forwards script
+      # NOTE: no `--` before the flags. Unlike npm, pnpm forwards script
       # args literally — `pnpm test -- --coverage` would append a literal
       # "--" to the underlying `vitest run`, which vitest's CLI parses as
       # "stop parsing flags", turning --coverage into a positional test-name
       # filter instead of a flag (silently running with NO coverage, since
       # no test file is named "--coverage"). Verified locally: `pnpm test
       # -- --coverage` produces no coverage/ directory at all; `pnpm test
-      # --coverage` does.
+      # --project default --coverage` does.
+      #
+      # --project default: vitest.config.ts's `projects` split (batch 9
+      # review) put tests/containers/** (image-smoke.test.ts,
+      # image-size.test.ts) in their own "containers" project — those
+      # tests' beforeAll shells out to `docker compose build/run` against
+      # services declaring `env_file: .env`, which THIS workflow never
+      # writes (no images are built here at all). Running the unscoped
+      # suite would try and fail to run them here — redundant AND a false
+      # failure, since images.yml already owns them, run targeted
+      # (`pnpm test tests/containers/image-smoke.test.ts` /
+      # `image-size.test.ts`) right after it builds the images they need.
+      # `--project default` runs every OTHER test (including
+      # tests/infra/redis-policy.test.ts, against the Redis service +
+      # CONFIG SET step above) and coverage still computes/gates at 80%
+      # over that same set — the container tests never contributed
+      # application-source coverage in the first place.
       - name: Test (with coverage)
-        run: pnpm test --coverage
+        run: pnpm test --project default --coverage
 
       - name: Upload coverage summary
         if: always()

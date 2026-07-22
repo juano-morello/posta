@@ -34,11 +34,25 @@ import path from 'node:path';
 
 const FORBIDDEN_DOMAINS = ['posta.lat', 'lbt.works'] as const;
 
-// Only apps/ and packages/ per the plan text — this also structurally
-// excludes this very file (it necessarily contains the forbidden
-// strings above) and .env.example/docs/*.md at the repo root, without
-// needing a special-case exclusion for any of them.
-const SCAN_ROOTS = ['apps', 'packages'] as const;
+// Directory roots to walk recursively. Started as apps/ and packages/ per
+// the plan text (T0.3.9); widened (final-review fixup, S0.5 batch) to also
+// cover CI/infra config — a future posta.lat literal in a workflow or
+// compose file would otherwise slip straight past this guard, and CI is
+// exactly where the "swap the fallback domain" scenario CLAUDE.md
+// describes would actually need to work. Neither addition currently
+// contains anything to catch (CI uses posta.test, service names, and env
+// vars) — confirmed clean before and after this widening.
+//
+// This also structurally excludes this very file, README.md, and any
+// other repo-root file not listed here (it necessarily contains the
+// forbidden strings above) — no special-case exclusion needed for any of
+// them.
+const SCAN_ROOTS = ['apps', 'packages', '.github/workflows', 'scripts', 'docker'] as const;
+
+// Individual repo-root FILES to scan directly (not directories — see
+// scanFile below). docker-compose.yml is the one config file that lives
+// at the repo root rather than under a directory already covered above.
+const SCAN_FILES = ['docker-compose.yml'] as const;
 
 const EXCLUDED_DIR_NAMES = new Set([
   'node_modules',
@@ -68,17 +82,45 @@ interface DomainLiteralHit {
 }
 
 /**
- * Walks `scanRoots` (relative to `rootDir`) and reports every line
- * containing one of FORBIDDEN_DOMAINS, skipping excluded directories and
- * files. Pure and side-effect-free beyond reading the filesystem, so it
- * can be pointed at either the real repo tree or a synthetic temp
- * directory built just for a test.
+ * Walks `scanRoots` (directories, relative to `rootDir`) and separately
+ * scans each of `scanFiles` (individual files, relative to `rootDir`),
+ * reporting every line containing one of FORBIDDEN_DOMAINS and skipping
+ * excluded directories and files. Pure and side-effect-free beyond reading
+ * the filesystem, so it can be pointed at either the real repo tree or a
+ * synthetic temp directory built just for a test.
+ *
+ * `scanFiles` defaults to an empty array deliberately: every existing
+ * synthetic-fixture test below calls this with only two arguments (a
+ * directory-only scan), so adding file-root support here must never change
+ * their behavior — including the ENOTDIR fixture, which relies on `apps`
+ * being read as a directory that turns out to be a file being a genuine
+ * error, not a legitimate file-scan-root case.
  */
 function scanForLiteralDomains(
   rootDir: string,
   scanRoots: readonly string[],
+  scanFiles: readonly string[] = [],
 ): DomainLiteralHit[] {
   const hits: DomainLiteralHit[] = [];
+
+  /** Scans one FILE's content directly — shared by `walk`'s per-entry file
+   * case and the top-level `scanFiles` loop below, so both paths report
+   * hits identically. */
+  function scanFile(fullPath: string): void {
+    const relativePath = path.relative(rootDir, fullPath);
+    if (isExcludedFile(relativePath)) return;
+
+    const content = readFileSync(fullPath, 'utf8');
+    const lines = content.split('\n');
+
+    lines.forEach((line, index) => {
+      for (const domain of FORBIDDEN_DOMAINS) {
+        if (line.includes(domain)) {
+          hits.push({ file: relativePath, line: index + 1, domain });
+        }
+      }
+    });
+  }
 
   function walk(dir: string): void {
     let entries;
@@ -111,19 +153,7 @@ function scanForLiteralDomains(
       }
       if (!entry.isFile()) continue;
 
-      const relativePath = path.relative(rootDir, fullPath);
-      if (isExcludedFile(relativePath)) continue;
-
-      const content = readFileSync(fullPath, 'utf8');
-      const lines = content.split('\n');
-
-      lines.forEach((line, index) => {
-        for (const domain of FORBIDDEN_DOMAINS) {
-          if (line.includes(domain)) {
-            hits.push({ file: relativePath, line: index + 1, domain });
-          }
-        }
-      });
+      scanFile(fullPath);
     }
   }
 
@@ -131,12 +161,31 @@ function scanForLiteralDomains(
     walk(path.join(rootDir, root));
   }
 
+  for (const file of scanFiles) {
+    const fullPath = path.join(rootDir, file);
+    try {
+      scanFile(fullPath);
+    } catch (error: unknown) {
+      // Mirrors walk()'s own ENOENT tolerance: a listed file-scan-root
+      // that doesn't exist (e.g. a future rename of docker-compose.yml)
+      // is benign, anything else fails loudly rather than reporting a
+      // false-clean scan.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') continue;
+
+      throw new Error(
+        `Failed to read file "${fullPath}" while scanning for literal ` +
+          `domains: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   return hits;
 }
 
-describe('no literal domain in apps/ or packages/', () => {
+describe('no literal domain in apps/, packages/, or CI/infra config', () => {
   it(`finds no ${FORBIDDEN_DOMAINS.join(' or ')} literal in the real source tree`, () => {
-    const hits = scanForLiteralDomains(process.cwd(), SCAN_ROOTS);
+    const hits = scanForLiteralDomains(process.cwd(), SCAN_ROOTS, SCAN_FILES);
 
     expect(hits).toEqual([]);
   });
