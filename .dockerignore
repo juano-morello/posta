@@ -1,0 +1,34 @@
+# Posta — shared Docker build-context excludes (T0.7.1)
+#
+# The build context for all three app images (apps/{api,worker,web}/Dockerfile)
+# is the repo root — each Dockerfile's `pruner` stage needs the whole
+# workspace to compute a per-app subset via `turbo prune` (T0.7.3). Without
+# this file, `docker build` uploads every one of these directories to the
+# daemon on EVERY build, which busts the build cache on any file change at
+# all (a touched .md file invalidates the same layers as a source change)
+# and, for node_modules especially, makes the context multiple GB.
+
+# --- dependencies & build output --------------------------------------------
+# Reinstalled/rebuilt inside the image; never useful from the host. A bare
+# `node_modules/` only matches a TOP-LEVEL node_modules — Docker's ignore
+# patterns are not recursive like .gitignore's, so every one of these needs
+# the `**/` prefix to also catch apps/*/node_modules, apps/web/.next, etc.
+**/node_modules/
+**/.next/
+**/dist/
+**/.turbo/
+
+# --- secrets -----------------------------------------------------------------
+# Never bake local credentials into an image layer.
+.env
+.env.*
+!.env.example
+
+# --- vcs & docs --------------------------------------------------------------
+.git/
+docs/
+
+# --- data files ----------------------------------------------------------
+# GeoIP .mmdb files (S0.7, T0.7.9/10 — a later batch): fetched or baked in
+# a dedicated step, never picked up implicitly via the build context.
+**/*.mmdb
