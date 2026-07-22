@@ -1,3 +1,4 @@
+import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { configDefaults, defineConfig } from 'vitest/config';
 
@@ -92,6 +93,15 @@ export default defineConfig({
       // unaffected.
       {
         plugins: [react()],
+        resolve: {
+          // Mirrors apps/web/tsconfig.json's "@/*" -> "./src/*" path alias.
+          // Vite/Vitest doesn't read tsconfig `paths` on its own, so
+          // components importing e.g. '@/styles/globals.css' (layout.tsx)
+          // would otherwise fail to resolve under this project.
+          alias: {
+            '@': path.resolve(__dirname, 'apps/web/src'),
+          },
+        },
         test: {
           name: 'web',
           environment: 'jsdom',

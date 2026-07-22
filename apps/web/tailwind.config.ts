@@ -53,6 +53,14 @@ const config: Config = {
       full: '9999px',
     },
     extend: {
+      // T6.1.9 — the only two families in the system (DESIGN.md §3): UI
+      // text reads Space Grotesk, anything code-shaped (slugs, handles,
+      // metrics, terminal prompts) reads JetBrains Mono. System-font
+      // fallbacks keep text visible during the font-display: swap window.
+      fontFamily: {
+        sans: ['Space Grotesk', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+      },
       spacing: {
         '1': 'var(--space-1)',
         '2': 'var(--space-2)',
