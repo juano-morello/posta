@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // Root-level Vitest config. tests/** holds workspace-level tests — checks
 // that span multiple packages (the S0.2 dependency-boundary tests) rather
@@ -44,9 +44,42 @@ import { defineConfig } from 'vitest/config';
 // branches") — statements/functions aren't gated, though they currently
 // clear 80% too. `pnpm test --coverage` currently reports 100% lines /
 // 94.44% branches across the included files, comfortably above the floor.
+// projects (batch 9 review, T0.7.12/13): tests/containers/**'s two files
+// (image-smoke.test.ts, image-size.test.ts) each run `docker compose build
+// api worker web` in their own beforeAll — Vitest parallelizes test FILES
+// by default, so without this split, two concurrent `docker compose build`
+// invocations racing on the SAME image tags is a latent flakiness risk
+// (didn't bite in the batch's own 244/244 run, but it's there). `projects`
+// splits the suite into two groups: everything else keeps today's default
+// parallelism ("default"), and tests/containers/** gets fileParallelism:
+// false, which Vitest resolves to maxWorkers: 1 for that group specifically
+// — so its two files always run one after another, never concurrently,
+// while every other test file is untouched. `coverage` stays OUTSIDE
+// `projects`, at this root level, deliberately: Vitest only supports
+// coverage/reporters/resolveSnapshotPath at the root config and forces
+// every project to share that single resolved coverage — duplicating it
+// per-project isn't supported and wouldn't do anything if it were.
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'apps/**/*.test.ts'],
+    projects: [
+      {
+        test: {
+          name: 'default',
+          include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'apps/**/*.test.ts'],
+          // configDefaults.exclude must be spread explicitly — setting
+          // `exclude` replaces Vitest's own node_modules/.git defaults
+          // rather than adding to them.
+          exclude: [...configDefaults.exclude, 'tests/containers/**'],
+        },
+      },
+      {
+        test: {
+          name: 'containers',
+          include: ['tests/containers/**/*.test.ts'],
+          fileParallelism: false,
+        },
+      },
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'lcov'],

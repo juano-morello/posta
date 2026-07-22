@@ -38,7 +38,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-OUT_DIR="data/geoip"
+# Follows GEOIP_DB_DIR (apps/api/src/env.ts, .env.example's default
+# ./data/geoip) rather than hardcoding "data/geoip" as a second,
+# independent source of truth for the same path — the two matched only by
+# coincidence before this. Falls back to "data/geoip" when the var isn't
+# set (e.g. a bare `bash scripts/fetch-geoip.sh` outside any .env context),
+# which is exactly the same value that fallback used to be hardcoded to.
+OUT_DIR="${GEOIP_DB_DIR:-data/geoip}"
 mkdir -p "$OUT_DIR"
 
 DATABASES=("dbip-asn-lite" "dbip-country-lite")

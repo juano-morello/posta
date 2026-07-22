@@ -118,9 +118,12 @@ jobs:
       # Builds all three with the SAME buildx builder docker/setup-buildx-action
       # just installed as the default — `docker compose build` routes through
       # it automatically, so this already benefits from BuildKit's own layer
-      # cache within this job. This is the exact artifact T0.7.12/13's tests
-      # below exercise: build once, test that build, only push it once it's
-      # proven itself — never a second, untested rebuild.
+      # cache within this job. T0.7.12/13's tests below run against exactly
+      # these images — nothing is allowed near the registry until they pass.
+      # Note: this step doesn't write to the GHA cache (`cache-to`), only
+      # the per-app push steps further down do — see their comment for why
+      # that means the push steps can genuinely rebuild rather than reuse
+      # this step's output, on a cold cache.
       - name: Build api/worker/web images
         run: docker compose build api worker web
 
@@ -145,13 +148,19 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      # Pushed by re-invoking buildx per app with `cache-from: type=gha`
-      # against the SAME context/Dockerfile the build step above just
-      # populated the GHA cache from (via `cache-to` below) — every layer
-      # is a cache hit, so this is a promote-the-tested-artifact step, not
-      # a second real build. `latest` moves as a convenience tag; the SHA
-      # tag is what a rollback actually pins to — never publish only the
-      # former (plan: "a deploy pinned to latest cannot be rolled back").
+      # Re-invokes buildx per app, this time with `cache-from`/`cache-to:
+      # type=gha`. That cache persists ACROSS workflow runs, not within this
+      # one — the "Build api/worker/web images" step above never writes to
+      # it (plain `docker compose build`, no `cache-to`) — so this is only a
+      # fast, no-op-ish rebuild on the SECOND and later runs, once a prior
+      # run's `cache-to` has actually populated it. The very first run (or
+      # any run after a Dockerfile change invalidates the cached layers)
+      # genuinely rebuilds from scratch here. Either way the pushed image is
+      # the same correct artifact the tests above already exercised — the
+      # cache only changes how long getting there takes, never what gets
+      # pushed. `latest` moves as a convenience tag; the SHA tag is what a
+      # rollback actually pins to — never publish only the former (plan: "a
+      # deploy pinned to latest cannot be rolled back").
       - name: Push api image
         if: ${{ env.REGISTRY != '' }}
         uses: docker/build-push-action@v7
