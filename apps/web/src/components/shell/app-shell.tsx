@@ -49,7 +49,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <CompactMobileTopbar />
 
-        <main className="flex-1 pb-16 mobile:pb-0">{children}</main>
+        {/* T6.3.8 — POSTA.md §3: fluid page padding, no breakpoints. */}
+        <main className="flex-1 p-[var(--pad-page)] pb-16 mobile:pb-0">{children}</main>
       </div>
 
       <BottomTabs />

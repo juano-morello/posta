@@ -148,6 +148,17 @@ $space: (
   space-16: 64px,
 );
 
+// T6.3.8 — POSTA.md §3: clamp() for page padding and large numerals (the
+// hero "clicks reales" number) so both scale continuously with viewport
+// width instead of jumping at breakpoints. --text-hero is POSTA.md's own
+// exact value; --pad-page is this system's own fluid padding scale,
+// bounded at the same floor/ceiling as the existing $space steps
+// (16px/space-4 to 32px/space-8) so it never reads as an arbitrary number.
+$fluid: (
+  pad-page: clamp(16px, 4vw, 32px),
+  text-hero: clamp(40px, 9vw, 52px),
+);
+
 // Mobile breakpoint (POSTA.md §8.2) — sidebar swaps for BottomTabs below
 // this width (S6.3). Deliberately NOT emitted as a CSS custom property:
 // @media conditions must be static at CSS-parse time, so a var() here
@@ -168,6 +179,7 @@ $bp-mobile: 800px;
   @include emit-aliases($shadcn-aliases);
   @include emit-vars($radii);
   @include emit-vars($space);
+  @include emit-vars($fluid);
 }
 
 // runtime theme toggle (T6.1.11 wires the actual class add/remove).

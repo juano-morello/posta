@@ -16,17 +16,17 @@ const STAT_CARDS = ['clicks reales', '% no humano', 'mejor link', 'top fuente'];
 export default function ShellPreviewPage() {
   return (
     <AppShell>
-      <div className="p-6">
-        <h1 className="font-sans text-2xl font-bold text-fg">Contenido de ejemplo</h1>
-        <div className="grid-cards mt-6" data-testid="stat-card-grid">
-          {STAT_CARDS.map((label) => (
-            <Card key={label} data-testid="stat-card">
-              <CardHeader>
-                <CardTitle>{label}</CardTitle>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
+      {/* T6.3.8 — AppShell's <main> already applies --pad-page; no
+          redundant padding here. */}
+      <h1 className="font-sans text-2xl font-bold text-fg">Contenido de ejemplo</h1>
+      <div className="grid-cards mt-6" data-testid="stat-card-grid">
+        {STAT_CARDS.map((label) => (
+          <Card key={label} data-testid="stat-card">
+            <CardHeader>
+              <CardTitle>{label}</CardTitle>
+            </CardHeader>
+          </Card>
+        ))}
       </div>
     </AppShell>
   );

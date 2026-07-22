@@ -101,4 +101,12 @@ describe('_tokens.scss', () => {
     const source = readFileSync(TOKENS_PATH, 'utf-8');
     expect(source).toMatch(/\$bp-mobile:\s*800px/);
   });
+
+  // T6.3.8 — POSTA.md §3: clamp() for page padding and large numerals (the
+  // hero "clicks reales" number) scales without breakpoints.
+  it('emits --pad-page and --text-hero as clamp() expressions', () => {
+    const root = extractBlock(compileTokens(), ':root');
+    expect(root).toMatch(/--pad-page:\s*clamp\(/);
+    expect(root).toMatch(/--text-hero:\s*clamp\(40px,\s*9vw,\s*52px\)/);
+  });
 });
