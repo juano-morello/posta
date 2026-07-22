@@ -12,6 +12,7 @@
     "types": ["node"]
   },
   "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/contracts" }

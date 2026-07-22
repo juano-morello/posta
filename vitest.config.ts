@@ -11,8 +11,16 @@ import { defineConfig } from 'vitest/config';
 // not under tests/. Widened minimally — just packages/**, not apps/**,
 // since apps have no tests yet this batch (their env schemas land in the
 // next batch and can extend this glob then).
+//
+// apps/**/*.test.ts added in T0.3.5 (S0.3 batch 5): the per-app env
+// schemas land beside their source the same way contracts' did
+// (apps/api/src/env.test.ts etc.), and this batch's own verify commands
+// (`pnpm test apps/api/src/env.test.ts` etc.) only find those files if
+// the glob covers apps/** too — exactly the extension the comment above
+// anticipated. Still no per-package configs (T0.5.3) or coverage
+// thresholds (T0.5.4) — this stays the one root config.
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts', 'packages/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'apps/**/*.test.ts'],
   },
 });
