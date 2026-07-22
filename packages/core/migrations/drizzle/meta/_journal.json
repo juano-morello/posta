@@ -8,6 +8,13 @@
       "when": 1784756682006,
       "tag": "0000_curious_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784756921234,
+      "tag": "0001_calm_talon",
+      "breakpoints": true
     }
   ]
 }
