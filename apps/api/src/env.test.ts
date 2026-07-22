@@ -106,4 +106,39 @@ describe('apiEnvSchema', () => {
   it('does not include WEB_PORT in its shape', () => {
     expect(apiEnvSchema.shape).not.toHaveProperty('WEB_PORT');
   });
+
+  // Security review findings (batch 5): SEED_USER_PASSWORD/SEED_USER_EMAIL
+  // seed the ONE v1 administrative account (tenant_id == user_id, no
+  // public signup — invariant 9), so this is the one credential that
+  // gates the entire system. zNonEmpty alone (>=1 char, any string) was
+  // too weak a boot-time check for the single field that matters most.
+  it('rejects a SEED_USER_PASSWORD shorter than 12 characters', () => {
+    const result = apiEnvSchema.safeParse({ ...VALID_API_ENV, SEED_USER_PASSWORD: 'short1!' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a SEED_USER_PASSWORD of exactly 12 characters', () => {
+    const result = apiEnvSchema.safeParse({
+      ...VALID_API_ENV,
+      SEED_USER_PASSWORD: 'exactly12chr',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a SEED_USER_EMAIL that is not a valid email address', () => {
+    const result = apiEnvSchema.safeParse({ ...VALID_API_ENV, SEED_USER_EMAIL: 'not-an-email' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a well-formed SEED_USER_EMAIL', () => {
+    const result = apiEnvSchema.safeParse({
+      ...VALID_API_ENV,
+      SEED_USER_EMAIL: 'juano@example.test',
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

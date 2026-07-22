@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { zNonEmpty, zPort, zUrl } from '@posta/contracts';
+import { zNonEmpty, zOptionalUrl, zPort, zUrl } from '@posta/contracts';
 
 // T0.3.6 — the worker's Zod env schema (S0.3). The worker is a separate
 // BullMQ consumer process: it drains Redis, enriches, and writes events
@@ -14,17 +14,6 @@ import { zNonEmpty, zPort, zUrl } from '@posta/contracts';
 // writer role while the API connects as a reader with no SELECT on raw
 // `events` (T4.2.4). Two roles means two URLs, wired from the start
 // even though the privilege separation itself lands later.
-
-/**
- * `R2_ENDPOINT` is a URL in local dev (MinIO) but is explicitly left
- * empty in production to fall back to the R2 default (.env.example) —
- * mirrors apps/api/src/env.ts's zOptionalUrl; kept as each app's own
- * one-line schema rather than a new shared contracts primitive for a
- * single field shape used by exactly two schemas so far.
- */
-const zOptionalUrl = z.string().refine((value) => value === '' || zUrl.safeParse(value).success, {
-  message: 'must be empty or a valid URL',
-});
 
 export const workerEnvSchema = z.object({
   // Datastores — writer role (see file header). No domain/auth vars: the

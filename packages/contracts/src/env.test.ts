@@ -8,6 +8,7 @@ import {
   zBooleanish,
   zCsvList,
   zNonEmpty,
+  zOptionalUrl,
   zPort,
   zUrl,
 } from './env';
@@ -135,6 +136,29 @@ describe('zCsvList', () => {
 
   it('returns a single-item array for a value with no commas', () => {
     expect(zCsvList.parse('solo')).toEqual(['solo']);
+  });
+});
+
+// zOptionalUrl (extracted from apps/api and apps/worker's env schemas
+// during batch 5 review — both had an identical inline copy for
+// R2_ENDPOINT, which is a URL in local dev but explicitly left empty in
+// production to fall back to the R2 default). One shared primitive
+// instead of two schemas that could silently drift.
+describe('zOptionalUrl', () => {
+  it('accepts an empty string', () => {
+    expect(zOptionalUrl.safeParse('').success).toBe(true);
+  });
+
+  it('accepts a well-formed URL', () => {
+    expect(zOptionalUrl.parse('http://localhost:9000')).toBe('http://localhost:9000');
+  });
+
+  it('rejects a non-empty, non-URL string', () => {
+    expect(zOptionalUrl.safeParse('not-a-url').success).toBe(false);
+  });
+
+  it('rejects a whitespace-only string (not the same as truly empty)', () => {
+    expect(zOptionalUrl.safeParse('   ').success).toBe(false);
   });
 });
 

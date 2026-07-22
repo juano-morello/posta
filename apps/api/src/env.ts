@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { zCsvList, zNonEmpty, zPort, zUrl } from '@posta/contracts';
+import { zCsvList, zNonEmpty, zOptionalUrl, zPort, zUrl } from '@posta/contracts';
 
 // T0.3.5 — the API's Zod env schema (S0.3). The API owns redirects, all
 // CRUD, auth, and analytics queries, and does the ASN/geo lookup at
@@ -13,16 +13,6 @@ import { zCsvList, zNonEmpty, zPort, zUrl } from '@posta/contracts';
 // Only the primitives contracts already exports (T0.3.2) are reused here
 // — this file selects and wires them for the API's own variables, it does
 // not add new shared primitives (that stays contracts' job).
-
-/**
- * `R2_ENDPOINT` is a URL in local dev (MinIO) but is explicitly left
- * empty in production to fall back to the R2 default (.env.example) — so
- * this must accept "" as well as a well-formed URL, unlike the other
- * required URLs in this schema.
- */
-const zOptionalUrl = z.string().refine((value) => value === '' || zUrl.safeParse(value).success, {
-  message: 'must be empty or a valid URL',
-});
 
 export const apiEnvSchema = z.object({
   // Domains (S0.3, T0.3.3) — everything makeUrlBuilders() needs, plus the
@@ -52,10 +42,15 @@ export const apiEnvSchema = z.object({
   GEOIP_DB_DIR: zNonEmpty,
 
   // Auth (Better Auth, S5.1) and the single seeded v1 account (invariant 9).
+  // SEED_USER_EMAIL/SEED_USER_PASSWORD get stricter checks than zNonEmpty
+  // (security review, batch 5): this is the one credential that gates the
+  // entire system (tenant_id == user_id, no public signup route), so a
+  // 1-character password or a typo'd non-email value should fail loudly
+  // at boot rather than surface later as an auth bug.
   BETTER_AUTH_SECRET: zNonEmpty,
   BETTER_AUTH_URL: zUrl,
-  SEED_USER_EMAIL: zNonEmpty,
-  SEED_USER_PASSWORD: zNonEmpty,
+  SEED_USER_EMAIL: z.email(),
+  SEED_USER_PASSWORD: zNonEmpty.min(12, 'must be at least 12 characters'),
   SEED_USER_HANDLE: zNonEmpty,
 
   // Services

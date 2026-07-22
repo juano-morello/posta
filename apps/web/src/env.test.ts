@@ -100,24 +100,42 @@ describe('no secret-looking key under NEXT_PUBLIC_ (security)', () => {
   const publicKeys = Object.keys(webPublicEnvSchema.shape);
   const secretNamePattern = /SECRET|PASSWORD|KEY|TOKEN/i;
 
+  // A leaked key is always NEXT_PUBLIC_-prefixed (that prefix is the only
+  // thing that makes Next.js inline it into the browser bundle), but
+  // SECRET_ENV_KEYS holds bare names (DATABASE_URL, REDIS_URL, …). The
+  // prefix must be stripped before checking set membership, or this check
+  // can never fire — NEXT_PUBLIC_DATABASE_URL !== DATABASE_URL as strings,
+  // so `SECRET_ENV_KEYS.includes(key)` on the prefixed key is permanently
+  // false regardless of what leaked. Security review caught this: the
+  // name-pattern fallback alone does not cover DATABASE_URL,
+  // DATABASE_URL_WORKER, REDIS_URL, or R2_ACCOUNT_ID, none of which
+  // contain "SECRET"/"PASSWORD"/"KEY"/"TOKEN" — exactly the two most
+  // damaging keys (DB and Redis connection strings) would have slipped
+  // through unnoticed.
+  function isSecretShapedPublicKey(key: string): boolean {
+    const bareName = key.replace(/^NEXT_PUBLIC_/, '');
+    return SECRET_ENV_KEYS.includes(bareName) || secretNamePattern.test(key);
+  }
+
   it('declares at least one public key, so this assertion is not vacuous', () => {
     expect(publicKeys.length).toBeGreaterThan(0);
   });
 
-  it.each(publicKeys)('%s is not in the shared secret-key set', (key) => {
-    expect(SECRET_ENV_KEYS).not.toContain(key);
+  it.each(publicKeys)('%s is not secret-shaped once its NEXT_PUBLIC_ prefix is stripped', (key) => {
+    expect(isSecretShapedPublicKey(key)).toBe(false);
   });
 
-  it.each(publicKeys)('%s does not match a SECRET/PASSWORD/KEY/TOKEN name pattern', (key) => {
-    expect(secretNamePattern.test(key)).toBe(false);
+  // Systematically proves the check has teeth for EVERY declared secret,
+  // not just the ones the name pattern happens to catch — this is the
+  // exact case the prefix-stripping bug let through silently.
+  it.each(SECRET_ENV_KEYS)('would catch a leaked NEXT_PUBLIC_%s', (secretKey) => {
+    expect(isSecretShapedPublicKey(`NEXT_PUBLIC_${secretKey}`)).toBe(true);
   });
 
   it('fails if a secret-shaped key is added to the public schema (regression proof)', () => {
-    const withLeakedSecret = { ...webPublicEnvSchema.shape, NEXT_PUBLIC_BETTER_AUTH_SECRET: true };
+    const withLeakedSecret = { ...webPublicEnvSchema.shape, NEXT_PUBLIC_DATABASE_URL: true };
     const leakedKeys = Object.keys(withLeakedSecret);
-    const hasLeak = leakedKeys.some(
-      (key) => SECRET_ENV_KEYS.includes(key) || secretNamePattern.test(key),
-    );
+    const hasLeak = leakedKeys.some(isSecretShapedPublicKey);
 
     expect(hasLeak).toBe(true);
   });
