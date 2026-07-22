@@ -79,6 +79,14 @@ const config: Config = {
         // breakpoint cannot be a runtime CSS custom property either way.
         mobile: '800px',
       },
+      // T6.2.8 — DESIGN.md §2.3: elevation is reserved for real overlays
+      // (dropdown, dialog, sheet, toast) only — everything else stays on
+      // borders (Card, T6.2.7). One named shadow, not a scale, so a
+      // component reaching for `shadow-md`/`shadow-lg` reads as an
+      // obvious off-spec diff in review.
+      boxShadow: {
+        overlay: 'var(--shadow-overlay)',
+      },
     },
   },
   plugins: [],

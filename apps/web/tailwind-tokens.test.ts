@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { compileTokensCss } from './src/styles/compile-tokens';
 import tailwindConfig from './tailwind.config';
 
-// Non-color scales (radius/spacing) also live under :root in _tokens.scss
-// but are never Tailwind "colors" — excluded so the drift comparison below
-// only ever looks at the color vocabulary the two systems actually share.
-const NON_COLOR_PREFIXES = ['radius', 'space-'];
+// Non-color scales (radius/spacing/shadow) also live under :root or the
+// theme maps in _tokens.scss but are never Tailwind "colors" — excluded so
+// the drift comparison below only ever looks at the color vocabulary the
+// two systems actually share. shadow-overlay (T6.2.8) lives in Tailwind's
+// `boxShadow` theme key instead, checked by elevation.test.tsx.
+const NON_COLOR_PREFIXES = ['radius', 'space-', 'shadow-'];
 
 function isColorName(name: string): boolean {
   return !NON_COLOR_PREFIXES.some((prefix) => name.startsWith(prefix));

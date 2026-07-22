@@ -46,6 +46,12 @@ $themes: (
     n1: #5a6069,
     n2: #3f444c,
     n3: #2b3038,
+    // T6.2.8 — DESIGN.md §2.3: "Sombras: mínimas. Elevación real solo en
+    // overlays (dropdown, modal, drawer, toast)." One shadow, reserved for
+    // exactly those four components — flat surfaces (Card, T6.2.7) stay on
+    // borders. Per-theme because a dark shadow this heavy would look wrong
+    // (too harsh, too visible) floating over a pale light-mode page.
+    shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.35),
   ),
   // T6.1.2 — light is support, not an inverted dark. Pure lime on white
   // fails AA (T6.1.14 is what proves it), so light drops primary to the
@@ -76,6 +82,9 @@ $themes: (
     n1: #9CA6B3,
     n2: #B7BFC9,
     n3: #D6DCE3,
+    // Softened from dark's 0.35 alpha — a light page needs a lighter
+    // touch to still read as "floating above", not a heavy dark smear.
+    shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.15),
   ),
 );
 
