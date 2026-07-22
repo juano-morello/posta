@@ -15,14 +15,18 @@ import { defineConfig } from 'drizzle-kit';
 // immediately under drizzle-kit's CJS require() — this pattern excludes
 // it instead of relying on drizzle-kit to skip non-schema exports.
 //
-// Deliberately excludes src/schema/events.ts (added S1.2): the events
-// table is partitioned (`PARTITION BY RANGE`), which drizzle-kit's
-// generator cannot emit — that table is a hand-written SQL migration
-// instead (packages/core/migrations/manual/), applied by a separate
-// runner (T1.2.1), never by drizzle-kit. Keeping events.ts out of this
-// glob is what keeps `db:generate` from ever trying and failing on it.
+// Deliberately excludes src/schema/events.ts (T1.2.4): the events table
+// is partitioned (`PARTITION BY RANGE`), which drizzle-kit's generator
+// cannot emit — that table is a hand-written SQL migration instead
+// (packages/core/migrations/sql/, T1.2.1-T1.2.3), applied by a separate
+// runner, never by drizzle-kit. events.ts itself is a READ-ONLY Drizzle
+// typing mirror of that DDL (EventRow/NewEvent) — keeping it out of this
+// glob is what keeps `db:generate` from ever trying to "fix" the
+// partitioning away with a plain CREATE TABLE. events-types.test.ts
+// (T1.2.4) asserts this by actually running `db:generate` and checking
+// no new migration file appears.
 export default defineConfig({
-  schema: './src/schema/!(*.test).ts',
+  schema: './src/schema/!(*.test|events).ts',
   out: './migrations/drizzle',
   dialect: 'postgresql',
   dbCredentials: {
