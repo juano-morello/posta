@@ -80,10 +80,26 @@ describe('shadow-overlay is reserved for the four real overlays', () => {
   });
 
   it('no other file under components/ui references shadow-overlay', () => {
-    const offenders = readdirSync(UI_DIR)
+    const candidates = readdirSync(UI_DIR)
       .filter((entry) => entry.endsWith('.tsx') && !entry.endsWith('.test.tsx'))
-      .filter((entry) => !FILES_ALLOWED_TO_REFERENCE_IT.has(entry))
-      .filter((entry) => readFileSync(path.join(UI_DIR, entry), 'utf-8').includes('shadow-overlay'));
+      .filter((entry) => !FILES_ALLOWED_TO_REFERENCE_IT.has(entry));
+
+    // Read every candidate individually and keep going past a failure:
+    // one unreadable file (permissions, encoding) throwing mid-scan would
+    // otherwise abort before the rest are checked, reporting nothing
+    // instead of everything the scan could have found. Read failures are
+    // collected as their own offenders rather than silently skipped —
+    // "couldn't verify this file" must never look identical to "verified
+    // clean".
+    const offenders = candidates.flatMap((entry) => {
+      const filePath = path.join(UI_DIR, entry);
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        return content.includes('shadow-overlay') ? [entry] : [];
+      } catch (error) {
+        return [`${entry} (unreadable: ${(error as Error).message})`];
+      }
+    });
     expect(offenders).toEqual([]);
   });
 });

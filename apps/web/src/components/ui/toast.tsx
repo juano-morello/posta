@@ -78,7 +78,6 @@ const ToastClose = React.forwardRef<
       'absolute right-2 top-2 rounded p-1 text-muted opacity-0 transition-opacity hover:text-fg focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring group-hover:opacity-100',
       className,
     )}
-    toast-close=""
     {...props}
   >
     <X className="h-4 w-4" />
