@@ -21,7 +21,11 @@ docker compose up -d --wait postgres redis minio
 # Second, unwaited `up -d` for the one-shot minio-init: --wait treats its
 # expected clean exit as non-convergence (same reasoning as `pnpm dev`,
 # T0.4.6), so it always runs as a follow-up step, not inside --wait.
-docker compose up -d
+# Scoped to minio-init specifically (T0.7.11) — docker-compose.yml now
+# also defines api/worker/web build: services; a bare `up -d` here would
+# build and start those too, which is exactly what `pnpm dev`'s host-mode
+# flow does not want during a reset.
+docker compose up -d minio-init
 # `docker compose wait` blocks until minio-init actually exits and
 # propagates ITS exit code — unlike the plain `up -d` above, which returns
 # as soon as the container is started, not once it's done. Without this,
