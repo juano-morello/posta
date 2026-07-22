@@ -11,8 +11,12 @@ import {
 } from './dropdown-menu';
 import { Input } from './input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select';
+import { Badge } from './badge';
 import { Sheet, SheetContent, SheetTrigger } from './sheet';
+import { Skeleton } from './skeleton';
 import { Switch } from './switch';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs';
+import { Toast, ToastProvider, ToastTitle, ToastViewport } from './toast';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip';
 
 // T6.2.2 — the shadcn form primitives, first pass: each must render
@@ -118,5 +122,66 @@ describe('shadcn overlay primitives open on trigger and trap focus', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeInTheDocument();
     expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+});
+
+// T6.2.4 — the shadcn feedback primitives.
+describe('shadcn feedback primitives', () => {
+  it('Toast renders without throwing', () => {
+    render(
+      <ToastProvider>
+        <Toast open>
+          <ToastTitle>link creado: juano.posta.lat/promo</ToastTitle>
+        </Toast>
+        <ToastViewport />
+      </ToastProvider>,
+    );
+    expect(screen.getByText('link creado: juano.posta.lat/promo')).toBeInTheDocument();
+  });
+
+  it('Skeleton renders without throwing', () => {
+    const { container } = render(<Skeleton className="h-4 w-32" />);
+    expect(container.firstChild).toBeInTheDocument();
+  });
+
+  it('Badge renders without throwing', () => {
+    render(<Badge>% humano</Badge>);
+    expect(screen.getByText('% humano')).toBeInTheDocument();
+  });
+
+  it('Tabs marks only the active tab with the lime border-bottom underline', async () => {
+    const user = userEvent.setup();
+    render(
+      <Tabs defaultValue="dia">
+        <TabsList>
+          <TabsTrigger value="dia">7d</TabsTrigger>
+          <TabsTrigger value="mes">30d</TabsTrigger>
+        </TabsList>
+        <TabsContent value="dia">siete días</TabsContent>
+        <TabsContent value="mes">treinta días</TabsContent>
+      </Tabs>,
+    );
+
+    // The `data-[state=active]:border-primary` class is a Tailwind
+    // ATTRIBUTE-VARIANT — it is present in every trigger's static
+    // className string regardless of which tab is selected; the browser's
+    // CSS engine (not React, and not jsdom, which doesn't evaluate the
+    // cascade) decides whether it actually applies, based on the
+    // `data-state` attribute at render time. So the meaningful assertions
+    // here are: (1) the rule referencing `border-primary` is wired up on
+    // every trigger, and (2) Radix's own `data-state` — the actual source
+    // of truth for which tab is active — updates correctly on click.
+    const dayTab = screen.getByRole('tab', { name: '7d' });
+    const monthTab = screen.getByRole('tab', { name: '30d' });
+    for (const tab of [dayTab, monthTab]) {
+      expect(tab.className).toMatch(/data-\[state=active\]:border-primary/);
+    }
+
+    expect(dayTab).toHaveAttribute('data-state', 'active');
+    expect(monthTab).toHaveAttribute('data-state', 'inactive');
+
+    await user.click(monthTab);
+    expect(monthTab).toHaveAttribute('data-state', 'active');
+    expect(dayTab).toHaveAttribute('data-state', 'inactive');
   });
 });
