@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "dev": "dotenv -e ../../.env -- nest start --watch"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.28",
