@@ -378,6 +378,8 @@ Starts each image against the compose datastores and polls its health endpoint (
 Reads `docker image inspect --format '{{.Size}}'` and fails above threshold: api 300MB, worker 300MB, web 250MB. Bloat is invisible until a rollout is slow — a stray `devDependency` in the runtime stage costs nothing locally and costs pull time on every node.
 → **files** `tests/containers/image-size.test.ts` · **verify** `pnpm test tests/containers/image-size.test.ts` passes; lowering a threshold by 1MB fails it · **after** T0.7.12
 
-#### T0.7.14 · `ci: build and push all three images tagged with the git sha`
+#### T0.7.14 · `ci: build and push all three images tagged with the git sha` ⛔ blocked
 Buildx job on push to main: build `api`, `worker`, `web`, run the smoke and size tests against them, then push as `<registry>/posta-<app>:<sha>` with a GitHub Actions layer cache. `latest` may move as a convenience tag, never as the only one — a deploy pinned to `latest` cannot be rolled back to a known artifact.
+
+**Blocked for the same underlying reason as T0.5.6:** no container registry is configured, and no git remote exists for this repo — "a merge to main pushes three digests" cannot literally happen yet. `images.yml` is written correct-by-construction (valid YAML — checked with `actionlint` — real action versions, the right trigger, buildx + a GHA layer cache, registry parameterized via a `vars.REGISTRY` placeholder so the provider stays unchosen) and its build/smoke/size steps run for real value today; only the login/push steps are gated inert behind `REGISTRY` being set.
 → **files** `.github/workflows/images.yml` · **verify** a merge to main pushes three digests whose tags match `git rev-parse HEAD` · **after** T0.7.13

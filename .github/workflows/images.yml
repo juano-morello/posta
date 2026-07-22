@@ -1,0 +1,192 @@
+name: Images
+
+# T0.7.14 — S0.7's last acceptance bullet: "CI builds all three and pushes
+# them tagged with the git SHA." Runs on push to main only (never on a
+# PR): a PR is unreviewed by definition, and pushing an image built from
+# it to the registry ahead of review would be backwards.
+#
+# ############################################################################
+# BLOCKED as of this writing (S0.7, T0.7.14 / see docs/plan/00-foundation.md's
+# S0.7 status, and T0.5.6 which is blocked for the identical underlying
+# reason): there is no container registry configured for this project, and
+# no git remote for this repo — "a merge to main pushes three digests"
+# literally cannot happen yet. This file is written correct-by-construction
+# (valid YAML, real published action versions, the right trigger, buildx +
+# a GitHub Actions layer cache, a SHA tag that is never the ONLY tag) so it
+# is ready the moment REGISTRY is configured — but it has never actually
+# run a real push, and nothing here should be read as a claim that it has.
+# The build + smoke + size steps below DO run for real value even before a
+# registry exists (they gate main on the same real images T0.7.12/13
+# already test); only the login/push steps are inert until REGISTRY is set.
+# ############################################################################
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: images-${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a push that might already be mid-push to the registry —
+  # unlike ci.yml's PR checks, a half-pushed image tag is worse than a
+  # slow one.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Only exercised once REGISTRY points at ghcr.io (a same-org registry
+  # authenticates via GITHUB_TOKEN); harmless for any other registry,
+  # which would use REGISTRY_USERNAME/REGISTRY_PASSWORD secrets instead.
+  packages: write
+
+env:
+  # The cloud/registry provider is deliberately unchosen (CLAUDE.md) — this
+  # binds it late, via a plain repository/organization variable, never a
+  # hardcoded host. Empty by default, which is exactly why every push-side
+  # step below is gated on it being non-empty rather than assuming it's set.
+  REGISTRY: ${{ vars.REGISTRY }}
+
+jobs:
+  build-test-push:
+    name: Build, smoke+size test, and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # docker-compose.yml's app services (T0.7.11) read their config from
+      # `.env` via `env_file:`, the same way the host-run `pnpm dev` flow
+      # does — but `.env` is git-ignored (never committed, T0.1.1) and a
+      # fresh CI checkout has none. These are fixed CI-only placeholder
+      # values, identical in spirit to ci.yml's own "Fixed dev-only
+      # credentials... not real secrets" Postgres/Redis env — nothing here
+      # is a real credential, and none of it is used past this job's
+      # ephemeral runner.
+      - name: Write a CI-only .env for docker compose
+        run: |
+          cat > .env <<'EOF'
+          POSTA_LINK_DOMAIN=posta.test
+          POSTA_APP_SUBDOMAIN=app
+          POSTA_API_SUBDOMAIN=api
+          POSTA_PROTOCOL=http
+          POSTA_RESERVED_HANDLES=app,api,www,admin,static,assets,cdn,mail,blog,docs,status
+          DATABASE_URL=postgresql://posta:posta@localhost:5432/posta
+          POSTGRES_USER=posta
+          POSTGRES_PASSWORD=posta
+          POSTGRES_DB=posta
+          DATABASE_URL_WORKER=postgresql://posta:posta@localhost:5432/posta
+          REDIS_URL=redis://localhost:6379
+          R2_ACCOUNT_ID=ci-placeholder
+          R2_ACCESS_KEY_ID=posta-ci
+          R2_SECRET_ACCESS_KEY=posta-ci-secret
+          R2_BUCKET_EVENTS=posta-events
+          R2_BUCKET_AVATARS=posta-avatars
+          R2_ENDPOINT=http://localhost:9000
+          GEOIP_DB_DIR=./data/geoip
+          BETTER_AUTH_SECRET=ci-only-placeholder-secret-value
+          BETTER_AUTH_URL=http://localhost:3000
+          SEED_USER_EMAIL=ci@posta.test
+          SEED_USER_PASSWORD=ci-only-placeholder-pw
+          SEED_USER_HANDLE=ci
+          NODE_ENV=production
+          LOG_LEVEL=info
+          API_PORT=3001
+          WORKER_PORT=3002
+          WEB_PORT=3000
+          NEXT_PUBLIC_API_URL=http://localhost:3001
+          REVALIDATE_SECRET=ci-only-placeholder-secret
+          EVENT_BATCH_SIZE=100
+          EVENT_BATCH_INTERVAL_MS=2000
+          LINK_CACHE_TTL_SECONDS=3600
+          EOF
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds all three with the SAME buildx builder docker/setup-buildx-action
+      # just installed as the default — `docker compose build` routes through
+      # it automatically, so this already benefits from BuildKit's own layer
+      # cache within this job. This is the exact artifact T0.7.12/13's tests
+      # below exercise: build once, test that build, only push it once it's
+      # proven itself — never a second, untested rebuild.
+      - name: Build api/worker/web images
+        run: docker compose build api worker web
+
+      # T0.7.12 — a green `docker build` only proves the layers assembled;
+      # this proves the images actually start and answer health before any
+      # of them is allowed near the registry.
+      - name: Smoke test built images
+        run: pnpm test tests/containers/image-smoke.test.ts
+
+      # T0.7.13 — the size budget gate (api/worker 300MB, web 250MB).
+      - name: Enforce image size budgets
+        run: pnpm test tests/containers/image-size.test.ts
+
+      # From here on: BLOCKED (see this file's header) until REGISTRY is
+      # configured — every step below is a no-op `if:` short-circuit
+      # otherwise, never a step that runs and silently fails or fakes success.
+      - name: Log in to the registry
+        if: ${{ env.REGISTRY != '' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Pushed by re-invoking buildx per app with `cache-from: type=gha`
+      # against the SAME context/Dockerfile the build step above just
+      # populated the GHA cache from (via `cache-to` below) — every layer
+      # is a cache hit, so this is a promote-the-tested-artifact step, not
+      # a second real build. `latest` moves as a convenience tag; the SHA
+      # tag is what a rollback actually pins to — never publish only the
+      # former (plan: "a deploy pinned to latest cannot be rolled back").
+      - name: Push api image
+        if: ${{ env.REGISTRY != '' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/posta-api:${{ github.sha }}
+            ${{ env.REGISTRY }}/posta-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Push worker image
+        if: ${{ env.REGISTRY != '' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/posta-worker:${{ github.sha }}
+            ${{ env.REGISTRY }}/posta-worker:latest
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      - name: Push web image
+        if: ${{ env.REGISTRY != '' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/posta-web:${{ github.sha }}
+            ${{ env.REGISTRY }}/posta-web:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
