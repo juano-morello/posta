@@ -6,10 +6,13 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// T6.2.4 — base Radix wiring only. POSTA.md's toast copy is mono
-// microcopy (`copiado: juano.example.test/promo`) — the mono body, tight
-// radius and lime accent bar land in T6.2.9; this establishes the
-// Provider/Viewport/Root/variant structure that task styles.
+// T6.2.9 — POSTA.md §6: toast copy is mono microcopy (`copiado:
+// juano.example.test/promo`). Tight radius (`rounded-sm`, 4px — terminal-
+// look corners, DESIGN.md §2.3) and a lime accent bar on the left edge
+// mark it as the same visual family as the recibos/terminal islands
+// without literally being one (a toast is themed, unlike the always-dark
+// islands). The destructive variant keeps its accent on `--error` instead
+// of lime — a failure toast should never borrow the brand's success color.
 const ToastProvider = ToastPrimitives.Provider;
 
 const ToastViewport = React.forwardRef<
@@ -28,12 +31,12 @@ const ToastViewport = React.forwardRef<
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName;
 
 const toastVariants = cva(
-  'group pointer-events-auto relative flex w-full items-center justify-between gap-2 overflow-hidden rounded border border-border bg-surface p-4 text-fg shadow-overlay',
+  'group pointer-events-auto relative flex w-full items-center justify-between gap-2 overflow-hidden rounded-sm border border-l-4 border-border bg-surface p-4 font-mono text-fg shadow-overlay',
   {
     variants: {
       variant: {
-        default: '',
-        destructive: 'border-error text-error',
+        default: 'border-l-primary',
+        destructive: 'border-error border-l-error text-error',
       },
     },
     defaultVariants: {
@@ -87,7 +90,7 @@ const ToastTitle = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Title>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Title>
 >(({ className, ...props }, ref) => (
-  <ToastPrimitives.Title ref={ref} className={cn('text-sm font-semibold', className)} {...props} />
+  <ToastPrimitives.Title ref={ref} className={cn('font-mono text-sm font-semibold', className)} {...props} />
 ));
 ToastTitle.displayName = ToastPrimitives.Title.displayName;
 
@@ -95,7 +98,7 @@ const ToastDescription = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Description>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Description>
 >(({ className, ...props }, ref) => (
-  <ToastPrimitives.Description ref={ref} className={cn('text-sm text-muted', className)} {...props} />
+  <ToastPrimitives.Description ref={ref} className={cn('font-mono text-sm text-muted', className)} {...props} />
 ));
 ToastDescription.displayName = ToastPrimitives.Description.displayName;
 
