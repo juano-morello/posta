@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { zBooleanish, zCsvList, zNonEmpty, zPort, zUrl } from './env';
+import { SECRET_ENV_KEYS, zBooleanish, zCsvList, zNonEmpty, zPort, zUrl } from './env';
 
 // These are pure Zod schemas (T0.3.2) — no process.env access, so they can
 // be exercised directly with literal strings the way an app's env schema
@@ -124,5 +124,36 @@ describe('zCsvList', () => {
 
   it('returns a single-item array for a value with no commas', () => {
     expect(zCsvList.parse('solo')).toEqual(['solo']);
+  });
+});
+
+// SECRET_ENV_KEYS (T0.3.7/T0.3.8) is the single declared set of
+// secret-shaped env key names — the one source of truth decision 3 in
+// the batch brief calls for. web's NEXT_PUBLIC_ leak assertion (T0.3.7)
+// and the fail-fast loader's redaction (T0.3.8) both read this SAME
+// array rather than keeping two lists that could drift apart. Declared
+// here, in contracts, one task earlier than the loader itself lands,
+// because T0.3.7 needs it too.
+describe('SECRET_ENV_KEYS', () => {
+  it('is a frozen, non-empty array', () => {
+    expect(Array.isArray(SECRET_ENV_KEYS)).toBe(true);
+    expect(SECRET_ENV_KEYS.length).toBeGreaterThan(0);
+    expect(Object.isFrozen(SECRET_ENV_KEYS)).toBe(true);
+  });
+
+  it('contains exactly the nine secret-shaped keys named in .env.example', () => {
+    expect([...SECRET_ENV_KEYS].sort()).toEqual(
+      [
+        'DATABASE_URL',
+        'DATABASE_URL_WORKER',
+        'REDIS_URL',
+        'R2_ACCOUNT_ID',
+        'R2_ACCESS_KEY_ID',
+        'R2_SECRET_ACCESS_KEY',
+        'BETTER_AUTH_SECRET',
+        'SEED_USER_PASSWORD',
+        'REVALIDATE_SECRET',
+      ].sort(),
+    );
   });
 });

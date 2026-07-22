@@ -58,3 +58,29 @@ export const zCsvList = z.string().transform((value) =>
     .map((item) => item.trim())
     .filter((item) => item.length > 0),
 );
+
+/**
+ * The single declared set of secret-shaped env key names (S0.3 batch 5,
+ * decision 3) — every key in .env.example whose value is a credential
+ * (DB/Redis URLs are secret because they carry credentials, not because
+ * of their own key name). This is the ONE source of truth two different
+ * concerns read from, so they cannot drift into two lists that disagree:
+ *   - web's schema (T0.3.7) asserts none of these ever appears under a
+ *     NEXT_PUBLIC_ prefix, i.e. inlined into the browser bundle.
+ *   - the fail-fast loader (T0.3.8) uses it to redact values before any
+ *     parsed config is safe to log.
+ * Declared here rather than per-app because both consumers above need
+ * the exact same list, and contracts is the one package both an app
+ * schema and the shared loader already import from.
+ */
+export const SECRET_ENV_KEYS: readonly string[] = Object.freeze([
+  'DATABASE_URL',
+  'DATABASE_URL_WORKER',
+  'REDIS_URL',
+  'R2_ACCOUNT_ID',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'BETTER_AUTH_SECRET',
+  'SEED_USER_PASSWORD',
+  'REVALIDATE_SECRET',
+]);
