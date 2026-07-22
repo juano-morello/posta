@@ -35,9 +35,21 @@ function tokenColorNames(): Set<string> {
 // theme Tailwind will build classes from, not just what the file says.
 const resolved = resolveConfig(tailwindConfig);
 
+// Tailwind's own `DefaultColors` type describes its stock palette (fixed,
+// known keys) and has no index signature, so it doesn't structurally
+// overlap with `Record<string, unknown>` — our closed, arbitrarily-keyed
+// palette replaced that stock type at runtime (T6.1.6), but the static
+// type resolveConfig() returns still reflects the default shape. Routing
+// through `unknown` is the correct, explicit way to say "trust the
+// runtime value over the built-in type" here, rather than papering over
+// it with a direct cast tsc rejects as almost certainly a mistake.
+function resolvedColors(): Record<string, unknown> {
+  return resolved.theme.colors as unknown as Record<string, unknown>;
+}
+
 describe('tailwind.config.ts', () => {
   it('resolves every color to a var(--token) reference, never a hex literal', () => {
-    const colors = resolved.theme.colors as Record<string, unknown>;
+    const colors = resolvedColors();
     const entries = Object.entries(colors);
     expect(entries.length).toBeGreaterThan(0);
     for (const [name, value] of entries) {
@@ -54,7 +66,7 @@ describe('tailwind.config.ts', () => {
   // tailwind.config.ts is exactly what should make this fail.
   it('never drifts from _tokens.scss — same color names on both sides', () => {
     const scssNames = tokenColorNames();
-    const tailwindNames = new Set(Object.keys(resolved.theme.colors as Record<string, unknown>));
+    const tailwindNames = new Set(Object.keys(resolvedColors()));
 
     const missingFromTailwind = [...scssNames].filter((name) => !tailwindNames.has(name));
     const missingFromScss = [...tailwindNames].filter((name) => !scssNames.has(name));

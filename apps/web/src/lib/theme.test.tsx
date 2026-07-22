@@ -77,8 +77,10 @@ describe('themeInitScript (T6.1.12 — blocks the flash of wrong theme)', () => 
   });
 
   function runScript(): void {
-    // eslint-disable-next-line no-new-func -- exercising the exact source
-    // string that gets inlined into <head>, not a hand-written stand-in.
+    // Deliberately executing the exact source string that ships inline
+    // into <head> (themeInitScript() itself, no attacker/user input
+    // involved) rather than a hand-written stand-in — this IS the
+    // "is the shipped script actually safe and correct" test.
     new Function(themeInitScript())();
   }
 

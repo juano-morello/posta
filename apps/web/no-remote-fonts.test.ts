@@ -40,7 +40,16 @@ describe('no remote Google Fonts requests', () => {
         if (file.endsWith('.woff2') || file.endsWith('.woff') || file.endsWith('.ttf')) {
           continue;
         }
-        const content = readFileSync(file, 'utf-8');
+        let content: string;
+        try {
+          content = readFileSync(file, 'utf-8');
+        } catch (error) {
+          // A raw ENOENT/EACCES/broken-symlink error from readFileSync
+          // doesn't say which of the scan's many files it came from once
+          // it surfaces at the top of a CI log — rethrow with that
+          // context rather than letting the test crash cryptically.
+          throw new Error(`no-remote-fonts.test.ts: could not read ${file}: ${(error as Error).message}`);
+        }
         for (const host of FORBIDDEN_HOSTS) {
           if (content.includes(host)) {
             offenders.push(`${file}: references ${host}`);

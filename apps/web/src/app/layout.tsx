@@ -19,7 +19,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             user/request input ever reaches this string — so inlining it
             is the standard, safe pre-hydration theme-flash guard (the
             same technique next-themes and similar libraries use). */}
-        {/* eslint-disable-next-line react/no-danger */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript() }} />
         {/* T6.1.9 — preload the 400-weight (latin subset) of each
             self-hosted family so the first paint doesn't wait on font

@@ -35,7 +35,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.classList.toggle('light', theme === 'light');
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    // localStorage.setItem throws in Safari private-mode / when storage is
+    // full (QuotaExceededError) — uncaught, that would crash this effect
+    // (and with it, the theme toggle) with no error boundary able to catch
+    // it, since effects run outside render. The class toggle above already
+    // succeeded, so a failed persist should only mean "won't survive a
+    // reload", never "theme toggle stopped working".
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (error) {
+      console.warn('posta: could not persist theme preference to localStorage', error);
+    }
   }, [theme]);
 
   return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;

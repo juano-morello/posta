@@ -15,12 +15,15 @@ export const THEME_STORAGE_KEY = 'posta-theme';
 // the wrong theme. Dark is the fallback on any failure (empty storage,
 // thrown access in e.g. Safari private mode): the try/catch is not
 // decoration, it is the one thing standing between a storage read and a
-// blank page.
+// blank page. The catch still logs — a bare `catch(e){}` would make a
+// real storage failure indistinguishable from "nothing was stored",
+// which is exactly the kind of user-reported "theme keeps flashing" bug
+// that is otherwise unreachable from server-side logs.
 export function themeInitScript(): string {
   return (
     '(function(){try{' +
     `var t=window.localStorage.getItem('${THEME_STORAGE_KEY}');` +
     "if(t==='light'){document.documentElement.classList.add('light');}" +
-    '}catch(e){}})();'
+    "}catch(e){console.warn('posta: theme init script could not read localStorage',e);}})();"
   );
 }

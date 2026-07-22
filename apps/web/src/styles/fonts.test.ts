@@ -34,10 +34,18 @@ describe('globals.css @font-face declarations', () => {
 
   it('declares exactly two font families — Space Grotesk and JetBrains Mono', () => {
     const blocks = fontFaceBlocks(readGlobalsCss());
-    const families = new Set(
-      blocks.map((block) => /font-family:\s*['"]([^'"]+)['"]/.exec(block)?.[1]).filter(Boolean),
-    );
-    expect(families).toEqual(new Set(['Space Grotesk', 'JetBrains Mono']));
+    const familyNames = blocks.map((block, index) => {
+      const match = /font-family:\s*['"]([^'"]+)['"]/.exec(block)?.[1];
+      if (!match) {
+        // A `.filter(Boolean)` here would silently drop a malformed
+        // @font-face rule (missing font-family entirely) from the count
+        // instead of failing — exactly the kind of broken declaration
+        // this test exists to catch.
+        throw new Error(`fonts.test.ts: @font-face block #${index} has no font-family: ${block}`);
+      }
+      return match;
+    });
+    expect(new Set(familyNames)).toEqual(new Set(['Space Grotesk', 'JetBrains Mono']));
   });
 
   it('sets font-display: swap on every declared face', () => {

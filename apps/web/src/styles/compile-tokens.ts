@@ -13,7 +13,15 @@ export function compileTokensCss(): string {
 
 export function extractBlock(css: string, selector: string): string {
   const pattern = new RegExp(`${selector.replace('.', '\\.')}\\s*{([^}]*)}`);
-  return pattern.exec(css)?.[1] ?? '';
+  const match = pattern.exec(css)?.[1];
+  if (match === undefined) {
+    // Silently falling back to '' here would surface, three layers away,
+    // as a confusing "--primary not found in block" from extractValue —
+    // hiding the real problem (the selector itself never emitted) behind
+    // an error about the wrong thing.
+    throw new Error(`compile-tokens.ts: selector "${selector}" not found in compiled CSS`);
+  }
+  return match;
 }
 
 export function extractValue(block: string, property: string): string {

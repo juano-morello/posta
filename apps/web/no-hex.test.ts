@@ -15,10 +15,17 @@ function collectFiles(dir: string): string[] {
   let entries: string[];
   try {
     entries = readdirSync(dir);
-  } catch {
-    // Directory doesn't exist yet (e.g. src/components before S6.2) —
-    // nothing to scan, not a failure.
-    return [];
+  } catch (error) {
+    // Only "directory doesn't exist yet" (e.g. src/components before
+    // S6.2) is a non-failure. Anything else — permission denied, a
+    // broken symlink, a genuine filesystem error — must NOT be silently
+    // treated the same way: that would let a real infrastructure problem
+    // masquerade as "nothing to scan yet" and pass the gate for the
+    // wrong reason.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
   }
   const files: string[] = [];
   for (const entry of entries) {
