@@ -25,11 +25,17 @@ export function BottomTabs() {
     <nav
       aria-label="Principal"
       // T6.3.5 [a11y] — iOS home-indicator devices clip content flush to
-      // the bottom edge without pb-[env(...)]. A React inline style here
-      // doesn't survive jsdom (its CSSStyleDeclaration setter rejects
-      // `env()` outright), but a plain Tailwind arbitrary-value class is
-      // just a compile-time string — no such runtime validation applies.
-      className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border-subtle bg-surface pb-[env(safe-area-inset-bottom)]"
+      // the bottom edge without the safe-area padding below. A React
+      // inline style doesn't survive jsdom (its CSSStyleDeclaration
+      // setter rejects env() outright), but a plain Tailwind arbitrary-
+      // value utility is just a compile-time string — no runtime
+      // validation applies. NOTE: never write that utility's own class
+      // name inside a comment — Tailwind's content scanner is a plain
+      // text regex with no code-vs-comment awareness, and it generated
+      // broken CSS from a literal example once already (T6.3.6).
+      // T6.3.6 — hidden from the `mobile` (800px) breakpoint up, where
+      // AppShell renders the Sidebar instead.
+      className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border-subtle bg-surface pb-[env(safe-area-inset-bottom)] mobile:hidden"
     >
       {ROUTES.map((route) => {
         const isActive = pathname === route.href;
