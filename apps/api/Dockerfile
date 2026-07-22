@@ -94,7 +94,19 @@ COPY --from=pruner --chown=posta:posta /app/out/json/ .
 # writes anything — everything after it is just COPY --chown, which
 # doesn't care which USER is active.
 USER posta
-RUN pnpm install --prod --frozen-lockfile
+# The trailing store-prune matters: pnpm installs by hardlinking from a
+# content-addressable store (~/.local/share/pnpm/store) into node_modules,
+# and that store is never needed again in a runtime image — nothing here
+# ever runs pnpm again. Left alone it measured ~26.5MB, nearly as large as
+# node_modules itself (~28MB). Must be the SAME RUN instruction as the
+# install: Docker layers are diffs, so creating and deleting the store
+# within one layer nets zero bytes added, where deleting it in a later
+# instruction would still leave it in this layer's diff. Verified after
+# removal that the app still starts correctly — pnpm's node_modules
+# entries are hardlinks into the store's files, not symlinks, so the
+# store can be deleted once the install is done without breaking anything
+# still holding a link to that data.
+RUN pnpm install --prod --frozen-lockfile && rm -rf "$(pnpm store path)"
 # @posta/api depends on @posta/contracts and @posta/core through pnpm
 # workspace symlinks (apps/api/node_modules/@posta/contracts ->
 # ../../../../packages/contracts) created by the install above — the

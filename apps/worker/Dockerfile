@@ -55,7 +55,13 @@ RUN chown posta:posta /app
 RUN corepack enable
 COPY --from=pruner --chown=posta:posta /app/out/json/ .
 USER posta
-RUN pnpm install --prod --frozen-lockfile
+# See apps/api/Dockerfile — the store-prune must be the SAME RUN as the
+# install (layer diff nets zero bytes only if create+delete happen in one
+# instruction), and it's safe: pnpm hardlinks store files into
+# node_modules rather than symlinking, so the store is disposable once
+# the install is done. Left in place it measured ~26.5MB, close to
+# node_modules' own ~28MB.
+RUN pnpm install --prod --frozen-lockfile && rm -rf "$(pnpm store path)"
 # See apps/api/Dockerfile — @posta/worker resolves @posta/contracts and
 # @posta/core through pnpm workspace symlinks whose target needs its
 # compiled dist/ present.

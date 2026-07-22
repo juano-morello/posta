@@ -27,49 +27,45 @@ async function bootstrap(): Promise<void> {
     res.status(200).send('ok');
   });
 
-  // T0.7.8 — SIGTERM-clean shutdown. See apps/api/src/main.ts for the
-  // fuller rationale; same contract here. enableShutdownHooks() wires
-  // Nest's termination lifecycle for whatever providers this app gains
-  // later (there are no BullMQ consumers or Postgres/Redis pools yet in
-  // E0 — E1/E3 add them).
-  app.enableShutdownHooks();
-
-  // Explicit SIGTERM handling because Node as PID 1 gets none by
-  // default — without this, a rolling deploy would let Kubernetes'
-  // SIGKILL fallback do the killing instead of the process draining and
-  // exiting on its own. app.close() is also where the BullMQ consumer's
-  // "stop accepting new jobs, finish the in-flight one" and the
-  // Postgres/Redis pool teardown land once those exist (E1/E3) — this is
-  // the extension point, not a placeholder that gets rewritten.
+  // T0.7.8 (revised in review) — SIGTERM-clean shutdown, scoped to
+  // SIGTERM only. See apps/api/src/main.ts for the full rationale; same
+  // contract here. In short: an unscoped `enableShutdownHooks()` listens
+  // for EVERY ShutdownSignal Nest defines, including real crash signals
+  // (SIGSEGV/SIGBUS/SIGFPE/SIGILL) — a Nest anti-pattern, since an async
+  // graceful drain from a crash-signal handler runs in an undefined
+  // process state. It also used to run ALONGSIDE a hand-rolled
+  // `process.on('SIGTERM', () => app.close())`, which double-ran the
+  // exact same onModuleDestroy -> beforeApplicationShutdown ->
+  // onApplicationShutdown chain per SIGTERM (enableShutdownHooks installs
+  // its own internal listener that does exactly what app.close() does).
+  // Inert with zero lifecycle-hook providers today, but a real bug once
+  // E1/E3 add a BullMQ consumer or Postgres/Redis provider with its own
+  // onModuleDestroy().
   //
-  // isShuttingDown guards against re-entering app.close() on a second
-  // SIGTERM (Node doesn't deduplicate signal listeners). The try/catch
-  // guarantees process.exit still runs even if app.close() rejects — a
-  // swallowed rejection here would hang the container to Docker's
-  // SIGKILL fallback instead of exiting cleanly.
-  let isShuttingDown = false;
-  process.on('SIGTERM', () => {
-    if (isShuttingDown) {
-      return;
-    }
-    isShuttingDown = true;
-    void (async () => {
-      try {
-        await app.close();
-      } catch (error: unknown) {
-        console.error('Error while closing app during SIGTERM:', error);
-      }
-      process.exit(0);
-    })();
-  });
+  // `useProcessExit: true` makes Nest call `process.exit(0)` itself once
+  // the chain completes. Nest's own internal listener already guards
+  // against a second SIGTERM re-entering mid-drain, and already logs and
+  // exits 1 if any shutdown hook throws — no hand-rolled equivalent
+  // belongs here.
+  //
+  // Extension point for E1/E3: the BullMQ consumer's "stop accepting new
+  // jobs, finish the in-flight one" and the Postgres/Redis pool teardown
+  // land in a provider's `onModuleDestroy()` — Nest's callDestroyHook()
+  // walks every provider automatically, so this file needs no further
+  // changes when that lands.
+  app.enableShutdownHooks(['SIGTERM'], { useProcessExit: true });
 
   await app.listen(env.WORKER_PORT);
 }
 
 bootstrap().catch((error: unknown) => {
-  // T0.7.8 — see apps/api/src/main.ts: the bare `void bootstrap();` this
-  // replaces left a rejected bootstrap() as an unhandled rejection
-  // instead of a clean, logged, non-zero exit.
-  console.error('Fatal error during bootstrap:', error);
-  process.exit(1);
+  // See apps/api/src/main.ts: the bare `void bootstrap();` this replaces
+  // left a rejected bootstrap() as an unhandled rejection instead of a
+  // clean, logged, non-zero exit. The exit is in `finally` so a
+  // console.error that itself throws can't suppress it.
+  try {
+    console.error('Fatal error during bootstrap:', error);
+  } finally {
+    process.exit(1);
+  }
 });

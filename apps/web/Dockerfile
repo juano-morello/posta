@@ -56,6 +56,15 @@ ENV HOSTNAME=0.0.0.0
 # why uid 10001 specifically. Created before the COPYs below so
 # --chown=posta:posta can resolve the name.
 RUN addgroup -g 10001 posta && adduser -D -u 10001 -G posta posta
+# WORKDIR created /app while still root; COPY --chown below only chowns
+# what it copies, not /app itself. `.next/cache` (used by on-demand ISR
+# revalidation, invariant 11/E8) lands inside the already-chowned .next/
+# subtree either way — tested directly: `mkdir -p .next/cache && touch
+# .next/cache/probe` as posta succeeds without this line, since .next/
+# itself came from a --chown copy. This chown is for parity with
+# apps/api and apps/worker's runner stage and any future path that writes
+# directly under /app rather than inside the copied .next/ tree.
+RUN chown posta:posta /app
 # No `pnpm install` here at all — Next's standalone output already traced
 # and copied exactly the production node_modules subset this server needs
 # (see .next/standalone/node_modules after a build). That's the whole

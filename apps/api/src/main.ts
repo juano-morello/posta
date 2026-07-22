@@ -31,61 +31,60 @@ async function bootstrap(): Promise<void> {
     res.status(200).send('ok');
   });
 
-  // T0.7.8 — SIGTERM-clean shutdown. Wires Nest's own termination
-  // lifecycle (onModuleDestroy -> beforeApplicationShutdown ->
-  // onApplicationShutdown on every provider); there are no providers with
-  // state to close yet in E0 (no Postgres/Redis pools exist until
-  // E1/E3), but every one this app gains later just needs its own
-  // lifecycle hook, not a change here.
-  app.enableShutdownHooks();
-
-  // Node running as PID 1 (every one of these containers, no init
-  // system) does not get default OS signal handling — without an
-  // explicit listener, SIGTERM is simply ignored and Kubernetes' rolling
-  // deploys kill in-flight redirects at the full 30s grace-period
-  // timeout instead of the process exiting the moment it's actually
-  // done draining. app.close() stops the HTTP server from accepting new
-  // connections and lets in-flight ones finish (and reruns the
-  // lifecycle hooks above, harmlessly, if enableShutdownHooks's own
-  // listener hasn't already); THIS is also the extension point E1/E3
-  // will fill in with `await pgPool.end()` / `await redis.quit()` once
-  // those pools exist.
+  // T0.7.8 (revised in review) — SIGTERM-clean shutdown, scoped to
+  // SIGTERM only. `enableShutdownHooks()` with NO signals argument (this
+  // file's first version) listens for EVERY ShutdownSignal Nest defines —
+  // SIGHUP/SIGINT/SIGQUIT/SIGILL/SIGTRAP/SIGABRT/SIGBUS/SIGFPE/SIGSEGV/
+  // SIGUSR2/SIGTERM — including several real crash signals. Attempting an
+  // async graceful drain from a SIGSEGV/SIGBUS handler is a Nest
+  // anti-pattern: the process is already in an undefined state. Scoping
+  // to `['SIGTERM']` fixes that.
   //
-  // isShuttingDown guards against a second SIGTERM (Node doesn't
-  // deduplicate signal listeners, and Kubernetes can legitimately send
-  // more than one during a rolling restart) re-entering app.close()
-  // while the first close is still draining. The try/catch ensures a
-  // rejected app.close() (e.g. a future pool failing to close) still
-  // reaches process.exit — a swallowed rejection here would hang the
-  // container to Docker's SIGKILL fallback, exactly what this handler
-  // exists to avoid.
-  let isShuttingDown = false;
-  process.on('SIGTERM', () => {
-    if (isShuttingDown) {
-      return;
-    }
-    isShuttingDown = true;
-    void (async () => {
-      try {
-        await app.close();
-      } catch (error: unknown) {
-        console.error('Error while closing app during SIGTERM:', error);
-      }
-      process.exit(0);
-    })();
-  });
+  // This also replaces a hand-rolled `process.on('SIGTERM', () =>
+  // app.close())` this file used to have ALONGSIDE enableShutdownHooks():
+  // enableShutdownHooks() itself installs Nest's own internal SIGTERM
+  // listener, and that listener already runs app.close()'s exact hook
+  // chain (see NestApplicationContext.close() /
+  // listenToShutdownSignals() in @nestjs/core — both call
+  // callDestroyHook -> callBeforeShutdownHook -> dispose ->
+  // callShutdownHook). Having both meant a single SIGTERM ran that chain
+  // TWICE, concurrently, via two separate listeners — harmless today with
+  // zero providers implementing lifecycle hooks, but once E1/E3 add a
+  // Postgres/Redis provider with `onModuleDestroy() { await
+  // pgPool.end(); }`, that hook would fire twice per SIGTERM: a second
+  // pool.end() on an already-closing pool.
+  //
+  // `useProcessExit: true` makes Nest call `process.exit(0)` itself once
+  // the chain completes, rather than re-sending the signal for the OS's
+  // default disposition to terminate the process — explicit beats
+  // relying on signal redelivery. Nest's own internal listener already
+  // guards against a second SIGTERM re-entering mid-drain, and already
+  // logs and calls `process.exit(1)` if any shutdown hook throws (see
+  // listenToShutdownSignals' try/catch) — no hand-rolled equivalent of
+  // either belongs here.
+  //
+  // Extension point for E1/E3: a Postgres/Redis provider implementing
+  // `onModuleDestroy()` (or `beforeApplicationShutdown()`) is where pool
+  // teardown goes. Nest's callDestroyHook() walks every provider
+  // automatically, so this file needs no further changes when that lands.
+  app.enableShutdownHooks(['SIGTERM'], { useProcessExit: true });
 
   await app.listen(env.API_PORT);
 }
 
 bootstrap().catch((error: unknown) => {
-  // T0.7.8 — the bare `void bootstrap();` this replaces printed an
+  // The bare `void bootstrap();` this replaces printed an
   // unhandled-rejection trace (and, depending on Node's
   // --unhandled-rejections setting, could leave the process hanging
   // instead of exiting) if bootstrap() ever rejected — e.g. API_PORT
   // already in use. Log plainly and exit non-zero instead: a container
   // that fails to bind its port should crash-loop visibly, not sit idle
-  // failing every health check silently.
-  console.error('Fatal error during bootstrap:', error);
-  process.exit(1);
+  // failing every health check silently. The exit is in `finally` so a
+  // console.error that itself throws (e.g. EPIPE on a closed stderr)
+  // can't suppress it — the exit must be unconditional.
+  try {
+    console.error('Fatal error during bootstrap:', error);
+  } finally {
+    process.exit(1);
+  }
 });
