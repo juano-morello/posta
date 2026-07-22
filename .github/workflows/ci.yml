@@ -136,8 +136,26 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      # NOTE: no `--` before --coverage. Unlike npm, pnpm forwards script
+      # args literally — `pnpm test -- --coverage` would append a literal
+      # "--" to the underlying `vitest run`, which vitest's CLI parses as
+      # "stop parsing flags", turning --coverage into a positional test-name
+      # filter instead of a flag (silently running with NO coverage, since
+      # no test file is named "--coverage"). Verified locally: `pnpm test
+      # -- --coverage` produces no coverage/ directory at all; `pnpm test
+      # --coverage` does.
+      - name: Test (with coverage)
+        run: pnpm test --coverage
+
+      - name: Upload coverage summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-summary
+          path: |
+            coverage/coverage-summary.json
+            coverage/lcov.info
+          retention-days: 14
 
       # Turbo resolves the contracts → core → {api, worker, web} build order
       # from each package's own turbo.json dependsOn, so one command builds

@@ -19,8 +19,41 @@ import { defineConfig } from 'vitest/config';
 // the glob covers apps/** too — exactly the extension the comment above
 // anticipated. Still no per-package configs (T0.5.3) or coverage
 // thresholds (T0.5.4) — this stays the one root config.
+//
+// coverage (T0.5.3, S0.5) — v8 is Vitest's built-in provider, no extra
+// native dependency to install/pin beyond @vitest/coverage-v8 itself.
+// `include` is scoped to each package/app's own src — real application
+// code, not test files, config files, or build output. `exclude` on top of
+// that removes files with genuinely no logic to measure, so the number
+// reflects real coverage rather than being gamed by padding the
+// denominator with unmeasurable glue:
+//   - **/main.ts: NestJS bootstrap wiring (env validation + NestFactory
+//     .create + listen) — not business logic, and nothing imports it in a
+//     test (nothing ever calls bootstrap()).
+//   - **/app.module.ts: an empty `@Module({})` scaffold in both apps/api
+//     and apps/worker — zero logic until E2/E3 add providers.
+//   - apps/web/src/app/{layout,page}.tsx: the default Next.js app-router
+//     scaffold and a one-line placeholder home page — no logic yet either.
+//   - packages/core/src/index.ts: a documented placeholder (`export {}`)
+//     until E1 adds the Drizzle schema — nothing to cover yet.
+// No threshold yet (T0.5.4 adds `thresholds` once there's a number worth
+// gating on).
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'apps/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary', 'lcov'],
+      include: ['packages/*/src/**/*.{ts,tsx}', 'apps/*/src/**/*.{ts,tsx}'],
+      exclude: [
+        '**/*.test.ts',
+        '**/*.config.*',
+        '**/main.ts',
+        '**/app.module.ts',
+        'apps/web/src/app/layout.tsx',
+        'apps/web/src/app/page.tsx',
+        'packages/core/src/index.ts',
+      ],
+    },
   },
 });

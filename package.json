@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@vitest/coverage-v8": "^4.1.10",
     "dependency-cruiser": "^18.1.0",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9.39.5",
