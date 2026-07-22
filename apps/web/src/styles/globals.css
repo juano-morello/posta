@@ -16,6 +16,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* T6.3.7 — POSTA.md §3: stat/breakdown cards wrap 4→2→1 columns with NO
+ * media queries — auto-fit + minmax does the work the mobile/desktop
+ * breakpoint would otherwise need a query for. `@layer utilities` so
+ * Tailwind's own utilities can still override it via source order/
+ * specificity if a page ever needs to. minmax(220px, 1fr) is deliberately
+ * the same 220px as the Sidebar's width (T6.3.1) — not a coincidence,
+ * just the one card-width floor already established in this system. */
+@layer utilities {
+  .grid-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-4);
+  }
+}
+
 /* T6.1.8 — DESIGN.md §3: Space Grotesk (UI) + JetBrains Mono (code, slugs,
  * handles, metrics, prompts) — no third family, self-hosted, never fetched
  * from Google at runtime (T6.1.10 grep-tests that directly). Vendored as

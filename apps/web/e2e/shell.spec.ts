@@ -33,3 +33,37 @@ test.describe('AppShell responsive breakpoint swap (JS disabled)', () => {
     await expect(bottomTabsNav).toBeVisible();
   });
 });
+
+// T6.3.7 — POSTA.md §3: stat/breakdown cards wrap 4→2→1 columns with NO
+// media queries (auto-fit + minmax, T6.3.7's globals.css utility). Column
+// count is measured, not asserted from the CSS declaration: group each
+// card's bounding-box top by row (same top => same row), and the first
+// row's size IS the effective column count.
+test.describe('.grid-cards auto-fit column wrap', () => {
+  async function columnsInFirstRow(page: import('@playwright/test').Page): Promise<number> {
+    return page.evaluate(() => {
+      const cards = [...document.querySelectorAll('[data-testid="stat-card"]')];
+      const tops = cards.map((card) => card.getBoundingClientRect().top);
+      const firstRowTop = Math.min(...tops);
+      return tops.filter((top) => Math.abs(top - firstRowTop) < 1).length;
+    });
+  }
+
+  test('4 columns at 1280px', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/shell-preview');
+    expect(await columnsInFirstRow(page)).toBe(4);
+  });
+
+  test('2 columns at 700px', async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 800 });
+    await page.goto('/shell-preview');
+    expect(await columnsInFirstRow(page)).toBe(2);
+  });
+
+  test('1 column at 390px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/shell-preview');
+    expect(await columnsInFirstRow(page)).toBe(1);
+  });
+});
