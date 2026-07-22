@@ -75,9 +75,35 @@ $themes: (
   }
 }
 
+// T6.1.4 — shadcn primitives read their own token names
+// (--background/--card/--muted-foreground/--destructive/--input);
+// _tokens.scss's canonical names are --bg/--surface/--muted/--error/
+// --border. Each alias is emitted as a `var()` reference to the canonical
+// name, never a second literal — so there is exactly one hex value per
+// colour, and it is structurally impossible for the two to drift apart.
+// Declared ONCE, at :root: a custom property's value (including a var()
+// it contains) is substituted at used-value time against whatever is
+// currently cascaded for that name on the same element, so --destructive
+// still resolves through to light's --error the moment .light overrides
+// it — no need to redeclare the alias itself per theme.
+$shadcn-aliases: (
+  background: bg,
+  card: surface,
+  muted-foreground: muted,
+  destructive: error,
+  input: border,
+);
+
+@mixin emit-aliases($aliases) {
+  @each $alias, $canonical in $aliases {
+    --#{$alias}: var(--#{$canonical});
+  }
+}
+
 // dark-first default — no class needed for dark, it is :root itself.
 :root {
   @include emit-vars(map.get($themes, dark));
+  @include emit-aliases($shadcn-aliases);
 }
 
 // runtime theme toggle (T6.1.11 wires the actual class add/remove).

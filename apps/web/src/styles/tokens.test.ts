@@ -67,4 +67,35 @@ describe('_tokens.scss', () => {
       expect(relativeLuminance(extractValue(light, level))).toBeGreaterThan(0.35);
     }
   });
+
+  // T6.1.4 — shadcn primitives read --background/--card/--muted-foreground/
+  // --destructive/--input; _tokens.scss's canonical names are --bg/--surface/
+  // --muted/--error/--border. `sass.compile` only produces static CSS text
+  // (no browser, no live var() resolution — jsdom's getComputedStyle can't
+  // resolve custom-property var() chains either), so "resolves to the same
+  // computed colour in both themes" is asserted at the source level: the
+  // shadcn name's declared value must be a var() reference to the Posta
+  // name, never a second literal hex. A var() reference is *structurally*
+  // guaranteed to track whatever the canonical token resolves to per
+  // theme — that's what makes it undriftable, unlike a copied literal.
+  it('aliases shadcn token names onto the Posta token set with no second literal', () => {
+    const root = extractBlock(compileTokens(), ':root');
+    const aliasPairs: Array<[string, string]> = [
+      ['background', 'bg'],
+      ['card', 'surface'],
+      ['muted-foreground', 'muted'],
+      ['destructive', 'error'],
+      ['input', 'border'],
+    ];
+    for (const [alias, canonical] of aliasPairs) {
+      expect(root).toMatch(new RegExp(`--${alias}:\\s*var\\(--${canonical}\\)`));
+    }
+  });
+
+  it('never redeclares the shadcn aliases in .light (one definition, no drift)', () => {
+    const light = extractBlock(compileTokens(), '.light');
+    for (const alias of ['background', 'card', 'muted-foreground', 'destructive', 'input']) {
+      expect(light).not.toMatch(new RegExp(`--${alias}:`));
+    }
+  });
 });
