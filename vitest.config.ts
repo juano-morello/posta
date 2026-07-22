@@ -17,16 +17,16 @@ import { defineConfig } from 'vitest/config';
 // (apps/api/src/env.test.ts etc.), and this batch's own verify commands
 // (`pnpm test apps/api/src/env.test.ts` etc.) only find those files if
 // the glob covers apps/** too — exactly the extension the comment above
-// anticipated. Still no per-package configs (T0.5.3) or coverage
-// thresholds (T0.5.4) — this stays the one root config.
+// anticipated. Still no per-package configs — this stays the one root
+// config.
 //
-// coverage (T0.5.3, S0.5) — v8 is Vitest's built-in provider, no extra
-// native dependency to install/pin beyond @vitest/coverage-v8 itself.
-// `include` is scoped to each package/app's own src — real application
-// code, not test files, config files, or build output. `exclude` on top of
-// that removes files with genuinely no logic to measure, so the number
-// reflects real coverage rather than being gamed by padding the
-// denominator with unmeasurable glue:
+// coverage (T0.5.3/T0.5.4, S0.5) — v8 is Vitest's built-in provider, no
+// extra native dependency to install/pin beyond @vitest/coverage-v8
+// itself. `include` is scoped to each package/app's own src — real
+// application code, not test files, config files, or build output.
+// `exclude` on top of that removes files with genuinely no logic to
+// measure, so the number reflects real coverage rather than being gamed
+// by padding the denominator with unmeasurable glue:
 //   - **/main.ts: NestJS bootstrap wiring (env validation + NestFactory
 //     .create + listen) — not business logic, and nothing imports it in a
 //     test (nothing ever calls bootstrap()).
@@ -36,8 +36,15 @@ import { defineConfig } from 'vitest/config';
 //     scaffold and a one-line placeholder home page — no logic yet either.
 //   - packages/core/src/index.ts: a documented placeholder (`export {}`)
 //     until E1 adds the Drizzle schema — nothing to cover yet.
-// No threshold yet (T0.5.4 adds `thresholds` once there's a number worth
-// gating on).
+//
+// thresholds (T0.5.4): global, not per-file — S0.5's acceptance criterion
+// is "floor 80%, build fails below it" as a single number, and per-file
+// gating would immediately fight small-but-real files (e.g. a future
+// one-off util) for no safety benefit this early. Lines and branches only,
+// matching the plan text verbatim ("Fails the build below 80% lines and
+// branches") — statements/functions aren't gated, though they currently
+// clear 80% too. `pnpm test --coverage` currently reports 100% lines /
+// 94.44% branches across the included files, comfortably above the floor.
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'packages/**/*.test.ts', 'apps/**/*.test.ts'],
@@ -54,6 +61,10 @@ export default defineConfig({
         'apps/web/src/app/page.tsx',
         'packages/core/src/index.ts',
       ],
+      thresholds: {
+        lines: 80,
+        branches: 80,
+      },
     },
   },
 });
