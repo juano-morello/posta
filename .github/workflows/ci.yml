@@ -170,3 +170,14 @@ jobs:
       - name: Build
         run: pnpm exec turbo run build
         timeout-minutes: 5
+
+      # S0.2's dependency-arrow rules (.dependency-cruiser.js) only protect
+      # the architecture (web→contracts · api→core,contracts ·
+      # worker→core,contracts · core→contracts, no app importing another
+      # app) if CI actually runs them — tests/boundaries/arrows.test.ts
+      # already exercises the rules against fixtures as part of `pnpm
+      # test` above, but this is the real scan over the actual apps/
+      # and packages/ source, so a genuine illegal import (not just a
+      # fixture) fails the build too.
+      - name: Dependency boundaries (S0.2)
+        run: pnpm depcruise
