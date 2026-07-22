@@ -13,7 +13,8 @@
     "test": "vitest run",
     "dev": "docker compose up -d --wait postgres redis minio && docker compose up -d && docker compose wait minio-init && turbo run dev",
     "dev:reset": "bash scripts/dev-reset.sh",
-    "docker:prune": "bash scripts/docker-prune.sh"
+    "docker:prune": "bash scripts/docker-prune.sh",
+    "geo:fetch": "bash scripts/fetch-geoip.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -23,6 +24,7 @@
     "dotenv-cli": "^11.0.0",
     "eslint": "^9.39.5",
     "ioredis": "^5.11.1",
+    "maxmind": "^5.0.6",
     "turbo": "2.10.5",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.65.0",
