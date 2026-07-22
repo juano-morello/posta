@@ -28,6 +28,27 @@ $themes: (
     info: #58A6FF,
     ring: #B4FF39,
   ),
+  // T6.1.2 — light is support, not an inverted dark. Pure lime on white
+  // fails AA (T6.1.14 is what proves it), so light drops primary to the
+  // green #3F9142 — and ring follows primary, since ring IS the focus
+  // color. Cards stay pure #FFFFFF against a subtle #F6F8FA page so
+  // surfaces are never grayer than the page behind them (DESIGN.md §1).
+  light: (
+    bg: #F6F8FA,
+    surface: #FFFFFF,
+    surface-2: #EDF1F5,
+    fg: #0D1117,
+    muted: #57606A,
+    border: #D8DEE4,
+    border-subtle: #E7EBEF,
+    primary: #3F9142,
+    primary-fg: #FFFFFF,
+    success: #2DA44E,
+    warning: #BF8700,
+    error: #CF222E,
+    info: #0969DA,
+    ring: #3F9142,
+  ),
 );
 
 // Emits one `--name: value` declaration per map entry.
@@ -40,6 +61,11 @@ $themes: (
 // dark-first default — no class needed for dark, it is :root itself.
 :root {
   @include emit-vars(map.get($themes, dark));
+}
+
+// runtime theme toggle (T6.1.11 wires the actual class add/remove).
+.light {
+  @include emit-vars(map.get($themes, light));
 }
 
 // Helper so component SCSS reads tokens, never hex literals.

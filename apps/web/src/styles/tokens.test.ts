@@ -1,6 +1,7 @@
 import path from 'node:path';
 import * as sass from 'sass';
 import { describe, expect, it } from 'vitest';
+import { relativeLuminance } from './color';
 
 // T6.1.1 — _tokens.scss (POSTA.md §8.1) is the single token source: it
 // compiles to plain CSS custom properties, which is what Tailwind and
@@ -18,6 +19,14 @@ function extractBlock(css: string, selector: string): string {
   return pattern.exec(css)?.[1] ?? '';
 }
 
+function extractValue(block: string, property: string): string {
+  const match = new RegExp(`--${property}:\\s*(#[0-9A-Fa-f]{6})`).exec(block);
+  if (!match) {
+    throw new Error(`tokens.test.ts: --${property} not found in block`);
+  }
+  return match[1]!;
+}
+
 describe('_tokens.scss', () => {
   it('compiles with sass', () => {
     expect(() => compileTokens()).not.toThrow();
@@ -28,5 +37,18 @@ describe('_tokens.scss', () => {
     expect(root).toMatch(/--primary:\s*#B4FF39/);
     expect(root).toMatch(/--bg:\s*#0D1117/);
     expect(root).toMatch(/--surface:\s*#161B22/);
+  });
+
+  it('emits the light theme under .light, dropping primary to #3F9142 for AA', () => {
+    const light = extractBlock(compileTokens(), '.light');
+    expect(light).toMatch(/--primary:\s*#3F9142/);
+    expect(light).toMatch(/--ring:\s*#3F9142/);
+  });
+
+  it('never renders light-mode cards grayer than the light-mode page (DESIGN.md §1)', () => {
+    const light = extractBlock(compileTokens(), '.light');
+    const bg = extractValue(light, 'bg');
+    const surface = extractValue(light, 'surface');
+    expect(relativeLuminance(surface)).toBeGreaterThan(relativeLuminance(bg));
   });
 });
