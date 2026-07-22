@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import * as sass from 'sass';
 import { describe, expect, it } from 'vitest';
@@ -97,5 +98,24 @@ describe('_tokens.scss', () => {
     for (const alias of ['background', 'card', 'muted-foreground', 'destructive', 'input']) {
       expect(light).not.toMatch(new RegExp(`--${alias}:`));
     }
+  });
+
+  // T6.1.5 — radius is theme-independent (same corners in dark and light),
+  // so it is emitted once under :root rather than duplicated per theme map.
+  it('emits the radius scale (4/6/8/12) under :root', () => {
+    const root = extractBlock(compileTokens(), ':root');
+    expect(root).toMatch(/--radius-sm:\s*4px/);
+    expect(root).toMatch(/--radius-badge:\s*6px/);
+    expect(root).toMatch(/--radius:\s*8px/);
+    expect(root).toMatch(/--radius-lg:\s*12px/);
+  });
+
+  // $bp-mobile never reaches compiled CSS (media-query breakpoints must be
+  // static at parse time — a CSS custom property can't sit inside an
+  // @media condition), so it is checked against the SCSS source text
+  // instead of the compiled output.
+  it('declares $bp-mobile as 800px in the SCSS source', () => {
+    const source = readFileSync(TOKENS_PATH, 'utf-8');
+    expect(source).toMatch(/\$bp-mobile:\s*800px/);
   });
 });

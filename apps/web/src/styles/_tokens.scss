@@ -100,10 +100,53 @@ $shadcn-aliases: (
   }
 }
 
+// T6.1.5 — radius scale (DESIGN.md §2.3): tight terminal-look corners, never
+// pill except badges/avatars. Theme-independent (same corners in both
+// themes), so it is its own map emitted once under :root rather than
+// duplicated inside $themes. $radius-badge is a NAMED 6px — badges, chips
+// and the HumanoBar all read it so no component ever carries a bare `6px`
+// (a hardcoded value would fail T6.1.13's no-hex/off-scale grep gate).
+$radii: (
+  radius-sm: 4px,
+  radius-badge: 6px,
+  radius: 8px,
+  radius-lg: 12px,
+);
+
+// Spacing scale (POSTA.md §8.2), keyed on Tailwind's own numeric steps (1,
+// 2, 3, 4, 6, 8, 12, 16) so `p-4`/`gap-6` keep meaning what they already
+// mean in Tailwind once T6.1.6 points spacing at these same variables.
+$space: (
+  space-1: 4px,
+  space-2: 8px,
+  space-3: 12px,
+  space-4: 16px,
+  space-6: 24px,
+  space-8: 32px,
+  space-12: 48px,
+  space-16: 64px,
+);
+
+// Mobile breakpoint (POSTA.md §8.2) — sidebar swaps for BottomTabs below
+// this width (S6.3). Deliberately NOT emitted as a CSS custom property:
+// @media conditions must be static at CSS-parse time, so a var() here
+// would simply fail to apply. Component SCSS uses the `mobile` mixin;
+// tailwind.config.ts (T6.1.6) mirrors the same literal for its `mobile`
+// screen, since a JS/TS config cannot import a SCSS variable.
+$bp-mobile: 800px;
+
+@mixin mobile {
+  @media (max-width: #{$bp-mobile - 1px}) {
+    @content;
+  }
+}
+
 // dark-first default — no class needed for dark, it is :root itself.
 :root {
   @include emit-vars(map.get($themes, dark));
   @include emit-aliases($shadcn-aliases);
+  @include emit-vars($radii);
+  @include emit-vars($space);
 }
 
 // runtime theme toggle (T6.1.11 wires the actual class add/remove).
