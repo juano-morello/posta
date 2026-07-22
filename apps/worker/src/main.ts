@@ -41,9 +41,24 @@ async function bootstrap(): Promise<void> {
   // "stop accepting new jobs, finish the in-flight one" and the
   // Postgres/Redis pool teardown land once those exist (E1/E3) — this is
   // the extension point, not a placeholder that gets rewritten.
+  //
+  // isShuttingDown guards against re-entering app.close() on a second
+  // SIGTERM (Node doesn't deduplicate signal listeners). The try/catch
+  // guarantees process.exit still runs even if app.close() rejects — a
+  // swallowed rejection here would hang the container to Docker's
+  // SIGKILL fallback instead of exiting cleanly.
+  let isShuttingDown = false;
   process.on('SIGTERM', () => {
+    if (isShuttingDown) {
+      return;
+    }
+    isShuttingDown = true;
     void (async () => {
-      await app.close();
+      try {
+        await app.close();
+      } catch (error: unknown) {
+        console.error('Error while closing app during SIGTERM:', error);
+      }
       process.exit(0);
     })();
   });

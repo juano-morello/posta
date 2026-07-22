@@ -30,14 +30,22 @@
 **/*.tsbuildinfo
 
 # --- secrets -----------------------------------------------------------------
-# Never bake local credentials into an image layer.
-.env
-.env.*
+# Never bake local credentials into an image layer. `**/` matters here for
+# the same reason it does above: an unprefixed `.env.*` only excludes a
+# root-level .env — a nested apps/*/.env would ride along into the pruner
+# stage's COPY . . otherwise (security review, T0.7.1/T0.7.4).
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 
-# --- vcs & docs --------------------------------------------------------------
+# --- vcs, editor config & docs -----------------------------------------------
 .git/
 docs/
+# A local Claude Code checkout can carry its own config/settings under
+# .claude/ at the repo root — never something the image needs, and never
+# something that should ride into a build context by accident.
+.claude/
 
 # --- data files ----------------------------------------------------------
 # GeoIP .mmdb files (S0.7, T0.7.9/10 — a later batch): fetched or baked in

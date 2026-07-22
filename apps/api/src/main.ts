@@ -50,9 +50,27 @@ async function bootstrap(): Promise<void> {
   // listener hasn't already); THIS is also the extension point E1/E3
   // will fill in with `await pgPool.end()` / `await redis.quit()` once
   // those pools exist.
+  //
+  // isShuttingDown guards against a second SIGTERM (Node doesn't
+  // deduplicate signal listeners, and Kubernetes can legitimately send
+  // more than one during a rolling restart) re-entering app.close()
+  // while the first close is still draining. The try/catch ensures a
+  // rejected app.close() (e.g. a future pool failing to close) still
+  // reaches process.exit — a swallowed rejection here would hang the
+  // container to Docker's SIGKILL fallback, exactly what this handler
+  // exists to avoid.
+  let isShuttingDown = false;
   process.on('SIGTERM', () => {
+    if (isShuttingDown) {
+      return;
+    }
+    isShuttingDown = true;
     void (async () => {
-      await app.close();
+      try {
+        await app.close();
+      } catch (error: unknown) {
+        console.error('Error while closing app during SIGTERM:', error);
+      }
       process.exit(0);
     })();
   });

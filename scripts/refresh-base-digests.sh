@@ -49,6 +49,7 @@ fi
 # have to re-resolve anything a second time.
 declare -A CURRENT_DIGEST
 drifted=0
+pins_found=0
 rewritten=""
 
 # Matches lines like: NODE_BASE=node:24-alpine@sha256:<64 hex chars>
@@ -69,6 +70,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       exit 1
     fi
     CURRENT_DIGEST["$key"]="$ref@$current"
+    pins_found=$((pins_found + 1))
 
     if [[ "$current" != "$pinned" ]]; then
       drifted=1
@@ -87,6 +89,15 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     rewritten+="${line}"$'\n'
   fi
 done <"$ENV_FILE"
+
+# A file with zero recognized pins (empty, comments-only, or otherwise
+# broken in a way that doesn't trip the malformed-line check above) would
+# otherwise let --check exit 0 having verified nothing — a silently
+# no-op drift guard is worse than no guard, since it looks green in CI.
+if [[ "$pins_found" -eq 0 ]]; then
+  echo "refresh-base-digests: no pins found in $ENV_FILE — nothing was verified" >&2
+  exit 1
+fi
 
 if $CHECK_ONLY; then
   exit "$drifted"
@@ -107,7 +118,11 @@ for dockerfile in "$REPO_ROOT"/apps/*/Dockerfile; do
     value="${CURRENT_DIGEST[$key]}"
     # BSD sed (macOS) and GNU sed (Linux/CI) both accept -i '' vs -i
     # differently; -i.bak with an immediate rm is the one form both agree on.
-    sed -i.bak -E "s|^ARG ${key}=.*\$|ARG ${key}=${value}|" "$dockerfile"
+    # (The trailing $ here is bash's own double-quote expansion producing a
+    # literal `$`, passed to sed as the end-of-line anchor — not an escaped
+    # sed metacharacter. Verified: this line correctly rewrites a
+    # deliberately-corrupted ARG default back to the resolved digest.)
+    sed -i.bak -E "s|^ARG ${key}=.*$|ARG ${key}=${value}|" "$dockerfile"
     rm -f "${dockerfile}.bak"
   done
 done
