@@ -55,7 +55,11 @@ export const apiEnvSchema = z.object({
 
   // Services
   NODE_ENV: z.enum(['development', 'test', 'production']),
-  LOG_LEVEL: zNonEmpty,
+  // The pino level set (review, batch 5) — zNonEmpty let "banana" pass.
+  // Reconcile this list if a different logger is ever chosen; 'info'
+  // (.env.example's default) is in both pino's and most alternatives'
+  // sets, so that value keeps working either way.
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
   API_PORT: zPort,
 
   // Redis TTL for resolved slug→destination lookups (S3.3-adjacent).

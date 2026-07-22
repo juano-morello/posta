@@ -97,6 +97,21 @@ describe('apiEnvSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects a LOG_LEVEL that is not a recognized pino level', () => {
+    const result = apiEnvSchema.safeParse({ ...VALID_API_ENV, LOG_LEVEL: 'banana' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])(
+    'accepts LOG_LEVEL=%s',
+    (level) => {
+      const result = apiEnvSchema.safeParse({ ...VALID_API_ENV, LOG_LEVEL: level });
+
+      expect(result.success).toBe(true);
+    },
+  );
+
   it('does not include worker-only batch vars in its shape', () => {
     expect(apiEnvSchema.shape).not.toHaveProperty('EVENT_BATCH_SIZE');
     expect(apiEnvSchema.shape).not.toHaveProperty('EVENT_BATCH_INTERVAL_MS');

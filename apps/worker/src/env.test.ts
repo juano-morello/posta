@@ -77,6 +77,21 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects a LOG_LEVEL that is not a recognized pino level', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, LOG_LEVEL: 'banana' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])(
+    'accepts LOG_LEVEL=%s',
+    (level) => {
+      const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, LOG_LEVEL: level });
+
+      expect(result.success).toBe(true);
+    },
+  );
+
   it('does not read DATABASE_URL — the worker uses the writer-role DATABASE_URL_WORKER', () => {
     expect(workerEnvSchema.shape).not.toHaveProperty('DATABASE_URL');
     expect(workerEnvSchema.shape).toHaveProperty('DATABASE_URL_WORKER');

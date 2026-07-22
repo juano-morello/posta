@@ -33,7 +33,11 @@ export const workerEnvSchema = z.object({
   // Services
   WORKER_PORT: zPort,
   NODE_ENV: z.enum(['development', 'test', 'production']),
-  LOG_LEVEL: zNonEmpty,
+  // The pino level set (review, batch 5) — zNonEmpty let "banana" pass.
+  // Reconcile this list if a different logger is ever chosen; 'info'
+  // (.env.example's default) is in both pino's and most alternatives'
+  // sets, so that value keeps working either way.
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
 
   // Event pipeline batching (S3.3) — flush on whichever trips first.
   EVENT_BATCH_SIZE: z.coerce.number().int().positive(),
