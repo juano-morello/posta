@@ -24,5 +24,24 @@ services:
       retries: 10
       start_period: 5s
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The eviction policy lives in the mounted config file (INV-7), not a
+    # CLI flag, so it stays reviewable in a diff.
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
 volumes:
   postgres-data:
+  redis-data:
