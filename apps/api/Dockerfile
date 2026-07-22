@@ -64,6 +64,17 @@ COPY tsconfig.base.json ./tsconfig.base.json
 # (verified: it does, without this).
 RUN pnpm --filter @posta/api... run build
 
+# T0.7.10 — fetch the DB-IP geo databases, api image ONLY [INV-6]. Same
+# reasoning as tsconfig.base.json above: turbo prune never carries
+# root-level files/directories that aren't part of a workspace package
+# (scripts/ isn't one), so this is copied straight from the real build
+# context instead of from either pruner output. This base image has no
+# bash by default (Alpine ships busybox sh only) — installed here, in a
+# stage that is discarded before the runner stage below, so it never
+# reaches the final image or its size budget.
+COPY scripts/fetch-geoip.sh ./scripts/fetch-geoip.sh
+RUN apk add --no-cache bash && bash scripts/fetch-geoip.sh
+
 # ---------------------------------------------------------------- runner --
 FROM ${NODE_RUNTIME_BASE} AS runner
 WORKDIR /app
@@ -115,6 +126,20 @@ RUN pnpm install --prod --frozen-lockfile && rm -rf "$(pnpm store path)"
 COPY --from=builder --chown=posta:posta /app/packages/contracts/dist ./packages/contracts/dist
 COPY --from=builder --chown=posta:posta /app/packages/core/dist ./packages/core/dist
 COPY --from=builder --chown=posta:posta /app/apps/api/dist ./apps/api/dist
+
+# T0.7.10 — bake the DB-IP geo databases into the api image ONLY [INV-6].
+# GEOIP_DB_DIR's default (T0.3.5, .env.example) is ./data/geoip, resolved
+# against WORKDIR /app — so this lands at exactly /app/data/geoip, which
+# is what apps/api/src/env.ts reads at boot. No init container, no
+# licence Secret, no runtime download: DB-IP lite's CC BY 4.0 licence is
+# what makes redistributing the files inside the image itself legal
+# (MaxMind's GeoLite2 EULA forbids exactly this, see CLAUDE.md's decision
+# log). apps/worker/Dockerfile has NO equivalent COPY, deliberately: geo
+# lookup happens exactly once, at capture, in the API — the worker's
+# absence of these files is a structural reminder, not an oversight (its
+# env schema, T0.3.6, doesn't even have a GEOIP_DB_DIR key to point
+# anywhere).
+COPY --from=builder --chown=posta:posta /app/data/geoip ./data/geoip
 
 # Documentation only — the actual bind address/port come from API_PORT at
 # runtime (config-via-env, per CLAUDE.md). Matches .env.example's default.
