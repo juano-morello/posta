@@ -161,8 +161,15 @@ jobs:
       # CONFIG SET step above) and coverage still computes/gates at 80%
       # over that same set — the container tests never contributed
       # application-source coverage in the first place.
+      #
+      # --project web (E6/S6.1): apps/web's component tests
+      # (*.test.tsx — Testing Library + jsdom) live in their own project
+      # because they need a DOM and a JSX transform the 'default' project
+      # doesn't set up (see vitest.config.ts). Omitting it here would mean
+      # every apps/web component test silently never runs in CI even
+      # though `pnpm test <file>` passes locally.
       - name: Test (with coverage)
-        run: pnpm test --project default --coverage
+        run: pnpm test --project default --project web --coverage
 
       - name: Upload coverage summary
         if: always()
