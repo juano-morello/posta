@@ -4,3 +4,4 @@
 // it into './client' directly, so this file is the one place that has to
 // change when the db seam grows.
 export * from './client';
+export * from './tenant';
