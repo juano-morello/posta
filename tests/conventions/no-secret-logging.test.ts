@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ZodTypeAny } from 'zod';
 import {
   formatEnvFailures,
   loadEnv,
@@ -38,7 +39,16 @@ import { webServerEnvSchema } from '../../apps/web/src/env';
 // unambiguously — not the kind of short/generic string that could
 // accidentally collide with legitimate output like a key name or the
 // word "missing".
-const REAL_SECRET_VALUES: Record<string, string> = {
+// `satisfies` (not `: Record<string, string>`) keeps the inferred type as
+// the precise object literal — each key a known, always-present property —
+// rather than widening to a plain index signature. Under this repo's
+// noUncheckedIndexedAccess, a widened Record<string, string> would make
+// every access below (even the literal, known-to-exist ones like
+// `.DATABASE_URL`) type as `string | undefined`; `satisfies` still
+// verifies every value is a string, it just doesn't erase the specific
+// keys while doing so. `secretValue()` below covers the few call sites
+// that need a genuinely dynamic key instead.
+const REAL_SECRET_VALUES = {
   DATABASE_URL: 'postgresql://posta:Tr0ub4dor-AndFour@prod-db.internal:5432/posta',
   DATABASE_URL_WORKER: 'postgresql://posta_writer:C0rrectHorseBattery99@prod-db.internal:5432/posta',
   REDIS_URL: 'redis://:hunter2RedisPass@prod-redis.internal:6379',
@@ -48,7 +58,24 @@ const REAL_SECRET_VALUES: Record<string, string> = {
   BETTER_AUTH_SECRET: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4BETTERAUTH',
   SEED_USER_PASSWORD: 'Sup3rSecretSeedPassword!42',
   REVALIDATE_SECRET: 'revalidate-hex-secret-00112233445566',
-};
+} satisfies Record<string, string>;
+
+/** REAL_SECRET_VALUES indexed by a KEY COMPUTED at runtime (e.g. from
+ * SECRET_ENV_KEYS, typed as a general `readonly string[]`) rather than one
+ * of its own known literal properties. Fails loudly — same "don't assume,
+ * assert" discipline as the TESTED_SCHEMAS coverage guard below — if a key
+ * this file iterates over ever has no fixture value, instead of silently
+ * reading `undefined` and letting a `.toContain(undefined)` assertion pass
+ * or fail for the wrong reason. */
+function secretValue(key: string): string {
+  const value = (REAL_SECRET_VALUES as Record<string, string>)[key];
+  if (value === undefined) {
+    throw new Error(
+      `REAL_SECRET_VALUES has no fixture value for "${key}" — add one before testing it.`,
+    );
+  }
+  return value;
+}
 
 const VALID_API_ENV: Record<string, string> = {
   POSTA_LINK_DOMAIN: 'example.test',
@@ -117,7 +144,15 @@ const WEB_SECRET_KEYS = SECRET_ENV_KEYS.filter((key) => key in webServerEnvSchem
 // success-path tests and the systematic error-path loop below read from
 // this single list, so adding a fourth tested schema later means editing
 // one array, not every test that iterates SECRET_ENV_KEYS.
-const TESTED_SCHEMAS = [
+//
+// `schema: ZodTypeAny` (not the three schemas' own inferred literal
+// types): without it, TS infers TESTED_SCHEMAS as an array of three
+// DIFFERENT object shapes, and `covering.schema` below becomes a union of
+// three distinct ZodObject types — passing that union into loadEnv<T>'s
+// `schema: z.ZodType<T>` parameter fails to unify under this repo's
+// exactOptionalPropertyTypes. ZodTypeAny is Zod's own escape hatch for
+// exactly this "heterogeneous collection of schemas" case.
+const TESTED_SCHEMAS: { baseEnv: Record<string, string>; schema: ZodTypeAny }[] = [
   { baseEnv: VALID_API_ENV, schema: apiEnvSchema },
   { baseEnv: VALID_WORKER_ENV, schema: workerEnvSchema },
   { baseEnv: VALID_WEB_ENV, schema: webServerEnvSchema },
@@ -140,7 +175,7 @@ describe('secrets never reach logs (success path — redaction before logging)',
 
     const rawSerialized = JSON.stringify(result.data);
     for (const key of API_SECRET_KEYS) {
-      expect(rawSerialized).toContain(REAL_SECRET_VALUES[key]);
+      expect(rawSerialized).toContain(secretValue(key));
     }
   });
 
@@ -153,7 +188,7 @@ describe('secrets never reach logs (success path — redaction before logging)',
     const loggedOutput = JSON.stringify(redacted);
 
     for (const key of API_SECRET_KEYS) {
-      expect(loggedOutput).not.toContain(REAL_SECRET_VALUES[key]);
+      expect(loggedOutput).not.toContain(secretValue(key));
     }
     // And the keys are still present, just redacted — proving this is
     // real redaction, not accidental key omission.
@@ -173,7 +208,7 @@ describe('secrets never reach logs (success path — redaction before logging)',
       expect.arrayContaining(['DATABASE_URL_WORKER', 'REDIS_URL']),
     );
     for (const key of WORKER_SECRET_KEYS) {
-      expect(loggedOutput).not.toContain(REAL_SECRET_VALUES[key]);
+      expect(loggedOutput).not.toContain(secretValue(key));
     }
   });
 
@@ -188,14 +223,14 @@ describe('secrets never reach logs (success path — redaction before logging)',
     const rawSerialized = JSON.stringify(result.data);
     expect(WEB_SECRET_KEYS).toEqual(['REVALIDATE_SECRET']);
     for (const key of WEB_SECRET_KEYS) {
-      expect(rawSerialized).toContain(REAL_SECRET_VALUES[key]);
+      expect(rawSerialized).toContain(secretValue(key));
     }
 
     const redacted = redactSecrets(result.data);
     const loggedOutput = JSON.stringify(redacted);
 
     for (const key of WEB_SECRET_KEYS) {
-      expect(loggedOutput).not.toContain(REAL_SECRET_VALUES[key]);
+      expect(loggedOutput).not.toContain(secretValue(key));
     }
     expect(loggedOutput).toContain('REVALIDATE_SECRET');
     expect(loggedOutput).toContain('[REDACTED]');

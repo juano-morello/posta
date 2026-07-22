@@ -1,0 +1,66 @@
+{
+  // T0.5.7 — closes the repo-wide gap where *.test.ts files are invisible
+  // to every checker: each package's own tsconfig EXCLUDES its test files
+  // from the composite build (so `tsc -b` stays fast and never emits test
+  // output), `vitest run` transpiles with esbuild without type-checking,
+  // and ESLint's recommended presets here are not type-aware. A type error
+  // in a test file could pass `typecheck`, `test`, and `lint` all at once,
+  // as long as it still ran.
+  //
+  // This is a SEPARATE, standalone `tsc --noEmit` pass over every test file
+  // in the repo — not a project reference, not part of any package's `tsc
+  // -b` composite build, so it can never conflict with those (a file can
+  // belong to this program's file set while being excluded from its own
+  // package's composite one; they are two independent invocations).
+  //
+  // Extends the shared base, then overrides just what test files need:
+  //   - moduleResolution: this file does NOT restate it — it inherits
+  //     "bundler" straight from tsconfig.base.json. Every package's OWN
+  //     tsconfig overrides that down to "node10" for its composite build,
+  //     but this config extends the base directly, bypassing that
+  //     override. That inheritance is exactly the fix: vitest's package.json
+  //     exposes its types only via an "exports" map (no top-level "types"
+  //     field), which "node10"/classic resolution cannot see at all — under
+  //     node10, `import ... from 'vitest'` fails to resolve any types.
+  //     "bundler" resolution understands "exports" maps and resolves it
+  //     correctly, the same combination apps/web already uses successfully
+  //     (its own tsconfig sets `module: "esnext"` and never overrides
+  //     moduleResolution either, inheriting "bundler" from this same base).
+  //   - module: "esnext" pairs with "bundler" resolution the same way
+  //     apps/web's tsconfig already does — this setting only affects the
+  //     type-checker's view of module syntax, never runtime: Vitest itself
+  //     always transpiles test files with esbuild regardless of this file.
+  //   - types: vitest/globals in case a future test ever turns on
+  //     `test.globals` in vitest.config.ts — every current test file
+  //     explicitly imports from 'vitest' instead, so this is defensive, not
+  //     load-bearing yet.
+  //   - experimentalDecorators/emitDecoratorMetadata: matches apps/api and
+  //     apps/worker's own tsconfigs, so a future test file that builds a
+  //     NestJS testing module (`@nestjs/testing`) doesn't need a bespoke
+  //     override just for that.
+  //
+  // Extensible by construction: the include globs mirror vitest.config.ts's
+  // own `test.include` exactly (packages/**, apps/**, tests/**), scoped to
+  // *.test.ts wherever it lives. When core, api, or worker add their first
+  // test files beside source (E1+), this config type-checks them
+  // automatically — no new bespoke tsconfig, no edit to this file at all.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "esnext",
+    "types": ["vitest/globals", "node"],
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // tests/boundaries/arrows.test.ts imports .dependency-cruiser.js
+    // directly (to reuse the real S0.2 rules as depcruise's own input,
+    // rather than a second copy) — allowJs lets tsc infer that plain JS
+    // file's shape instead of erroring with "could not find a declaration
+    // file". checkJs stays off (the default): the .js file itself is not
+    // type-checked, only read for inference where it's imported.
+    "allowJs": true
+  },
+  "include": ["packages/**/*.test.ts", "apps/**/*.test.ts", "tests/**/*.test.ts"]
+}

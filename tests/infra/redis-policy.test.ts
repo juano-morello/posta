@@ -76,8 +76,12 @@ async function assertRedisHasRequiredPolicy(client: Redis): Promise<void> {
   }
 
   // ioredis's CONFIG GET returns a flat [key, value] array, e.g.
-  // ['maxmemory-policy', 'volatile-lru'] — never a mocked response.
-  const [, actualPolicy] = await client.config('GET', 'maxmemory-policy');
+  // ['maxmemory-policy', 'volatile-lru'] — never a mocked response. Typed
+  // as `unknown` by ioredis itself (it can't statically know CONFIG GET's
+  // shape), so this asserts the real runtime shape rather than leaving it
+  // unchecked or destructuring straight off `unknown`.
+  const rawConfigGetResult = (await client.config('GET', 'maxmemory-policy')) as string[];
+  const [, actualPolicy] = rawConfigGetResult;
 
   expect(actualPolicy).toBe(REQUIRED_POLICY);
 }
