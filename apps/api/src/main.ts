@@ -31,7 +31,43 @@ async function bootstrap(): Promise<void> {
     res.status(200).send('ok');
   });
 
+  // T0.7.8 — SIGTERM-clean shutdown. Wires Nest's own termination
+  // lifecycle (onModuleDestroy -> beforeApplicationShutdown ->
+  // onApplicationShutdown on every provider); there are no providers with
+  // state to close yet in E0 (no Postgres/Redis pools exist until
+  // E1/E3), but every one this app gains later just needs its own
+  // lifecycle hook, not a change here.
+  app.enableShutdownHooks();
+
+  // Node running as PID 1 (every one of these containers, no init
+  // system) does not get default OS signal handling — without an
+  // explicit listener, SIGTERM is simply ignored and Kubernetes' rolling
+  // deploys kill in-flight redirects at the full 30s grace-period
+  // timeout instead of the process exiting the moment it's actually
+  // done draining. app.close() stops the HTTP server from accepting new
+  // connections and lets in-flight ones finish (and reruns the
+  // lifecycle hooks above, harmlessly, if enableShutdownHooks's own
+  // listener hasn't already); THIS is also the extension point E1/E3
+  // will fill in with `await pgPool.end()` / `await redis.quit()` once
+  // those pools exist.
+  process.on('SIGTERM', () => {
+    void (async () => {
+      await app.close();
+      process.exit(0);
+    })();
+  });
+
   await app.listen(env.API_PORT);
 }
 
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  // T0.7.8 — the bare `void bootstrap();` this replaces printed an
+  // unhandled-rejection trace (and, depending on Node's
+  // --unhandled-rejections setting, could leave the process hanging
+  // instead of exiting) if bootstrap() ever rejected — e.g. API_PORT
+  // already in use. Log plainly and exit non-zero instead: a container
+  // that fails to bind its port should crash-loop visibly, not sit idle
+  // failing every health check silently.
+  console.error('Fatal error during bootstrap:', error);
+  process.exit(1);
+});

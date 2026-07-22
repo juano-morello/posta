@@ -27,7 +27,34 @@ async function bootstrap(): Promise<void> {
     res.status(200).send('ok');
   });
 
+  // T0.7.8 — SIGTERM-clean shutdown. See apps/api/src/main.ts for the
+  // fuller rationale; same contract here. enableShutdownHooks() wires
+  // Nest's termination lifecycle for whatever providers this app gains
+  // later (there are no BullMQ consumers or Postgres/Redis pools yet in
+  // E0 — E1/E3 add them).
+  app.enableShutdownHooks();
+
+  // Explicit SIGTERM handling because Node as PID 1 gets none by
+  // default — without this, a rolling deploy would let Kubernetes'
+  // SIGKILL fallback do the killing instead of the process draining and
+  // exiting on its own. app.close() is also where the BullMQ consumer's
+  // "stop accepting new jobs, finish the in-flight one" and the
+  // Postgres/Redis pool teardown land once those exist (E1/E3) — this is
+  // the extension point, not a placeholder that gets rewritten.
+  process.on('SIGTERM', () => {
+    void (async () => {
+      await app.close();
+      process.exit(0);
+    })();
+  });
+
   await app.listen(env.WORKER_PORT);
 }
 
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  // T0.7.8 — see apps/api/src/main.ts: the bare `void bootstrap();` this
+  // replaces left a rejected bootstrap() as an unhandled rejection
+  // instead of a clean, logged, non-zero exit.
+  console.error('Fatal error during bootstrap:', error);
+  process.exit(1);
+});
