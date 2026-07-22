@@ -1,0 +1,81 @@
+name: CI
+
+# S0.5 — "As a maintainer I want every push checked so that main is always
+# deployable." Runs on every PR and on every push to main: install → lint →
+# typecheck → build, with pnpm store + turbo caching so a clean run stays
+# fast. Service containers and the test/coverage/depcruise stages land in
+# later commits of the same story (T0.5.2–T0.5.5) — see this file's git
+# history for how it was built up.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same PR/branch supersedes the previous run instead of
+# queuing behind it — avoids burning CI minutes on a ref nobody will look at
+# again.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only ever reads the repo and runs checks,
+# it never comments, deploys, or publishes.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Install, lint, typecheck, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          # Keeps the CI Node version and .nvmrc (used for local dev) as
+          # one source of truth instead of a second hardcoded version here.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Turbo's own per-task cache, persisted between runs and keyed on the
+      # lockfile (plan: "turbo caching keyed on the lockfile"). Separate
+      # from the pnpm store cache above, which actions/setup-node's
+      # cache:pnpm input already handles.
+      - name: Cache turbo
+        uses: actions/cache@v6
+        with:
+          path: '**/.turbo'
+          key: turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Turbo resolves the contracts → core → {api, worker, web} build order
+      # from each package's own turbo.json dependsOn, so one command builds
+      # all five packages in the right order with caching. There is no root
+      # "pnpm build" script — turbo.json's build task is invoked directly.
+      #
+      # Dedicated timeout: a clean-install `next build` was once observed to
+      # print full success and then hang instead of exiting (suspected
+      # first-run Turbopack native setup; did not reproduce on a second
+      # run). This makes that fail loudly in ~5 minutes instead of silently
+      # burning the whole job's 20-minute budget.
+      - name: Build
+        run: pnpm exec turbo run build
+        timeout-minutes: 5
