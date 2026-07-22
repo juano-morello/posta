@@ -1,7 +1,20 @@
 /* globals.css — imports the token sheet first so every CSS custom property
- * exists before any Tailwind layer reads them (T6.1.1). Tailwind's own
- * @tailwind directives land here in T6.2.1 (shadcn init). */
+ * exists before any Tailwind layer reads them (T6.1.1).
+ *
+ * FOUND AND FIXED during T6.3.6: the @tailwind directives were never
+ * actually added here (this comment used to say "land here in T6.2.1" —
+ * they didn't). Every Tailwind utility class written since T6.1.6 was
+ * therefore inert in a real browser the whole time; every unit test still
+ * passed because Testing Library/jsdom assertions check className STRING
+ * content, never real computed styles, so nothing caught it until
+ * Playwright actually rendered the app and asserted real visibility.
+ * postcss.config.js (new, sibling of this file's app root) is the other
+ * missing half — Next.js only invokes Tailwind's PostCSS plugin when that
+ * config exists. */
 @import './_tokens.scss';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* T6.1.8 — DESIGN.md §3: Space Grotesk (UI) + JetBrains Mono (code, slugs,
  * handles, metrics, prompts) — no third family, self-hosted, never fetched
