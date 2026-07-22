@@ -5,6 +5,22 @@
     "exactOptionalPropertyTypes": true,
     "moduleResolution": "bundler",
     "isolatedModules": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    // T1.1.1 (E1): drizzle-kit's `defineConfig`/drizzle-orm's `drizzle()` type
+    // surface pulls in EVERY dialect's declaration files (singlestore-core,
+    // sqlite-core, mysql...) even though packages/core only ever imports
+    // 'drizzle-orm/node-postgres' — that is how the packages resolve their
+    // "exports" map, not something this repo's code controls. Several of
+    // those unrelated-dialect .d.ts files fail their OWN internal structural
+    // checks under drizzle-orm@0.45.2 (e.g. singlestore's column builders
+    // don't implement an abstract member drizzle-orm's own base class
+    // declares) — real, but entirely inside a third-party package we never
+    // touch. Without skipLibCheck, `tsc -b` re-verifies those unrelated
+    // .d.ts files anyway and fails on drizzle-orm's own bug, not ours.
+    // tsconfig.test.json already carries this same flag for the analogous
+    // reason (vitest's own complex declarations); hoisting it here means
+    // apps/api and apps/worker don't have to rediscover the same fix once
+    // they start consuming @posta/core's db exports (E2/E3).
+    "skipLibCheck": true
   }
 }
