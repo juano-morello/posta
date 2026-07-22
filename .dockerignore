@@ -17,6 +17,17 @@
 **/.next/
 **/dist/
 **/.turbo/
+# TypeScript's incremental-build cache (packages/*/tsconfig.json set
+# `composite: true`). Discovered the hard way in T0.7.4: a STALE
+# .tsbuildinfo left on the host from a local `tsc` run rides along into
+# the pruner stage's COPY . . and — because it's gitignored, so a fresh
+# clone never has one, but this workstation did — makes `tsc -p
+# tsconfig.json` believe the (never-yet-built, in a fresh image) dist/ is
+# already up to date and skip emitting it entirely. `tsc` then exits 0
+# having produced nothing, and the next workspace package to import it
+# fails with "cannot find module" — a confusing failure two stages away
+# from the actual cause.
+**/*.tsbuildinfo
 
 # --- secrets -----------------------------------------------------------------
 # Never bake local credentials into an image layer.
