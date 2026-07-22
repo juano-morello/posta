@@ -1,0 +1,48 @@
+@use 'sass:map';
+
+// _tokens.scss — the single token source (POSTA.md §8.1). SCSS is the
+// token source and nothing else: this file emits CSS custom properties so
+// runtime theme switching stays a `.light` class toggle (no rebuild), and
+// the Tailwind config (T6.1.6) reads the same variables — one value per
+// token, never two definitions that can drift.
+//
+// T6.1.1 — dark theme only. $themes gains a `light` entry in T6.1.2; the
+// gray ramp (n1/n2/n3) lands in T6.1.3; the shadcn aliases in T6.1.4; the
+// radius/spacing/breakpoint scales in T6.1.5. Building this up task-by-task
+// (rather than transcribing the full POSTA.md §8.1/§8.2 block in one shot)
+// is what keeps each commit's verify command meaningful on its own.
+$themes: (
+  dark: (
+    bg: #0D1117,
+    surface: #161B22,
+    surface-2: #21262D,
+    fg: #E6EDF3,
+    muted: #8B949E,
+    border: #30363D,
+    border-subtle: #21262D,
+    primary: #B4FF39,
+    primary-fg: #0D1117,
+    success: #3FB950,
+    warning: #E3B341,
+    error: #F85149,
+    info: #58A6FF,
+    ring: #B4FF39,
+  ),
+);
+
+// Emits one `--name: value` declaration per map entry.
+@mixin emit-vars($map) {
+  @each $key, $value in $map {
+    --#{$key}: #{$value};
+  }
+}
+
+// dark-first default — no class needed for dark, it is :root itself.
+:root {
+  @include emit-vars(map.get($themes, dark));
+}
+
+// Helper so component SCSS reads tokens, never hex literals.
+@function t($name) {
+  @return var(--#{$name});
+}

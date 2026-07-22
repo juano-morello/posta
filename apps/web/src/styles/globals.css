@@ -1,0 +1,4 @@
+/* globals.css — imports the token sheet first so every CSS custom property
+ * exists before any Tailwind layer reads them (T6.1.1). Tailwind's own
+ * @tailwind directives land here in T6.2.1 (shadcn init). */
+@import './_tokens.scss';
