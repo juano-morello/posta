@@ -73,4 +73,59 @@ describe('createDbClient (T1.1.1)', () => {
       }
     });
   });
+
+  describe('when DB_POOL_MAX is set but not a positive integer', () => {
+    it.each(['0', '-1', 'not-a-number'])(
+      'throws a clear error for DB_POOL_MAX="%s"',
+      (invalidValue) => {
+        const originalPoolMax = process.env.DB_POOL_MAX;
+        process.env.DB_POOL_MAX = invalidValue;
+
+        try {
+          expect(() => createDbClient({ connectionString: DATABASE_URL })).toThrow(
+            /positive integer/,
+          );
+        } finally {
+          if (originalPoolMax === undefined) {
+            delete process.env.DB_POOL_MAX;
+          } else {
+            process.env.DB_POOL_MAX = originalPoolMax;
+          }
+        }
+      },
+    );
+  });
+
+  describe('when DATABASE_URL is missing and no connectionString is passed', () => {
+    it('throws a clear error naming DATABASE_URL', () => {
+      const originalDatabaseUrl = process.env.DATABASE_URL;
+      delete process.env.DATABASE_URL;
+
+      try {
+        expect(() => createDbClient({ max: TEST_POOL_MAX })).toThrow(/DATABASE_URL/);
+      } finally {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+    });
+  });
+
+  describe('when max is omitted but DB_POOL_MAX is a valid positive integer in env', () => {
+    it('falls back to the env value, not the pg driver default', async () => {
+      const originalPoolMax = process.env.DB_POOL_MAX;
+      process.env.DB_POOL_MAX = String(TEST_POOL_MAX);
+
+      let client: ReturnType<typeof createDbClient> | undefined;
+      try {
+        client = createDbClient({ connectionString: DATABASE_URL });
+        expect(client.pool.options.max).toBe(TEST_POOL_MAX);
+      } finally {
+        await client?.closeDb();
+        if (originalPoolMax === undefined) {
+          delete process.env.DB_POOL_MAX;
+        } else {
+          process.env.DB_POOL_MAX = originalPoolMax;
+        }
+      }
+    });
+  });
 });

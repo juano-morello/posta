@@ -146,8 +146,8 @@ jobs:
       # -- --coverage` produces no coverage/ directory at all; `pnpm test
       # --project default --coverage` does.
       #
-      # --project default: vitest.config.ts's `projects` split (batch 9
-      # review) put tests/containers/** (image-smoke.test.ts,
+      # --project default --project core: vitest.config.ts's `projects`
+      # split (batch 9 review) put tests/containers/** (image-smoke.test.ts,
       # image-size.test.ts) in their own "containers" project — those
       # tests' beforeAll shells out to `docker compose build/run` against
       # services declaring `env_file: .env`, which THIS workflow never
@@ -156,13 +156,18 @@ jobs:
       # failure, since images.yml already owns them, run targeted
       # (`pnpm test tests/containers/image-smoke.test.ts` /
       # `image-size.test.ts`) right after it builds the images they need.
-      # `--project default` runs every OTHER test (including
+      # `default` runs every other test (including
       # tests/infra/redis-policy.test.ts, against the Redis service +
-      # CONFIG SET step above) and coverage still computes/gates at 80%
-      # over that same set — the container tests never contributed
-      # application-source coverage in the first place.
+      # CONFIG SET step above); `core` (T1.1.2, E1) is packages/core's own
+      # project (packages/core/vitest.config.ts, 120s hookTimeout) —
+      # its testcontainers-based integration tests boot a REAL Postgres
+      # via the runner's own Docker daemon (already available on
+      # ubuntu-latest, no service container needed) rather than the
+      # postgres:// service above. Both projects' coverage still
+      # computes/gates at 80% together — the container-build tests never
+      # contributed application-source coverage in the first place.
       - name: Test (with coverage)
-        run: pnpm test --project default --coverage
+        run: pnpm test --project default --project core --coverage
 
       - name: Upload coverage summary
         if: always()

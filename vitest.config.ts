@@ -59,6 +59,17 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // coverage/reporters/resolveSnapshotPath at the root config and forces
 // every project to share that single resolved coverage — duplicating it
 // per-project isn't supported and wouldn't do anything if it were.
+//
+// 'packages/core' project (T1.1.2, E1): a bare glob string, not an inline
+// object like the two above — this tells Vitest to resolve
+// packages/core/vitest.config.ts as ITS OWN standalone project (same
+// mechanism 'packages/*' would use for every package, scoped here to just
+// the one package that needs it). That file raises hookTimeout to 120s for
+// the testcontainers Postgres harness's cold image pulls (src/test/
+// pg-container.ts), which every integration test in E1-E4 reuses — so
+// every test under packages/core benefits, not only the harness's own
+// test. 'default' excludes 'packages/core/**' below so its tests run
+// under exactly one project, never both.
 export default defineConfig({
   test: {
     projects: [
@@ -69,7 +80,7 @@ export default defineConfig({
           // configDefaults.exclude must be spread explicitly — setting
           // `exclude` replaces Vitest's own node_modules/.git defaults
           // rather than adding to them.
-          exclude: [...configDefaults.exclude, 'tests/containers/**'],
+          exclude: [...configDefaults.exclude, 'tests/containers/**', 'packages/core/**'],
         },
       },
       {
@@ -79,6 +90,7 @@ export default defineConfig({
           fileParallelism: false,
         },
       },
+      'packages/core',
     ],
     coverage: {
       provider: 'v8',
