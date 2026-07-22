@@ -14,7 +14,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      # Loopback-only: this is an unauthenticated-by-default dev Postgres
+      # (posta:posta). Binding 0.0.0.0 would put it on the local network —
+      # reachable by anyone on the same WiFi/LAN, not just this machine.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -31,7 +34,10 @@ services:
     # CLI flag, so it stays reviewable in a diff.
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     ports:
-      - "6379:6379"
+      # Loopback-only — see docker/redis.conf's comment on `protected-mode
+      # no`: that setting relies entirely on this published port never
+      # being reachable from anything but this machine.
+      - "127.0.0.1:6379:6379"
     volumes:
       - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis-data:/data
@@ -53,8 +59,11 @@ services:
       MINIO_ROOT_USER: ${R2_ACCESS_KEY_ID}
       MINIO_ROOT_PASSWORD: ${R2_SECRET_ACCESS_KEY}
     ports:
-      - "9000:9000" # S3 API — what the app's R2_ENDPOINT points at
-      - "9001:9001" # web console
+      # Loopback-only — same reasoning as postgres/redis above: MinIO's
+      # root credentials here are local dev defaults, not secrets worth
+      # exposing to the local network.
+      - "127.0.0.1:9000:9000" # S3 API — what the app's R2_ENDPOINT points at
+      - "127.0.0.1:9001:9001" # web console
     volumes:
       - minio-data:/data
     healthcheck:
