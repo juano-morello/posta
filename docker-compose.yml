@@ -42,6 +42,29 @@ services:
       retries: 10
       start_period: 5s
 
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      # Reuses the app's own R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY (see
+      # .env.example) as MinIO's root credentials, so local dev has one
+      # pair of values instead of two that could drift apart.
+      MINIO_ROOT_USER: ${R2_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${R2_SECRET_ACCESS_KEY}
+    ports:
+      - "9000:9000" # S3 API — what the app's R2_ENDPOINT points at
+      - "9001:9001" # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
 volumes:
   postgres-data:
   redis-data:
+  minio-data:
