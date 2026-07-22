@@ -13,7 +13,8 @@
   "dependencies": {
     "@posta/contracts": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.0.4",

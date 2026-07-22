@@ -33,8 +33,13 @@ import { configDefaults, defineConfig } from 'vitest/config';
 //     and apps/worker — zero logic until E2/E3 add providers.
 //   - apps/web/src/app/{layout,page}.tsx: the default Next.js app-router
 //     scaffold and a one-line placeholder home page — no logic yet either.
-//   - packages/core/src/index.ts: a documented placeholder (`export {}`)
-//     until E1 adds the Drizzle schema — nothing to cover yet.
+//   - packages/core/src/index.ts: a pure re-export barrel (E1, T1.1.3) —
+//     nothing in it to unit test directly; every export it re-exposes is
+//     already covered where it's actually defined (db/, ulid.ts, ...).
+//     apps/api and apps/worker import through this file (not its
+//     submodules), so it only executes once E2/E3 add integration tests
+//     that do — nothing changes here when that happens, it just starts
+//     showing up in the report with the same 100% its constituents have.
 //
 // thresholds (T0.5.4): global, not per-file — S0.5's acceptance criterion
 // is "floor 80%, build fails below it" as a single number, and per-file
