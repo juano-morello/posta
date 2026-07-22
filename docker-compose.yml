@@ -1,0 +1,28 @@
+# Posta — local dev infrastructure (S0.4).
+#
+# Only datastores run here. The apps (api, worker, web) run on the HOST in
+# watch mode via `pnpm dev` (T0.4.6) — container images for the apps
+# themselves are a later story (S0.7). Credentials come from `.env` at the
+# repo root (copy `.env.example`); compose loads it automatically because
+# it lives next to this file.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres-data:
