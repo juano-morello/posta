@@ -1,7 +1,8 @@
 import { renderToString } from 'react-dom/server';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ThemeProvider, useTheme } from './theme';
+import { THEME_STORAGE_KEY, themeInitScript } from './theme-script';
 
 function ThemeToggleProbe() {
   const { theme, setTheme } = useTheme();
@@ -61,5 +62,76 @@ describe('ThemeProvider (T6.1.11 — SSR-safe)', () => {
       return null;
     }
     expect(() => render(<Orphan />)).toThrow(/ThemeProvider/);
+  });
+});
+
+describe('themeInitScript (T6.1.12 — blocks the flash of wrong theme)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    document.documentElement.classList.remove('light');
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+    document.documentElement.classList.remove('light');
+  });
+
+  function runScript(): void {
+    // eslint-disable-next-line no-new-func -- exercising the exact source
+    // string that gets inlined into <head>, not a hand-written stand-in.
+    new Function(themeInitScript())();
+  }
+
+  it('resolves to dark (no .light class) when storage is empty', () => {
+    runScript();
+    expect(document.documentElement.classList.contains('light')).toBe(false);
+  });
+
+  it('applies .light before hydration when storage already says light', () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'light');
+    runScript();
+    expect(document.documentElement.classList.contains('light')).toBe(true);
+  });
+
+  it('never throws even if localStorage access itself throws (private-mode Safari, etc.)', () => {
+    const originalGetItem = window.localStorage.getItem.bind(window.localStorage);
+    window.localStorage.getItem = () => {
+      throw new Error('storage disabled');
+    };
+    try {
+      expect(runScript).not.toThrow();
+      // falls back to dark — the safe default — rather than crashing.
+      expect(document.documentElement.classList.contains('light')).toBe(false);
+    } finally {
+      window.localStorage.getItem = originalGetItem;
+    }
+  });
+
+  it('persists the theme to localStorage under posta-theme when setTheme runs', () => {
+    render(
+      <ThemeProvider>
+        <ThemeToggleProbe />
+      </ThemeProvider>,
+    );
+    act(() => {
+      fireEvent.click(screen.getByText('go light'));
+    });
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
+  });
+
+  it("hydrates its initial state from whatever the blocking script already applied to <html> (no flash)", () => {
+    // Simulates what actually happens in the browser: the blocking script
+    // runs first and sets the class BEFORE React ever mounts. If
+    // ThemeProvider's initial state ignored that and defaulted to 'dark'
+    // regardless, its very first effect would immediately rip the class
+    // back off — the flash this task exists to prevent.
+    document.documentElement.classList.add('light');
+    render(
+      <ThemeProvider>
+        <ThemeToggleProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('theme-value').textContent).toBe('light');
+    expect(document.documentElement.classList.contains('light')).toBe(true);
   });
 });
