@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import * as sass from 'sass';
 import { describe, expect, it } from 'vitest';
+import { compileTokensCss as compileTokens, extractBlock, extractValue } from './compile-tokens';
 import { relativeLuminance } from './color';
 
 // T6.1.1 — _tokens.scss (POSTA.md §8.1) is the single token source: it
@@ -10,23 +10,6 @@ import { relativeLuminance } from './color';
 // package (not hand-parsing SCSS) is the point of the test — it proves
 // the sheet actually compiles, not just that the source text looks right.
 const TOKENS_PATH = path.resolve(__dirname, '_tokens.scss');
-
-function compileTokens(): string {
-  return sass.compile(TOKENS_PATH).css;
-}
-
-function extractBlock(css: string, selector: string): string {
-  const pattern = new RegExp(`${selector.replace('.', '\\.')}\\s*{([^}]*)}`);
-  return pattern.exec(css)?.[1] ?? '';
-}
-
-function extractValue(block: string, property: string): string {
-  const match = new RegExp(`--${property}:\\s*(#[0-9A-Fa-f]{6})`).exec(block);
-  if (!match) {
-    throw new Error(`tokens.test.ts: --${property} not found in block`);
-  }
-  return match[1]!;
-}
 
 describe('_tokens.scss', () => {
   it('compiles with sass', () => {

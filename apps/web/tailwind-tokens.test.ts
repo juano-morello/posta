@@ -1,10 +1,7 @@
-import path from 'node:path';
-import * as sass from 'sass';
 import resolveConfig from 'tailwindcss/resolveConfig';
 import { describe, expect, it } from 'vitest';
+import { compileTokensCss } from './src/styles/compile-tokens';
 import tailwindConfig from './tailwind.config';
-
-const TOKENS_PATH = path.resolve(__dirname, 'src/styles/_tokens.scss');
 
 // Non-color scales (radius/spacing) also live under :root in _tokens.scss
 // but are never Tailwind "colors" — excluded so the drift comparison below
@@ -17,7 +14,7 @@ function isColorName(name: string): boolean {
 
 /** Every distinct `--name` custom property _tokens.scss emits, color-only. */
 function tokenColorNames(): Set<string> {
-  const css = sass.compile(TOKENS_PATH).css;
+  const css = compileTokensCss();
   const names = new Set<string>();
   for (const match of css.matchAll(/--([a-z0-9-]+):/g)) {
     const name = match[1]!;
