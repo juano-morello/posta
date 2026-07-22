@@ -52,14 +52,19 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# T0.7.7 — non-root runtime user [security]. See apps/api/Dockerfile for
+# why uid 10001 specifically. Created before the COPYs below so
+# --chown=posta:posta can resolve the name.
+RUN addgroup -g 10001 posta && adduser -D -u 10001 -G posta posta
 # No `pnpm install` here at all — Next's standalone output already traced
 # and copied exactly the production node_modules subset this server needs
 # (see .next/standalone/node_modules after a build). That's the whole
 # point of `output: 'standalone'`: unlike api/worker, web's runner doesn't
 # reinstall anything.
-COPY --from=builder /app/apps/web/.next/standalone ./
-COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=builder /app/apps/web/public ./apps/web/public
+COPY --from=builder --chown=posta:posta /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=posta:posta /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=posta:posta /app/apps/web/public ./apps/web/public
+USER posta
 
 # Documentation only — the actual bind port comes from PORT above
 # (config-via-env). Matches .env.example's WEB_PORT default.

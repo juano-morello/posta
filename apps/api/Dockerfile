@@ -68,6 +68,18 @@ RUN pnpm --filter @posta/api... run build
 FROM ${NODE_RUNTIME_BASE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# T0.7.7 — non-root runtime user [security]. uid 10001 is arbitrary,
+# unprivileged, and not used by anything else in the base image; it's
+# also the exact value Kubernetes' `runAsNonRoot`/`runAsUser: 10001`
+# admission checks would enforce, so failing here means failing in CI,
+# not silently at deploy time. alpine has no `useradd` — `addgroup`/
+# `adduser` are busybox's equivalent.
+RUN addgroup -g 10001 posta && adduser -D -u 10001 -G posta posta
+# WORKDIR created /app while still root — `COPY --chown` only chowns the
+# files it copies, not the pre-existing parent directory, and pnpm needs
+# to write a temp file directly under /app during install (not just under
+# node_modules), which fails EACCES as posta otherwise.
+RUN chown posta:posta /app
 RUN corepack enable
 # Prod deps land here via a SECOND, separate `pnpm install --prod` over the
 # pruned manifests — not by copying/filtering the `deps` stage's node_modules.
@@ -76,16 +88,21 @@ RUN corepack enable
 # undoing most of the size win) is fragile. A fresh --prod install is both
 # simpler and correct, at the cost of resolving the dependency graph twice
 # across the two stages.
-COPY --from=pruner /app/out/json/ .
+COPY --from=pruner --chown=posta:posta /app/out/json/ .
+# Switch to posta BEFORE the install (not just before CMD): pnpm needs to
+# write node_modules under /app, and this is the one RUN in the stage that
+# writes anything — everything after it is just COPY --chown, which
+# doesn't care which USER is active.
+USER posta
 RUN pnpm install --prod --frozen-lockfile
 # @posta/api depends on @posta/contracts and @posta/core through pnpm
 # workspace symlinks (apps/api/node_modules/@posta/contracts ->
 # ../../../../packages/contracts) created by the install above — the
 # symlink TARGET needs its compiled dist/ present, or requiring
 # @posta/contracts at runtime resolves to a directory with no dist/index.js.
-COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
-COPY --from=builder /app/packages/core/dist ./packages/core/dist
-COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder --chown=posta:posta /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=builder --chown=posta:posta /app/packages/core/dist ./packages/core/dist
+COPY --from=builder --chown=posta:posta /app/apps/api/dist ./apps/api/dist
 
 # Documentation only — the actual bind address/port come from API_PORT at
 # runtime (config-via-env, per CLAUDE.md). Matches .env.example's default.

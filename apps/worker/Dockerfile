@@ -45,15 +45,23 @@ RUN pnpm --filter @posta/worker... run build
 FROM ${NODE_RUNTIME_BASE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# T0.7.7 — non-root runtime user [security]. See apps/api/Dockerfile for
+# why uid 10001 specifically.
+RUN addgroup -g 10001 posta && adduser -D -u 10001 -G posta posta
+# See apps/api/Dockerfile — pnpm needs to write directly under /app
+# (not just node_modules), which COPY --chown alone doesn't cover since
+# /app itself was created by WORKDIR while still root.
+RUN chown posta:posta /app
 RUN corepack enable
-COPY --from=pruner /app/out/json/ .
+COPY --from=pruner --chown=posta:posta /app/out/json/ .
+USER posta
 RUN pnpm install --prod --frozen-lockfile
 # See apps/api/Dockerfile — @posta/worker resolves @posta/contracts and
 # @posta/core through pnpm workspace symlinks whose target needs its
 # compiled dist/ present.
-COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
-COPY --from=builder /app/packages/core/dist ./packages/core/dist
-COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
+COPY --from=builder --chown=posta:posta /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=builder --chown=posta:posta /app/packages/core/dist ./packages/core/dist
+COPY --from=builder --chown=posta:posta /app/apps/worker/dist ./apps/worker/dist
 
 # Documentation only — the health endpoint's actual bind port comes from
 # WORKER_PORT at runtime (config-via-env). Matches .env.example's default.
