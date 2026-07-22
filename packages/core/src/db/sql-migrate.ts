@@ -102,3 +102,59 @@ export async function runSqlMigrations(pool: Pool, options: SqlMigrateOptions): 
     }
   }
 }
+
+export interface SqlMigrateDownOptions {
+  readonly migrationsDir: string;
+  /**
+   * Some down migrations refuse to run under conditions they consider
+   * unsafe (001_events.down.sql: refuses while `events` still has rows,
+   * since dropping it drops every partition along with it). Passing
+   * `force: true` sets the `posta.force_migration_down` session setting
+   * to `'true'` before running the down SQL, which such a migration can
+   * check via `current_setting('posta.force_migration_down', true)` to
+   * override its own refusal. Not every down migration defines a guard —
+   * this is a convention a down.sql file may opt into, not something the
+   * runner enforces generically.
+   */
+  readonly force?: boolean;
+}
+
+function downFilenameFor(filename: string): string {
+  return filename.replace(/\.sql$/, '.down.sql');
+}
+
+/**
+ * Rolls back one previously-applied migration by running its paired
+ * `NNN_name.down.sql` and deleting its tracking row — both inside the
+ * SAME transaction, so a down script that throws (e.g. 001_events.down.sql's
+ * refusal) leaves the tracking row and the schema exactly as they were.
+ */
+export async function downSqlMigration(
+  pool: Pool,
+  filename: string,
+  options: SqlMigrateDownOptions,
+): Promise<void> {
+  const downFilename = downFilenameFor(filename);
+  const downPath = path.join(options.migrationsDir, downFilename);
+  const content = readFileSync(downPath, 'utf8');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // set_config(), not a string-interpolated `SET LOCAL ...`, so the
+    // force flag is passed as a genuine bind parameter rather than
+    // inlined SQL text — `SET`/`SET LOCAL` themselves don't accept bind
+    // parameters, set_config() is the parameterized equivalent.
+    await client.query(`SELECT set_config('posta.force_migration_down', $1, true)`, [
+      options.force ? 'true' : 'false',
+    ]);
+    await client.query(content);
+    await client.query(`DELETE FROM ${TRACKING_TABLE} WHERE filename = $1`, [filename]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw new Error(`Failed to roll back migration "${filename}": ${describeError(error)}`);
+  } finally {
+    client.release();
+  }
+}
