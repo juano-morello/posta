@@ -16,12 +16,12 @@ describe('sql-migrate down (T1.2.6)', () => {
 
   beforeAll(async () => {
     handle = await startPgContainer();
+    // 004_default_partition.sql (T1.3.2) is now part of MIGRATIONS_DIR,
+    // so this already creates the real events_default partition — no
+    // custom one needed here (a second DEFAULT partition on the same
+    // parent is a Postgres error: "conflicts with existing default
+    // partition").
     await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
-
-    // events has zero partitions until T1.3.x automates partition
-    // creation — a DEFAULT partition here lets this test insert a row
-    // covering any occurred_at without depending on that later story.
-    await handle.pool.query(`CREATE TABLE events_t126_default PARTITION OF events DEFAULT`);
   }, CONTAINER_TEST_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -92,10 +92,18 @@ describe('sql-migrate down (T1.2.6)', () => {
   });
 
   it('down succeeds despite rows present when force: true is passed — the escape hatch, used deliberately', async () => {
-    // The previous test's re-migration recreated the bare partitioned
-    // table with no partitions (the DEFAULT partition from beforeAll was
-    // dropped along with the table in the prior test) — a fresh one is
-    // needed before another INSERT can land anywhere.
+    // The previous test's down('001_events.sql') dropped the whole
+    // `events` table, which CASCADE-dropped events_default (T1.3.2) along
+    // with it. That migration's OWN tracking row was never touched (only
+    // 001/002 were rolled back), so runSqlMigrations' re-migrate in the
+    // previous test treated 004_default_partition.sql as already-applied
+    // (matching checksum) and skipped it — the table was recreated with
+    // no partitions at all. A fresh one is needed before another INSERT
+    // can land anywhere. (This mismatch between "004 is tracked as
+    // applied" and "its physical table doesn't exist" is a known gap in
+    // rolling back a migration whose dependents were never themselves
+    // rolled back first — out of scope for T1.2.6, which only exercises
+    // 001/002's own up/down cycle.)
     await handle.pool.query(`CREATE TABLE events_t126_default_2 PARTITION OF events DEFAULT`);
     await handle.pool.query(`
       INSERT INTO events (event_id, occurred_at, tenant_id, link_id, slug)
