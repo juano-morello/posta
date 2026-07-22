@@ -27,6 +27,7 @@ const colors = {
   success: 'var(--success)',
   warning: 'var(--warning)',
   error: 'var(--error)',
+  'error-fg': 'var(--error-fg)',
   info: 'var(--info)',
   ring: 'var(--ring)',
   n1: 'var(--n1)',
@@ -37,6 +38,7 @@ const colors = {
   card: 'var(--card)',
   'muted-foreground': 'var(--muted-foreground)',
   destructive: 'var(--destructive)',
+  'destructive-foreground': 'var(--destructive-foreground)',
   input: 'var(--input)',
 } as const;
 

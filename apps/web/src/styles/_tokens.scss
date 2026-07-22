@@ -25,6 +25,16 @@ $themes: (
     success: #3FB950,
     warning: #E3B341,
     error: #F85149,
+    // T6.2.5 — DESIGN.md §2.2's shadcn reference block pins
+    // --destructive-foreground to white (0 0% 100%) in BOTH themes. Added
+    // here, not invented at the component layer, because Button's
+    // destructive variant needs a real token (never a bare `text-white` —
+    // Tailwind's stock `white`/`black` keywords don't exist once
+    // theme.colors is a closed palette, T6.1.6). White-on-dark-error
+    // measures 3.35:1 — clears the 3:1 large-text floor, not 4.5:1 normal
+    // text, so the destructive label needs the same large/bold treatment
+    // as primary's.
+    error-fg: #FFFFFF,
     info: #58A6FF,
     ring: #B4FF39,
     // T6.1.3 — no-humano gray ramp (POSTA.md §1). Bots/unfurlers/prefetch
@@ -55,6 +65,7 @@ $themes: (
     success: #2DA44E,
     warning: #BF8700,
     error: #CF222E,
+    error-fg: #FFFFFF,
     info: #0969DA,
     ring: #3F9142,
     // n1 is lightened from POSTA.md §1's literal #8B94A0 (relative
@@ -91,6 +102,7 @@ $shadcn-aliases: (
   card: surface,
   muted-foreground: muted,
   destructive: error,
+  destructive-foreground: error-fg,
   input: border,
 );
 

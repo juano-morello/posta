@@ -31,8 +31,8 @@ describe('shadcn form primitives render without throwing', () => {
   });
 
   it('Input', () => {
-    render(<Input placeholder="juano.posta.lat/____" />);
-    expect(screen.getByPlaceholderText('juano.posta.lat/____')).toBeInTheDocument();
+    render(<Input placeholder="juano.example.test/____" />);
+    expect(screen.getByPlaceholderText('juano.example.test/____')).toBeInTheDocument();
   });
 
   it('Select', () => {
@@ -100,12 +100,12 @@ describe('shadcn overlay primitives open on trigger and trap focus', () => {
       <TooltipProvider delayDuration={0}>
         <Tooltip>
           <TooltipTrigger>copiar</TooltipTrigger>
-          <TooltipContent>copiado: juano.posta.lat/promo</TooltipContent>
+          <TooltipContent>copiado: juano.example.test/promo</TooltipContent>
         </Tooltip>
       </TooltipProvider>,
     );
     await user.hover(screen.getByText('copiar'));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('copiado: juano.posta.lat/promo');
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('copiado: juano.example.test/promo');
   });
 
   it('Sheet', async () => {
@@ -131,12 +131,12 @@ describe('shadcn feedback primitives', () => {
     render(
       <ToastProvider>
         <Toast open>
-          <ToastTitle>link creado: juano.posta.lat/promo</ToastTitle>
+          <ToastTitle>link creado: juano.example.test/promo</ToastTitle>
         </Toast>
         <ToastViewport />
       </ToastProvider>,
     );
-    expect(screen.getByText('link creado: juano.posta.lat/promo')).toBeInTheDocument();
+    expect(screen.getByText('link creado: juano.example.test/promo')).toBeInTheDocument();
   });
 
   it('Skeleton renders without throwing', () => {

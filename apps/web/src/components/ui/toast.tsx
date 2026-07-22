@@ -7,7 +7,7 @@ import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // T6.2.4 — base Radix wiring only. POSTA.md's toast copy is mono
-// microcopy (`copiado: juano.posta.lat/promo`) — the mono body, tight
+// microcopy (`copiado: juano.example.test/promo`) — the mono body, tight
 // radius and lime accent bar land in T6.2.9; this establishes the
 // Provider/Viewport/Root/variant structure that task styles.
 const ToastProvider = ToastPrimitives.Provider;
