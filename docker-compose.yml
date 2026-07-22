@@ -66,11 +66,20 @@ services:
 
   # One-shot: creates the app's two buckets if absent, then exits 0. Runs
   # on every `up`, not just the first — mc mb --ignore-existing makes that
-  # safe — so a fresh clone needs no manual console step.
+  # safe — so a fresh clone needs no manual console step. Depends on all
+  # three datastores' healthchecks, not just minio's — its own clean exit
+  # then doubles as a "the whole stack is ready" signal, matching what
+  # `pnpm dev`'s `docker compose up -d --wait` (T0.4.6) actually waits on:
+  # apps started before this converges would otherwise crash-loop against
+  # infra that looks up but isn't accepting connections yet.
   minio-init:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       minio:
         condition: service_healthy
     environment:
