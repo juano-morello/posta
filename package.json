@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "depcruise": "depcruise --config .dependency-cruiser.js --output-type err-long apps packages",
     "test": "vitest run",
-    "dev": "docker compose up -d --wait postgres redis minio && docker compose up -d && docker compose wait minio-init && turbo run dev"
+    "dev": "docker compose up -d --wait postgres redis minio && docker compose up -d && docker compose wait minio-init && turbo run dev",
+    "dev:reset": "bash scripts/dev-reset.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
