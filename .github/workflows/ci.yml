@@ -2,11 +2,12 @@ name: CI
 
 # S0.5 — "As a maintainer I want every push checked so that main is always
 # deployable." Runs on every PR and on every push to main: install → lint →
-# typecheck → test → build, with pnpm store + turbo caching so a clean run
-# stays fast, and real Postgres/Redis service containers so integration
-# tests run against real datastores rather than mocks. Coverage and
-# depcruise stages land in later commits of the same story (T0.5.3–T0.5.5)
-# — see this file's git history for how it was built up.
+# typecheck → test (with an 80% coverage floor) → build → dependency
+# boundaries (S0.2), with pnpm store + turbo caching so a clean run stays
+# fast, and real Postgres/Redis service containers so integration tests
+# run against real datastores rather than mocks. Built up incrementally
+# across T0.5.1–T0.5.5 — see this file's git history for how each stage
+# was added and verified on its own.
 on:
   pull_request:
   push:

@@ -78,10 +78,18 @@ async function assertRedisHasRequiredPolicy(client: Redis): Promise<void> {
   // ioredis's CONFIG GET returns a flat [key, value] array, e.g.
   // ['maxmemory-policy', 'volatile-lru'] — never a mocked response. Typed
   // as `unknown` by ioredis itself (it can't statically know CONFIG GET's
-  // shape), so this asserts the real runtime shape rather than leaving it
-  // unchecked or destructuring straight off `unknown`.
-  const rawConfigGetResult = (await client.config('GET', 'maxmemory-policy')) as string[];
-  const [, actualPolicy] = rawConfigGetResult;
+  // shape). A bare `as string[]` would silently let a genuinely malformed
+  // response (an error object, a differently-shaped array) through to the
+  // destructure below — checked here instead, so a real Redis protocol
+  // surprise fails with a clear message rather than an obscure assertion
+  // mismatch or a value quietly read from the wrong index.
+  const rawConfigGetResult: unknown = await client.config('GET', 'maxmemory-policy');
+  if (!Array.isArray(rawConfigGetResult) || rawConfigGetResult.length < 2) {
+    throw new Error(
+      `Unexpected CONFIG GET response shape from Redis: ${JSON.stringify(rawConfigGetResult)}`,
+    );
+  }
+  const [, actualPolicy] = rawConfigGetResult as string[];
 
   expect(actualPolicy).toBe(REQUIRED_POLICY);
 }

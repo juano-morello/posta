@@ -2,9 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 // Root-level Vitest config. tests/** holds workspace-level tests — checks
 // that span multiple packages (the S0.2 dependency-boundary tests) rather
-// than belonging to any single package. Package-level unit tests get their
-// own configs later (T0.5.3); this one deliberately only wires up
-// tests/**, no coverage thresholds yet (that is T0.5.4).
+// than belonging to any single package.
 //
 // packages/**/*.test.ts added in T0.3.2: the plan puts contracts' unit
 // tests beside their source (packages/contracts/src/env.test.ts etc.),
@@ -28,8 +26,9 @@ import { defineConfig } from 'vitest/config';
 // measure, so the number reflects real coverage rather than being gamed
 // by padding the denominator with unmeasurable glue:
 //   - **/main.ts: NestJS bootstrap wiring (env validation + NestFactory
-//     .create + listen) — not business logic, and nothing imports it in a
-//     test (nothing ever calls bootstrap()).
+//     .create + listen + the inline `/health` handler) — infrastructure
+//     wiring, not domain business logic, and nothing imports it in a test
+//     (nothing ever calls bootstrap()).
 //   - **/app.module.ts: an empty `@Module({})` scaffold in both apps/api
 //     and apps/worker — zero logic until E2/E3 add providers.
 //   - apps/web/src/app/{layout,page}.tsx: the default Next.js app-router
