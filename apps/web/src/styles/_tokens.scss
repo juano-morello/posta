@@ -27,6 +27,15 @@ $themes: (
     error: #F85149,
     info: #58A6FF,
     ring: #B4FF39,
+    // T6.1.3 — no-humano gray ramp (POSTA.md §1). Bots/unfurlers/prefetch
+    // paint on n1/n2/n3 rather than a flat gray, so the HumanoBar's
+    // non-human segments read as a graded ramp, not one undifferentiated
+    // block. Never near-black on white — that guarantee is theme-specific
+    // (light gets its own brighter set below), so this is per-theme, not
+    // one shared value.
+    n1: #5a6069,
+    n2: #3f444c,
+    n3: #2b3038,
   ),
   // T6.1.2 — light is support, not an inverted dark. Pure lime on white
   // fails AA (T6.1.14 is what proves it), so light drops primary to the
@@ -48,6 +57,14 @@ $themes: (
     error: #CF222E,
     info: #0969DA,
     ring: #3F9142,
+    // n1 is lightened from POSTA.md §1's literal #8B94A0 (relative
+    // luminance 0.29) to #9CA6B3 (0.38) — same blue-gray hue, just bright
+    // enough to clear the task's own >0.35 "never near-black on white"
+    // floor (T6.1.3) with headroom, while staying visibly darker than n2
+    // so the bot→unfurler→prefetch ramp keeps its ordering.
+    n1: #9CA6B3,
+    n2: #B7BFC9,
+    n3: #D6DCE3,
   ),
 );
 

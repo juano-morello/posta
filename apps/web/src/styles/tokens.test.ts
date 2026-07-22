@@ -51,4 +51,20 @@ describe('_tokens.scss', () => {
     const surface = extractValue(light, 'surface');
     expect(relativeLuminance(surface)).toBeGreaterThan(relativeLuminance(bg));
   });
+
+  it('gives the no-humano gray ramp (n1/n2/n3) a different value per theme', () => {
+    const css = compileTokens();
+    const root = extractBlock(css, ':root');
+    const light = extractBlock(css, '.light');
+    for (const level of ['n1', 'n2', 'n3']) {
+      expect(extractValue(light, level)).not.toBe(extractValue(root, level));
+    }
+  });
+
+  it('keeps every light-mode gray-ramp swatch off near-black (luminance > 0.35)', () => {
+    const light = extractBlock(compileTokens(), '.light');
+    for (const level of ['n1', 'n2', 'n3']) {
+      expect(relativeLuminance(extractValue(light, level))).toBeGreaterThan(0.35);
+    }
+  });
 });
