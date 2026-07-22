@@ -25,15 +25,31 @@ const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
  * {@link isUlid} first. */
 export type Ulid = string & { readonly __brand: 'Ulid' };
 
-/** Generates a new id: a 26-char ULID, monotonic within this process even
- * across calls made in the same millisecond. */
-export function newId(): Ulid {
-  return generateMonotonicUlid() as Ulid;
-}
-
 /** Type guard: true only for a genuine 26-char Crockford ULID — rejects a
  * UUID (hyphenated, lowercase hex, wrong alphabet), wrong-length strings,
  * and the empty string. */
 export function isUlid(value: string): value is Ulid {
   return value.length === ULID_LENGTH && ULID_PATTERN.test(value) && isValid(value);
+}
+
+/**
+ * Generates a new id: a 26-char ULID, monotonic within this process even
+ * across calls made in the same millisecond.
+ *
+ * The cast to `Ulid` below is a trust boundary on the `ulid` package: this
+ * is the ONE place that boundary is crossed, so it is checked at runtime
+ * rather than assumed — if `monotonicFactory()` ever produced something
+ * malformed (a library bug, a future breaking change), this throws
+ * immediately at the point ids are minted instead of silently handing out
+ * a value that only fails a downstream isUlid()/DB constraint check much
+ * later, far from its actual origin.
+ */
+export function newId(): Ulid {
+  const generated = generateMonotonicUlid();
+
+  if (!isUlid(generated)) {
+    throw new Error(`ulid's monotonicFactory() produced a malformed id: "${generated}"`);
+  }
+
+  return generated;
 }

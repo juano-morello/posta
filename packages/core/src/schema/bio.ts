@@ -12,6 +12,11 @@ import { links } from './links';
 // FK, no themes table.
 export const bioPages = pgTable('bio_pages', {
   id: text('id').primaryKey(),
+  // No explicit `onDelete` (defaults to NO ACTION) — same rationale as
+  // links.tenantId: users are never deleted in v1, so a future
+  // account-deletion flow (v1.5+) must explicitly cascade or
+  // archive/redact tenant data first, rather than this FK silently doing
+  // it.
   tenantId: text('tenant_id')
     .notNull()
     .references(() => user.id),
@@ -42,6 +47,7 @@ export const bioLinks = pgTable(
   'bio_links',
   {
     id: text('id').primaryKey(),
+    // Same NO ACTION rationale as bioPages.tenantId/links.tenantId above.
     tenantId: text('tenant_id')
       .notNull()
       .references(() => user.id),

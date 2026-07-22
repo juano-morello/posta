@@ -23,6 +23,47 @@ export interface PgContainerHandle {
   stop(): Promise<void>;
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Closes the db pool AND stops the container, unconditionally attempting
+ * both even if the first fails — a plain `await closeDb(); await
+ * container.stop();` sequence would leak the container whenever
+ * `closeDb()` throws, since the second call would never run. If both
+ * fail, both messages are reported (never just the first, silently
+ * dropping the second).
+ */
+async function closeClientAndContainer(
+  client: DbClient,
+  container: StartedPostgreSqlContainer,
+): Promise<void> {
+  let closeError: unknown;
+  try {
+    await client.closeDb();
+  } catch (error) {
+    closeError = error;
+  }
+
+  let stopError: unknown;
+  try {
+    await container.stop();
+  } catch (error) {
+    stopError = error;
+  }
+
+  if (closeError && stopError) {
+    throw new Error(
+      `Failed to clean up the testcontainers Postgres: closeDb() failed with ` +
+        `"${describeError(closeError)}", then container.stop() failed with ` +
+        `"${describeError(stopError)}".`,
+    );
+  }
+  if (closeError) throw closeError;
+  if (stopError) throw stopError;
+}
+
 /**
  * Boots a fresh Postgres 16 container, migrates it, and returns a handle.
  * Callers own the handle's lifecycle: always call `stop()` (typically from
@@ -35,14 +76,26 @@ export async function startPgContainer(): Promise<PgContainerHandle> {
   const url = container.getConnectionUri();
 
   const client = createDbClient({ connectionString: url, max: CONTAINER_POOL_MAX });
-  await runDrizzleMigrations(client.db);
+
+  try {
+    await runDrizzleMigrations(client.db);
+  } catch (error) {
+    // The container booted successfully but migrations failed BEFORE any
+    // handle (and its stop()) reached the caller — without this, the
+    // container leaks, since nothing else in this function's caller ever
+    // gets a chance to stop it. Cleanup here is best-effort (the
+    // migration failure is the error that actually gets thrown; a
+    // secondary cleanup failure would otherwise mask it).
+    await closeClientAndContainer(client, container).catch(() => undefined);
+    throw new Error(
+      `Failed to run drizzle migrations against the testcontainers Postgres at ${url}: ` +
+        describeError(error),
+    );
+  }
 
   return {
     db: client.db,
     url,
-    async stop(): Promise<void> {
-      await client.closeDb();
-      await container.stop();
-    },
+    stop: () => closeClientAndContainer(client, container),
   };
 }

@@ -1,4 +1,4 @@
-import { and, eq, type SQL } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { bioLinks, bioPages } from '../schema/bio';
@@ -14,12 +14,32 @@ import { links } from '../schema/links';
 // never `db.select().from(links)` directly (T1.1.10 enforces that with a
 // static scan).
 
-/** ANDs the tenant scope onto an optional extra predicate. Shared by every
+/**
+ * ANDs the tenant scope onto an optional extra predicate. Shared by every
  * scoped table below so "every query is tenant-scoped" is one function's
- * job, not four near-identical copies of the same eq()/and() call. */
+ * job, not four near-identical copies of the same eq()/and() call.
+ *
+ * [security] `extra` is wrapped in its OWN parens — `sql\`(${extra})\`` —
+ * before being ANDed with the tenant condition, and this is load-bearing,
+ * not decoration. drizzle's `and(a, b)` wraps the WHOLE "a and b"
+ * expression in one set of outer parens, but does not parenthesize each
+ * operand individually. If `extra` were ever a hand-written `sql`
+ * template containing a top-level, unparenthesized `OR` — e.g.
+ * `sql\`${links.id} = ${x} or ${links.tenantId} != ${tenantId}\`` —
+ * `and(scoped, extra)` compiles to
+ * `(tenant_id = $1 and id = $2 or tenant_id != $3)`, which SQL's
+ * AND-before-OR precedence parses as
+ * `(tenant_id = $1 and id = $2) or (tenant_id != $3)` — true for every
+ * OTHER tenant's rows, a complete inversion of the tenant boundary this
+ * whole module exists to enforce. Wrapping `extra` in its own parens
+ * makes it an atomic unit regardless of what it contains internally, so
+ * no possible `extra` can escape the tenant condition. Verified with a
+ * regression test in tenant.test.ts that builds exactly this shape.
+ */
 function tenantScope(tenantColumn: PgColumn, tenantId: string, extra?: SQL): SQL {
   const scoped = eq(tenantColumn, tenantId);
-  return extra ? (and(scoped, extra) ?? scoped) : scoped;
+  if (!extra) return scoped;
+  return and(scoped, sql`(${extra})`)!;
 }
 
 function scopedLinks(db: NodePgDatabase, tenantId: string) {

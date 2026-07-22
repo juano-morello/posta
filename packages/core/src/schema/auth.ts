@@ -42,6 +42,18 @@ export const session = pgTable(
     token: text('token').notNull().unique(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    // [security review, batch 1] Better Auth's own generated column,
+    // kept unchanged — standard practice for session/auth audit trails
+    // (detecting session hijacking, listing "signed in from" devices).
+    // This is NOT in tension with invariant 6 ("the raw IP is never
+    // stored or queued"): that invariant's context is click-analytics
+    // capture (the redirect hot path, S2.3/S3.x), where visitor_hash
+    // replaces the IP specifically because millions of anonymous
+    // visitors' IPs would otherwise be retained indefinitely. This
+    // column stores the IP of an authenticated user's OWN login session
+    // (today: the single seeded v1 account, invariant 9) — a
+    // fundamentally different retention/consent context, not a second,
+    // undocumented place invariant 6 is being violated.
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
     userId: text('user_id')

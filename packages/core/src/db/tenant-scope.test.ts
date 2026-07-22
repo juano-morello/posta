@@ -18,6 +18,32 @@ import { describe, expect, it } from 'vitest';
 // E2 and E5 goes through forTenant()" claim this check exists to enforce.
 // Flagging E1's own test fixtures would defeat the point of the check,
 // not strengthen it.
+//
+// [security review, batch 1] Known blind spots — this is a plain-text
+// regex scan, not an AST/type-aware check, so "this test passes" means
+// "no violation in the LITERAL shape it looks for", not "no bypass
+// exists". Concretely, none of the following are caught today:
+//   - An aliased `db` import or destructured method:
+//     `import { db as pgDb } from '...'; pgDb.select().from(links)`, or
+//     `const { select } = db; select().from(links)`.
+//   - An aliased table import: `import { links as tenantLinks } from
+//     '../schema/links'; db.select().from(tenantLinks)`.
+//   - A table reference stored in an intermediate variable:
+//     `const table = links; db.select().from(table)`.
+//   - Drizzle's relational query API: `db.query.links.findMany(...)` /
+//     `.findFirst(...)` never take the `db.select().from(<table>)` /
+//     `db.update(<table>)` / `db.delete(<table>)` shape these patterns
+//     look for.
+//   - Raw SQL execution: `db.execute(sql\`SELECT * FROM links ...\`)`.
+// This is still a genuinely useful defense-in-depth CI gate for the
+// straightforward, by-far-most-common bypass shape (someone forgets
+// forTenant() exists and writes the obvious `db.select().from(links)`),
+// and its own synthetic-fixture suite below proves it fires for that
+// shape. Migrating to an AST-based check (ts-morph, or a custom ESLint
+// rule with type information, which could resolve imports/aliases and
+// also reach db.query.*/db.execute) would close these gaps; out of scope
+// for T1.1.10's own acceptance criterion, recorded here so "the scanner
+// passed" is never misread as "no bypass exists".
 
 const TENANT_TABLE_IDENTIFIERS = ['links', 'bioPages', 'bioLinks', 'domains'] as const;
 
@@ -91,7 +117,18 @@ function findTenantScopeViolations(
     if (!relativePath.endsWith('.ts')) return;
     if (isExcludedFile(relativePath)) return;
 
-    const content = readFileSync(fullPath, 'utf8');
+    let content: string;
+    try {
+      content = readFileSync(fullPath, 'utf8');
+    } catch (error: unknown) {
+      // An unreadable file (permissions, I/O) must fail loudly, naming
+      // the file — silently skipping it would report a false-clean scan
+      // over a subtree that was never actually checked.
+      throw new Error(
+        `Failed to read file "${relativePath}" while scanning for tenant-scope ` +
+          `violations: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     for (const { method, regex } of patterns) {
       regex.lastIndex = 0;

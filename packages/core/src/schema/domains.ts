@@ -13,6 +13,9 @@ export const domains = pgTable(
   'domains',
   {
     id: text('id').primaryKey(),
+    // Same NO ACTION rationale as links.tenantId (schema/links.ts):
+    // users are never deleted in v1, so a future account-deletion flow
+    // must explicitly cascade or archive/redact tenant data first.
     tenantId: text('tenant_id')
       .notNull()
       .references(() => user.id),

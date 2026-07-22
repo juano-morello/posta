@@ -58,6 +58,21 @@ describe('createBioPageSchema optional fields', () => {
   it('does not require displayName, bio, avatarUrl, or themeId', () => {
     expect(createBioPageSchema.safeParse({ handle: 'juano-dev' }).success).toBe(true);
   });
+
+  it.each([
+    ['displayName', 'a'.repeat(101)],
+    ['bio', 'a'.repeat(501)],
+    ['themeId', 'a'.repeat(51)],
+  ] as const)('[security] rejects %s over its length bound', (field, value) => {
+    const result = createBioPageSchema.safeParse({ handle: 'juano-dev', [field]: value });
+    expect(result.success).toBe(false);
+  });
+
+  it('[security] rejects avatarUrl over the 2048-char length bound', () => {
+    const hugeAvatarUrl = `https://example.com/${'a'.repeat(2048)}.png`;
+    const result = createBioPageSchema.safeParse({ handle: 'juano-dev', avatarUrl: hugeAvatarUrl });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('updateBioPageSchema', () => {
@@ -88,6 +103,11 @@ describe('createBioLinkSchema (T1.1.12)', () => {
 
   it('rejects a missing linkId', () => {
     expect(createBioLinkSchema.safeParse({ position: 0 }).success).toBe(false);
+  });
+
+  it('[security] rejects a linkId that is not a valid ULID shape', () => {
+    const result = createBioLinkSchema.safeParse({ linkId: 'not-a-ulid', position: 0 });
+    expect(result.success).toBe(false);
   });
 
   it('rejects a negative position', () => {

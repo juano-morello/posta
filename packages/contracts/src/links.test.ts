@@ -23,6 +23,12 @@ describe('createLinkSchema.destination (T1.1.11) [security]', () => {
     const result = createLinkSchema.safeParse({ slug: 'promo', destination: 'http://x.com' });
     expect(result.success).toBe(true);
   });
+
+  it('[security] rejects a destination over the 2048-char length bound', () => {
+    const hugeDestination = `https://x.com/${'a'.repeat(2048)}`;
+    const result = createLinkSchema.safeParse({ slug: 'promo', destination: hugeDestination });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('createLinkSchema.slug', () => {
@@ -56,6 +62,15 @@ describe('createLinkSchema.title', () => {
       title: 'My Promo',
     });
     expect(result.success).toBe(true);
+  });
+
+  it('[security] rejects a title over the 200-char length bound', () => {
+    const result = createLinkSchema.safeParse({
+      slug: 'promo',
+      destination: 'https://x.com',
+      title: 'a'.repeat(201),
+    });
+    expect(result.success).toBe(false);
   });
 });
 

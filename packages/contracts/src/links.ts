@@ -13,7 +13,17 @@ import { RESERVED_PATHS } from './reserved';
 
 const DESTINATION_PROTOCOL_PATTERN = /^https?$/;
 
-const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN });
+// [security review, batch 1] Deliberately generous but finite: z.url()
+// alone imposes no length ceiling (verified — a 5,000+ character
+// hostname parses and validates successfully), and the destination
+// column is an unbounded Postgres `text`. Without a bound here, a tenant
+// could insert an arbitrarily large string repeatedly — this is the one
+// place S1.1 already commits to being the primary validation gate ahead
+// of the DB.
+const DESTINATION_MAX_LENGTH = 2048;
+const TITLE_MAX_LENGTH = 200;
+
+const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTINATION_MAX_LENGTH);
 
 // Lowercase alnum + dash only ([a-z0-9-], no underscore — must match S5.3
 // exactly), 1-64 chars, no leading or trailing hyphen. The optional
@@ -46,7 +56,7 @@ const zSlug = z
 export const createLinkSchema = z.object({
   slug: zSlug,
   destination: zDestination,
-  title: z.string().optional(),
+  title: z.string().max(TITLE_MAX_LENGTH).optional(),
 });
 
 export const updateLinkSchema = createLinkSchema.partial();

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startPgContainer, type PgContainerHandle } from '../test/pg-container';
 import { newId } from '../ulid';
@@ -65,6 +65,21 @@ describe('forTenant (T1.1.9)', () => {
     const ids = rows.map((row) => row.id);
 
     expect(ids).toContain(linkA);
+    expect(ids).not.toContain(linkB);
+  });
+
+  it('[security] a hand-written extra predicate containing a raw top-level OR cannot escape the tenant scope', async () => {
+    const repoA = forTenant(handle.db, tenantA);
+
+    // The exact shape that, without tenantScope()'s defensive `sql\`(${extra})\``
+    // wrapping, would invert the tenant boundary via SQL's AND-before-OR
+    // precedence: `(tenant_id = A and id = linkA) or tenant_id != A` matches
+    // every OTHER tenant's rows too — including linkB, tenant B's row.
+    const maliciousExtra = sql`${links.id} = ${linkA} or ${links.tenantId} != ${tenantA}`;
+
+    const rows = await repoA.links.select(maliciousExtra);
+    const ids = rows.map((row) => row.id);
+
     expect(ids).not.toContain(linkB);
   });
 
