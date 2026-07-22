@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { SECRET_ENV_KEYS, zBooleanish, zCsvList, zNonEmpty, zPort, zUrl } from './env';
+import { z } from 'zod';
+import {
+  formatEnvFailures,
+  loadEnv,
+  redactSecrets,
+  SECRET_ENV_KEYS,
+  zBooleanish,
+  zCsvList,
+  zNonEmpty,
+  zPort,
+  zUrl,
+} from './env';
 
 // These are pure Zod schemas (T0.3.2) — no process.env access, so they can
 // be exercised directly with literal strings the way an app's env schema
@@ -155,5 +166,163 @@ describe('SECRET_ENV_KEYS', () => {
         'REVALIDATE_SECRET',
       ].sort(),
     );
+  });
+});
+
+// loadEnv/formatEnvFailures (T0.3.8) — the shared fail-fast loader. Pure
+// and isomorphic: never reads process.env itself (the raw record is an
+// argument), never process.exit()s, never console.logs. Callers (each
+// app's main.ts) own the side effects; this module only ever returns
+// data or a string.
+describe('loadEnv', () => {
+  const schema = z.object({
+    REQUIRED_URL: zUrl,
+    REQUIRED_PORT: zPort,
+    OPTIONAL_ISH: zNonEmpty,
+  });
+
+  it('returns ok:true with the parsed data on a fully valid record', () => {
+    const result = loadEnv(schema, {
+      REQUIRED_URL: 'https://example.test',
+      REQUIRED_PORT: '3001',
+      OPTIONAL_ISH: 'present',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        REQUIRED_URL: 'https://example.test',
+        REQUIRED_PORT: 3001,
+        OPTIONAL_ISH: 'present',
+      },
+    });
+  });
+
+  it('reports every missing key at once, not just the first', () => {
+    const result = loadEnv(schema, {});
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const keys = result.failures.map((f) => f.key).sort();
+    expect(keys).toEqual(['OPTIONAL_ISH', 'REQUIRED_PORT', 'REQUIRED_URL']);
+    expect(result.failures.every((f) => f.reason === 'missing')).toBe(true);
+  });
+
+  it('distinguishes "missing" (key absent/empty) from "invalid" (key present but malformed)', () => {
+    const result = loadEnv(schema, {
+      REQUIRED_URL: 'not-a-url',
+      REQUIRED_PORT: '99999',
+      OPTIONAL_ISH: 'present',
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const byKey = Object.fromEntries(result.failures.map((f) => [f.key, f.reason]));
+    expect(byKey.REQUIRED_URL).toBe('invalid');
+    expect(byKey.REQUIRED_PORT).toBe('invalid');
+  });
+
+  it('treats an empty-string value the same as a missing key', () => {
+    const result = loadEnv(schema, {
+      REQUIRED_URL: 'https://example.test',
+      REQUIRED_PORT: '3001',
+      OPTIONAL_ISH: '',
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failures).toEqual([{ key: 'OPTIONAL_ISH', reason: 'missing' }]);
+  });
+
+  it('never reads process.env itself — an unrelated real env var does not leak into a passing result', () => {
+    const originalValue = process.env.LOADENV_ISOMORPHIC_PROBE;
+    process.env.LOADENV_ISOMORPHIC_PROBE = 'should-be-invisible';
+    try {
+      const result = loadEnv(schema, {
+        REQUIRED_URL: 'https://example.test',
+        REQUIRED_PORT: '3001',
+        OPTIONAL_ISH: 'present',
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data).not.toHaveProperty('LOADENV_ISOMORPHIC_PROBE');
+    } finally {
+      if (originalValue === undefined) delete process.env.LOADENV_ISOMORPHIC_PROBE;
+      else process.env.LOADENV_ISOMORPHIC_PROBE = originalValue;
+    }
+  });
+
+  it('never includes a failing value anywhere in its output, secret or not', () => {
+    const result = loadEnv(schema, {
+      REQUIRED_URL: 'this-is-not-a-url-but-contains-hunter2-a-fake-secret',
+      REQUIRED_PORT: '3001',
+      OPTIONAL_ISH: 'present',
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const serialized = JSON.stringify(result.failures);
+    expect(serialized).not.toContain('hunter2');
+    expect(serialized).not.toContain('this-is-not-a-url');
+  });
+});
+
+describe('formatEnvFailures', () => {
+  it('names every failing key on its own line', () => {
+    const output = formatEnvFailures([
+      { key: 'DATABASE_URL', reason: 'missing' },
+      { key: 'API_PORT', reason: 'invalid' },
+    ]);
+
+    expect(output).toContain('DATABASE_URL: missing');
+    expect(output).toContain('API_PORT: invalid');
+  });
+
+  it('never echoes a value — only the shape {key, reason} strings ever reach the formatter', () => {
+    // formatEnvFailures's own type signature (EnvFailure[]) makes a raw
+    // value structurally impossible to pass in; this asserts the
+    // *output* stays confined to what a caller who only has {key,
+    // reason} pairs could ever produce, i.e. no hidden interpolation of
+    // anything beyond those two fields.
+    const output = formatEnvFailures([{ key: 'BETTER_AUTH_SECRET', reason: 'missing' }]);
+
+    expect(output).toBe(
+      [
+        'Invalid environment configuration. Fix these variables before starting:',
+        '  - BETTER_AUTH_SECRET: missing',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('redactSecrets', () => {
+  it('replaces every SECRET_ENV_KEYS value with a placeholder, leaving others untouched', () => {
+    const parsed = {
+      DATABASE_URL: 'postgresql://posta:realpassword@prod-db/posta',
+      API_PORT: 3001,
+      LOG_LEVEL: 'info',
+    };
+
+    const redacted = redactSecrets(parsed);
+
+    expect(redacted.DATABASE_URL).not.toBe(parsed.DATABASE_URL);
+    expect(redacted.DATABASE_URL).not.toContain('realpassword');
+    expect(redacted.API_PORT).toBe(3001);
+    expect(redacted.LOG_LEVEL).toBe('info');
+  });
+
+  it('accepts a custom secret-key set instead of the default', () => {
+    const redacted = redactSecrets({ CUSTOM_TOKEN: 'abc123', OTHER: 'kept' }, ['CUSTOM_TOKEN']);
+
+    expect(redacted.CUSTOM_TOKEN).not.toBe('abc123');
+    expect(redacted.OTHER).toBe('kept');
+  });
+
+  it('does not mutate the input object (immutability)', () => {
+    const parsed = { BETTER_AUTH_SECRET: 'super-secret-value' };
+    redactSecrets(parsed);
+
+    expect(parsed.BETTER_AUTH_SECRET).toBe('super-secret-value');
   });
 });

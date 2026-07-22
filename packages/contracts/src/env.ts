@@ -2,10 +2,19 @@ import { z } from 'zod';
 
 // Shared, isomorphic Zod primitives for validating environment-shaped
 // string input (S0.3). These are schemas only — nothing here reads
-// `process.env`. Each app's own env schema (T0.3.5–T0.3.7, next batch)
-// applies these primitives to the keys it cares about, and `web` can
-// reuse the exact same primitives for browser-side validation (e.g.
-// NEXT_PUBLIC_* values) without pulling in anything server-only.
+// `process.env`. Each app's own env schema (T0.3.5–T0.3.7) applies these
+// primitives to the keys it cares about, and `web` can reuse the exact
+// same primitives for browser-side validation (e.g. NEXT_PUBLIC_*
+// values) without pulling in anything server-only.
+//
+// This file also holds the pieces every app's fail-fast startup shares
+// (T0.3.8): SECRET_ENV_KEYS (the one declared secret-name set),
+// loadEnv (parses a schema against a raw record, collecting every
+// failure), formatEnvFailures (a safe-to-print report), and
+// redactSecrets (a safe-to-log copy of a parsed config). All four stay
+// isomorphic on the same terms as the primitives above — no
+// `process.env`, no `process.exit`, no logging; those side effects
+// belong to each app's own main.ts.
 
 /**
  * A TCP port: an integer between 1 and 65535, coerced from the string
@@ -84,3 +93,110 @@ export const SECRET_ENV_KEYS: readonly string[] = Object.freeze([
   'SEED_USER_PASSWORD',
   'REVALIDATE_SECRET',
 ]);
+
+/** One failing env key: its name and a generic (never value-derived) reason. */
+export interface EnvFailure {
+  readonly key: string;
+  readonly reason: 'missing' | 'invalid';
+}
+
+export interface EnvLoadSuccess<T> {
+  readonly ok: true;
+  readonly data: T;
+}
+
+export interface EnvLoadFailure {
+  readonly ok: false;
+  readonly failures: readonly EnvFailure[];
+}
+
+export type EnvLoadResult<T> = EnvLoadSuccess<T> | EnvLoadFailure;
+
+/**
+ * The shared fail-fast env loader (S0.3, T0.3.8). Isomorphic like
+ * everything else in this file: it takes the raw record as an argument
+ * (an app's own main.ts passes `process.env`) and never reads
+ * `process.env` itself, never calls `process.exit`, never logs — those
+ * are the calling app's job, not this module's.
+ *
+ * On success, returns the fully parsed/coerced config. On failure,
+ * returns EVERY failing key at once (Zod's `.safeParse` plus a walk over
+ * `error.issues`, not a throw-on-first-error path), each reduced to just
+ * its key name and a `'missing' | 'invalid'` reason — never the value
+ * that failed, and never anything derived from Zod's own issue message
+ * (a custom `.refine`/`.transform` message, e.g. zBooleanish's, can
+ * legally echo its input; this function never surfaces that string, for
+ * ANY key, not only ones in SECRET_ENV_KEYS — the failing key's raw
+ * presence/absence in `rawEnv` is checked independently instead, which
+ * is what makes "missing" vs "invalid" safe to compute without ever
+ * touching the value itself in the returned failure).
+ */
+export function loadEnv<T>(
+  schema: z.ZodType<T>,
+  rawEnv: Readonly<Record<string, string | undefined>>,
+): EnvLoadResult<T> {
+  const parsed = schema.safeParse(rawEnv);
+
+  if (parsed.success) {
+    return { ok: true, data: parsed.data };
+  }
+
+  const seenKeys = new Set<string>();
+  const failures: EnvFailure[] = [];
+
+  for (const issue of parsed.error.issues) {
+    const key = issue.path.length > 0 ? String(issue.path[0]) : '(root)';
+    if (seenKeys.has(key)) continue; // one entry per key, even if it fails multiple checks
+    seenKeys.add(key);
+
+    const rawValue = rawEnv[key];
+    failures.push({
+      key,
+      reason: rawValue === undefined || rawValue === '' ? 'missing' : 'invalid',
+    });
+  }
+
+  return { ok: false, failures };
+}
+
+/**
+ * Renders a list of env failures into a human-readable report, safe to
+ * print to stderr and exit(1) on. Confined to EnvFailure's `{key,
+ * reason}` shape — there is no value anywhere in the input type for this
+ * function to accidentally interpolate.
+ */
+export function formatEnvFailures(failures: readonly EnvFailure[]): string {
+  const lines = failures.map((failure) => `  - ${failure.key}: ${failure.reason}`);
+
+  return [
+    'Invalid environment configuration. Fix these variables before starting:',
+    ...lines,
+  ].join('\n');
+}
+
+const SECRET_REDACTION_PLACEHOLDER = '[REDACTED]';
+
+/**
+ * Returns a shallow copy of a parsed config object with every
+ * `secretKeys` entry replaced by a fixed placeholder — never mutates
+ * `values`. Meant for the one legitimate reason to ever print a parsed
+ * env object (a startup debug log of "here is the config I loaded"):
+ * logging `values` directly would leak DATABASE_URL/REDIS_URL/R2
+ * credentials/BETTER_AUTH_SECRET/etc. in plaintext; logging
+ * `redactSecrets(values)` instead does not. Defaults to SECRET_ENV_KEYS
+ * — the same declared set web's NEXT_PUBLIC_ leak test (T0.3.7) checks
+ * against — so there is one list, not two.
+ */
+export function redactSecrets<T extends Record<string, unknown>>(
+  values: T,
+  secretKeys: readonly string[] = SECRET_ENV_KEYS,
+): Record<string, unknown> {
+  const secretKeySet = new Set(secretKeys);
+  const redacted: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(values)) {
+    redacted[key] = secretKeySet.has(key) ? SECRET_REDACTION_PLACEHOLDER : value;
+  }
+
+  return redacted;
+}
