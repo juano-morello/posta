@@ -109,6 +109,22 @@ export default defineConfig({
         'apps/web/src/app/layout.tsx',
         'apps/web/src/app/page.tsx',
         'packages/core/src/index.ts',
+        // T1.1.4: auth.ts's four tables are consumed two ways, and
+        // NEITHER one is a TypeScript import that would make v8 count its
+        // lines as executed. drizzle-kit reads it as a static file path
+        // (a separate CLI process, `db:generate`) to emit the SQL
+        // migration auth.test.ts actually migrates and asserts against —
+        // that test's coverage is real, it just lands on the generated
+        // .sql file, which isn't a coverage target at all. At runtime,
+        // only Better Auth's OWN drizzle adapter will ever import these
+        // exports (`user`, `session`, ...), and that wiring is E5's job,
+        // outside packages/core. Unlike links.ts/bio.ts/domains.ts
+        // (T1.1.5-8), which T1.1.9's tenant-scoped repository helper
+        // imports within this same epic and so pick up real coverage —
+        // this exclude is scoped to auth.ts specifically, not the whole
+        // schema/ folder, so a genuine future gap in one of those files
+        // still fails the threshold instead of being silently masked.
+        'packages/core/src/schema/auth.ts',
       ],
       thresholds: {
         lines: 80,
