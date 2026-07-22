@@ -29,7 +29,7 @@ async function findForbiddenColumns(pool: Pool, tableName: string): Promise<stri
   const result = await pool.query<{ column_name: string }>(
     `
       SELECT column_name FROM information_schema.columns
-      WHERE table_name = $1 AND column_name = ANY($2)
+      WHERE table_schema = current_schema() AND table_name = $1 AND column_name = ANY($2)
     `,
     [tableName, FORBIDDEN_COLUMN_NAMES],
   );
@@ -72,7 +72,7 @@ describe('events has no ip or classification column (T1.2.5) [INV-4][INV-6][secu
       const result = await client.query<{ column_name: string }>(
         `
           SELECT column_name FROM information_schema.columns
-          WHERE table_name = 'events' AND column_name = ANY($1)
+          WHERE table_schema = current_schema() AND table_name = 'events' AND column_name = ANY($1)
         `,
         [FORBIDDEN_COLUMN_NAMES],
       );

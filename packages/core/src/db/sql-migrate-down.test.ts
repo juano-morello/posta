@@ -117,4 +117,18 @@ describe('sql-migrate down (T1.2.6)', () => {
     );
     expect(tracking.rows).toEqual([]);
   });
+
+  it.each([
+    '../../../etc/passwd',
+    '001_events.sql; DROP TABLE events;',
+    '001_EVENTS.sql', // uppercase rejected — must match NNN_name.sql exactly
+    'events.sql', // missing the NNN_ prefix
+  ])(
+    '[security] rejects a malformed filename before it is ever joined into a filesystem path: %s',
+    async (maliciousFilename) => {
+      await expect(
+        downSqlMigration(handle.pool, maliciousFilename, { migrationsDir: MIGRATIONS_DIR }),
+      ).rejects.toThrow(/invalid migration filename/i);
+    },
+  );
 });

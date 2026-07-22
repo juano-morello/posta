@@ -91,7 +91,7 @@ describe('events table schema (T1.2.2)', () => {
   it('occurred_at is timestamptz, never naive', async () => {
     const result = await handle.pool.query<{ data_type: string }>(`
       SELECT data_type FROM information_schema.columns
-      WHERE table_name = 'events' AND column_name = 'occurred_at'
+      WHERE table_schema = current_schema() AND table_name = 'events' AND column_name = 'occurred_at'
     `);
     expect(result.rows[0]?.data_type).toBe('timestamp with time zone');
   });
@@ -99,7 +99,7 @@ describe('events table schema (T1.2.2)', () => {
   it('event_id, occurred_at, tenant_id, link_id, and slug are NOT NULL', async () => {
     const result = await handle.pool.query<{ column_name: string; is_nullable: string }>(`
       SELECT column_name, is_nullable FROM information_schema.columns
-      WHERE table_name = 'events'
+      WHERE table_schema = current_schema() AND table_name = 'events'
         AND column_name IN ('event_id', 'occurred_at', 'tenant_id', 'link_id', 'slug')
     `);
     expect(result.rows).toHaveLength(5);
@@ -114,7 +114,7 @@ describe('events table schema (T1.2.2)', () => {
     );
     const result = await handle.pool.query<{ column_name: string; is_nullable: string }>(`
       SELECT column_name, is_nullable FROM information_schema.columns
-      WHERE table_name = 'events' AND column_name = ANY($1)
+      WHERE table_schema = current_schema() AND table_name = 'events' AND column_name = ANY($1)
     `, [nullableColumnNames]);
 
     expect(result.rows).toHaveLength(nullableColumnNames.length);
@@ -125,7 +125,8 @@ describe('events table schema (T1.2.2)', () => {
 
   it('the full column set equals the spec §8 list', async () => {
     const result = await handle.pool.query<{ column_name: string }>(`
-      SELECT column_name FROM information_schema.columns WHERE table_name = 'events'
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'events'
     `);
     const actualColumns = result.rows.map((row) => row.column_name).sort();
     expect(actualColumns).toEqual(EXPECTED_COLUMNS);

@@ -36,7 +36,8 @@ describe('events Drizzle typing (T1.2.4)', () => {
       .sort();
 
     const result = await handle.pool.query<{ column_name: string }>(`
-      SELECT column_name FROM information_schema.columns WHERE table_name = 'events'
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'events'
     `);
     const dbColumnNames = result.rows.map((row) => row.column_name).sort();
 
