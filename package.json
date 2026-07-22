@@ -1,0 +1,34 @@
+{
+  "name": "posta",
+  "private": true,
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck && pnpm typecheck:tests",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint .",
+    "depcruise": "depcruise --config .dependency-cruiser.js --output-type err-long apps packages",
+    "test": "vitest run",
+    "dev": "docker compose up -d --wait postgres redis minio && docker compose up -d minio-init && docker compose wait minio-init && turbo run dev",
+    "dev:reset": "bash scripts/dev-reset.sh",
+    "docker:prune": "bash scripts/docker-prune.sh",
+    "geo:fetch": "bash scripts/fetch-geoip.sh"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^24.13.3",
+    "@vitest/coverage-v8": "^4.1.10",
+    "dependency-cruiser": "^18.1.0",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^9.39.5",
+    "ioredis": "^5.11.1",
+    "maxmind": "^5.0.6",
+    "turbo": "2.10.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
+  }
+}

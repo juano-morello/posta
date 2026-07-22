@@ -1,0 +1,200 @@
+name: CI
+
+# S0.5 — "As a maintainer I want every push checked so that main is always
+# deployable." Runs on every PR and on every push to main: install → lint →
+# typecheck → test (with an 80% coverage floor) → build → dependency
+# boundaries (S0.2), with pnpm store + turbo caching so a clean run stays
+# fast, and real Postgres/Redis service containers so integration tests
+# run against real datastores rather than mocks. Built up incrementally
+# across T0.5.1–T0.5.5 — see this file's git history for how each stage
+# was added and verified on its own.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same PR/branch supersedes the previous run instead of
+# queuing behind it — avoids burning CI minutes on a ref nobody will look at
+# again.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only ever reads the repo and runs checks,
+# it never comments, deploys, or publishes.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Install, lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # DATABASE_URL/REDIS_URL are exactly what apps/api, apps/worker, and
+    # tests/infra/redis-policy.test.ts read at boot/runtime (S0.3's env
+    # schemas) — pointed at the service containers below, over localhost,
+    # the same way docker-compose points them at the local dev stack. Fixed
+    # dev-only credentials, identical to .env.example's docker-compose
+    # defaults — not real secrets.
+    env:
+      DATABASE_URL: postgresql://posta:posta@localhost:5432/posta
+      REDIS_URL: redis://localhost:6379
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: posta
+          POSTGRES_PASSWORD: posta
+          POSTGRES_DB: posta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U posta -d posta"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+      # INV-7: the managed/CI Redis must run maxmemory-policy volatile-lru,
+      # same requirement as docker/redis.conf for local dev — Redis does
+      # double duty as the TTL'd link cache AND the no-TTL BullMQ event bus,
+      # and allkeys-lru would silently evict queued jobs under memory
+      # pressure. A service container can't mount a redis.conf (services
+      # start before actions/checkout puts the repo on disk, so there is
+      # nothing to mount yet), and a startup `command:`/`entrypoint:`
+      # override is a real but very recently added (2026-04) GitHub Actions
+      # field gated behind a rollout flag we have no way to confirm from
+      # here (no remote, no runner) — and actionlint (last released
+      # 2026-03-30) doesn't recognize the key yet either, so relying on it
+      # would fail structural validation for no real gain. Reconfiguring
+      # the policy at RUNTIME instead, once the container is already
+      # healthy (the "Enforce Redis eviction policy" step below), needs
+      # nothing but a plain job step and ioredis (already a workspace
+      # devDependency) — the same kind of admin-API call a managed Redis
+      # provider would require anyway (.env.example: "verify this on the
+      # provider, not just in docker-compose").
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          # Keeps the CI Node version and .nvmrc (used for local dev) as
+          # one source of truth instead of a second hardcoded version here.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Turbo's own per-task cache, persisted between runs and keyed on the
+      # lockfile (plan: "turbo caching keyed on the lockfile"). Separate
+      # from the pnpm store cache above, which actions/setup-node's
+      # cache:pnpm input already handles.
+      - name: Cache turbo
+        uses: actions/cache@v6
+        with:
+          path: '**/.turbo'
+          key: turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # See the redis service's comment above: this is the CI-only
+      # equivalent of docker/redis.conf's `maxmemory-policy volatile-lru`,
+      # applied at runtime via CONFIG SET rather than a startup flag.
+      # tests/infra/redis-policy.test.ts then asserts the LIVE policy over
+      # REDIS_URL — same test either way this got set, local or CI.
+      - name: Enforce Redis eviction policy (INV-7)
+        run: |
+          node -e "
+            const Redis = require('ioredis');
+            const redis = new Redis(process.env.REDIS_URL);
+            redis.config('SET', 'maxmemory-policy', 'volatile-lru')
+              .then(() => redis.quit())
+              .then(() => process.exit(0))
+              .catch((error) => { console.error(error); process.exit(1); });
+          "
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # NOTE: no `--` before the flags. Unlike npm, pnpm forwards script
+      # args literally — `pnpm test -- --coverage` would append a literal
+      # "--" to the underlying `vitest run`, which vitest's CLI parses as
+      # "stop parsing flags", turning --coverage into a positional test-name
+      # filter instead of a flag (silently running with NO coverage, since
+      # no test file is named "--coverage"). Verified locally: `pnpm test
+      # -- --coverage` produces no coverage/ directory at all; `pnpm test
+      # --project default --coverage` does.
+      #
+      # --project default: vitest.config.ts's `projects` split (batch 9
+      # review) put tests/containers/** (image-smoke.test.ts,
+      # image-size.test.ts) in their own "containers" project — those
+      # tests' beforeAll shells out to `docker compose build/run` against
+      # services declaring `env_file: .env`, which THIS workflow never
+      # writes (no images are built here at all). Running the unscoped
+      # suite would try and fail to run them here — redundant AND a false
+      # failure, since images.yml already owns them, run targeted
+      # (`pnpm test tests/containers/image-smoke.test.ts` /
+      # `image-size.test.ts`) right after it builds the images they need.
+      # `--project default` runs every OTHER test (including
+      # tests/infra/redis-policy.test.ts, against the Redis service +
+      # CONFIG SET step above) and coverage still computes/gates at 80%
+      # over that same set — the container tests never contributed
+      # application-source coverage in the first place.
+      - name: Test (with coverage)
+        run: pnpm test --project default --coverage
+
+      - name: Upload coverage summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-summary
+          path: |
+            coverage/coverage-summary.json
+            coverage/lcov.info
+          retention-days: 14
+
+      # Turbo resolves the contracts → core → {api, worker, web} build order
+      # from each package's own turbo.json dependsOn, so one command builds
+      # all five packages in the right order with caching. There is no root
+      # "pnpm build" script — turbo.json's build task is invoked directly.
+      #
+      # Dedicated timeout: a clean-install `next build` was once observed to
+      # print full success and then hang instead of exiting (suspected
+      # first-run Turbopack native setup; did not reproduce on a second
+      # run). This makes that fail loudly in ~5 minutes instead of silently
+      # burning the whole job's 20-minute budget.
+      - name: Build
+        run: pnpm exec turbo run build
+        timeout-minutes: 5
+
+      # S0.2's dependency-arrow rules (.dependency-cruiser.js) only protect
+      # the architecture (web→contracts · api→core,contracts ·
+      # worker→core,contracts · core→contracts, no app importing another
+      # app) if CI actually runs them — tests/boundaries/arrows.test.ts
+      # already exercises the rules against fixtures as part of `pnpm
+      # test` above, but this is the real scan over the actual apps/
+      # and packages/ source, so a genuine illegal import (not just a
+      # fixture) fails the build too.
+      - name: Dependency boundaries (S0.2)
+        run: pnpm depcruise

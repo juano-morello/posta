@@ -1,0 +1,236 @@
+# Posta — local dev infrastructure (S0.4) + the built app images (S0.7).
+#
+# Datastores (postgres/redis/minio/minio-init) are what `pnpm dev` (T0.4.6)
+# runs against — the apps themselves still run on the HOST in watch mode
+# there, because a container rebuild is too slow for an edit loop. `pnpm
+# dev`'s own compose invocations (package.json) are scoped to exclude
+# api/worker/web on purpose — don't remove that scoping when touching this
+# file, or `pnpm dev` starts building images on every host-mode dev boot.
+#
+# The api/worker/web services below (T0.7.11) build and run the SAME
+# images CI and production use (T0.7.4-6) — `docker compose up --build -d`
+# is what you reach for to debug something that smells environmental, not
+# the everyday dev loop. Credentials come from `.env` at the repo root
+# (copy `.env.example`); compose loads it automatically for `${VAR}`
+# substitution in this file because it lives next to this file — that is
+# NOT the same thing as a container's own process.env, which is why the
+# app services below also need an explicit `env_file:`.
+#
+# `name:` pins the Compose project name (and therefore the built image
+# tags — `posta-api`, `posta-worker`, `posta-web`) independent of whatever
+# directory this repo happens to be checked out into. Without it, Compose
+# derives the project name from the checkout directory's basename — this
+# worktree is `e0-foundation`, a CI runner or another clone could be
+# anything — and tests/containers/{image-smoke,image-size}.test.ts (T0.7.12,
+# T0.7.13) need a stable, predictable name to inspect.
+name: posta
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Loopback-only: this is an unauthenticated-by-default dev Postgres
+      # (posta:posta). Binding 0.0.0.0 would put it on the local network —
+      # reachable by anyone on the same WiFi/LAN, not just this machine.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The eviction policy lives in the mounted config file (INV-7), not a
+    # CLI flag, so it stays reviewable in a diff.
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      # Loopback-only — see docker/redis.conf's comment on `protected-mode
+      # no`: that setting relies entirely on this published port never
+      # being reachable from anything but this machine.
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      # Reuses the app's own R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY (see
+      # .env.example) as MinIO's root credentials, so local dev has one
+      # pair of values instead of two that could drift apart.
+      MINIO_ROOT_USER: ${R2_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${R2_SECRET_ACCESS_KEY}
+    ports:
+      # Loopback-only — same reasoning as postgres/redis above: MinIO's
+      # root credentials here are local dev defaults, not secrets worth
+      # exposing to the local network.
+      - "127.0.0.1:9000:9000" # S3 API — what the app's R2_ENDPOINT points at
+      - "127.0.0.1:9001:9001" # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # One-shot: creates the app's two buckets if absent, then exits 0. Runs
+  # on every `up`, not just the first — mc mb --ignore-existing makes that
+  # safe — so a fresh clone needs no manual console step. Depends on all
+  # three datastores' healthchecks, not just minio's — its own clean exit
+  # then doubles as a "the whole stack is ready" signal, matching what
+  # `pnpm dev`'s `docker compose up -d --wait` (T0.4.6) actually waits on:
+  # apps started before this converges would otherwise crash-loop against
+  # infra that looks up but isn't accepting connections yet.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${R2_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_EVENTS: ${R2_BUCKET_EVENTS}
+      R2_BUCKET_AVATARS: ${R2_BUCKET_AVATARS}
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    volumes:
+      - ./docker/minio-init.sh:/minio-init.sh:ro
+
+  # T0.7.11 — build and run the SAME image apps/api/Dockerfile produces for
+  # CI/production (T0.7.4, T0.7.10). Not part of `pnpm dev`'s flow (see the
+  # file header) — this is what CI's smoke/size tests (T0.7.12/13) and a
+  # human reaching for `docker compose up --build -d` actually exercise.
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    # `.env` already has everything apiEnvSchema (T0.3.5) needs — exactly
+    # what the host-run `pnpm dev` flow reads. `environment:` below
+    # layers OVER just the three keys that must differ for a CONTAINER:
+    # `localhost` inside a container resolves to the container itself,
+    # never the compose network, so DATABASE_URL/REDIS_URL/R2_ENDPOINT
+    # must instead name the compose SERVICE (`postgres`/`redis`/`minio`),
+    # which Docker's embedded DNS resolves on this same network. Every
+    # other var (domains, R2 credentials, GEOIP_DB_DIR, auth, ports, ...)
+    # is untouched from .env.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      R2_ENDPOINT: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    # No host port published, deliberately: this image is the CI/prod
+    # artifact, not a second copy of the host-run `pnpm dev` server on the
+    # same port (3001) — publishing one would make the two flows collide
+    # whenever both happen to run on the same machine. "Reaches healthy"
+    # (this file's own verify, T0.7.11) is checked via the healthcheck
+    # status below (`docker compose ps` / `docker inspect`), which needs
+    # no host port at all.
+    healthcheck:
+      # No curl/wget in this runtime image (Alpine's node:24-alpine base,
+      # T0.7.4) — a bare `node -e` hits /health without adding a package
+      # just for a healthcheck.
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://localhost:3001/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # T0.7.11 — same image as apps/worker/Dockerfile (T0.7.5, T0.7.10's
+  # comment on why it has NO geoip data — invariant 6). See the api
+  # service above for the fuller rationale on env_file/environment/no
+  # published port.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # DATABASE_URL_WORKER (not DATABASE_URL) — the worker connects as
+      # the writer role (T0.3.6). Same container-vs-host reasoning as the
+      # api service above for all three overrides.
+      DATABASE_URL_WORKER: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      R2_ENDPOINT: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://localhost:3002/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # T0.7.11 — same image as apps/web/Dockerfile (T0.7.6). No datastore
+  # overrides: web reads bio data over HTTP from the api service, and
+  # never touches Postgres/Redis/R2 directly (invariant 11) — webServerEnvSchema
+  # (T0.3.7) has no DB/Redis/R2 keys to override in the first place.
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://localhost:3000/',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

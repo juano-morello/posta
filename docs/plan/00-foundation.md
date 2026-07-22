@@ -48,7 +48,7 @@ Root `package.json` (private, `packageManager` pinned to an exact pnpm version) 
 → **files** `packages/contracts/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/contracts build` exits 0 · **after** T0.1.5
 
 #### T0.1.7 · `feat: scaffold core package`
-`@posta/core`, depends on `@posta/contracts` via `workspace:*`. Empty `src/index.ts`. Server-only marking comes in T0.2.6.
+`@posta/core`, depends on `@posta/contracts` via `workspace:*`. Empty `src/index.ts`. Client-bundle protection comes in T0.2.6 (a dependency-cruiser rule, not the `server-only` package — see that task).
 → **files** `packages/core/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/core build` exits 0 · **after** T0.1.6
 
 #### T0.1.8 · `feat: scaffold api app`
@@ -65,7 +65,12 @@ Next.js App Router, TypeScript, no Tailwind yet (that lands in E6/S6.1). Depends
 
 #### T0.1.11 · `chore: wire typescript project references`
 Composite builds so `tsc` resolves workspace packages from source in dev and from `dist` in CI. Prevents the "works in dev, fails in build" split.
-→ **files** all five `tsconfig.json` files · **verify** `pnpm typecheck` passes from a clean `pnpm install` with no prior build · **after** T0.1.10
+→ **files** all five `tsconfig.json` files, `package.json` · **verify** `pnpm typecheck` passes from a clean `pnpm install` with no prior build · **after** T0.1.10
+
+> The root `package.json` is in this task's file list because `pnpm typecheck` has
+> nowhere else to resolve from — a root script is what makes this task's own verify
+> runnable. The original list named only the tsconfigs, which made the task
+> unsatisfiable within its declared scope.
 
 ---
 
@@ -105,9 +110,11 @@ A fixture file importing `@posta/core` from `apps/web`, plus a test asserting `d
 Reads `packages/contracts/package.json` and asserts `dependencies` is exactly `["zod"]`. Guards invariant "contracts is isomorphic, zero server deps" against a casual `pnpm add`.
 → **files** `tests/boundaries/contracts-deps.test.ts` · **verify** `pnpm test tests/boundaries/contracts-deps.test.ts` · **after** T0.2.4
 
-#### T0.2.6 · `feat: mark core as server-only`
-Add the `server-only` package and import it from `packages/core/src/index.ts`, so any accidental client-bundle import fails at build with a clear Next.js error rather than leaking DB code into the browser.
-→ **files** `packages/core/{package.json,src/index.ts}` · **verify** importing `@posta/core` from a client component fails `pnpm --filter @posta/web build` · **after** T0.2.5
+#### T0.2.6 · `feat: guard core against client bundles via dependency-cruiser`
+Guard `packages/core` against client-bundle imports with the `no-illegal-core-import` dependency-cruiser rule (T0.2.3), hardened to catch static *and* dynamic imports and to see edges that actually resolve (through a package's `dist/`), not just ones nobody has added to a `package.json` yet. This is the *only* guard — no runtime package involved.
+→ **files** `packages/core/{package.json,src/index.ts}`, `.dependency-cruiser.js` · **verify** `pnpm depcruise` fails when `apps/web` imports `@posta/core`, statically or dynamically, and `node -e "require('@posta/core')"` run from `apps/api`/`apps/worker` succeeds · **after** T0.2.5
+
+> **Note:** an earlier version of this task added the npm `server-only` package to `packages/core/src/index.ts` instead. Rejected: `server-only`'s only non-`react-server` export is an unconditional `throw`, and plain Node (api, worker) never sets the `react-server` condition — importing core for real would have crashed both services at boot the moment E1/E2 wired up real Drizzle usage. A build-time check that runs in CI beats a runtime throw that only fires after the bad import has shipped.
 
 ---
 
@@ -249,6 +256,19 @@ Fails the build below 80% lines and branches.
 The arrow rules from S0.2 only protect the architecture if CI runs them.
 → **files** `.github/workflows/ci.yml` · **verify** a PR planting a `web→core` import fails CI · **after** T0.5.4
 
+#### T0.5.7 · `chore: type-check test files, not just source`
+Test files (`*.test.ts`) are currently invisible to every checker in the repo: the
+composite `pnpm typecheck` excludes them (`packages/contracts/tsconfig.json` — Vitest's
+ambient globals clash with the package's `node10` resolution), `vitest run` transpiles
+with esbuild and does not type-check, and ESLint is non-type-aware. So a type error in a
+test — wrong argument order to `buildLinkUrl`, a mistyped `DomainConfig` — passes
+`typecheck`, `test` and `lint` all green as long as it still runs. Surfaced by the S0.3
+batch-4 review. Close it repo-wide with a dedicated test tsconfig (`bundler` resolution +
+Vitest globals) checked via a separate `tsc --noEmit` step, wired into `pnpm typecheck`,
+so `core`/`api`/`worker` inherit the pattern instead of each copying the exclude. Do this
+**before** E1 adds the first tests beside `core`'s source.
+→ **files** `tsconfig.*` (a test variant), each package's tsconfig, `package.json` · **verify** a deliberate type error planted in a `*.test.ts` fails `pnpm typecheck` · **after** T0.5.4
+
 #### T0.5.6 · `chore: enable branch protection on main` ⛔ blocked
 Require CI green and no direct pushes. **Blocked until a remote exists** — the repo is local-only today. Pair with the first `git push -u`.
 → **files** *(GitHub settings, not the repo)* · **verify** a direct push to main is rejected · **after** T0.5.5
@@ -358,6 +378,8 @@ Starts each image against the compose datastores and polls its health endpoint (
 Reads `docker image inspect --format '{{.Size}}'` and fails above threshold: api 300MB, worker 300MB, web 250MB. Bloat is invisible until a rollout is slow — a stray `devDependency` in the runtime stage costs nothing locally and costs pull time on every node.
 → **files** `tests/containers/image-size.test.ts` · **verify** `pnpm test tests/containers/image-size.test.ts` passes; lowering a threshold by 1MB fails it · **after** T0.7.12
 
-#### T0.7.14 · `ci: build and push all three images tagged with the git sha`
+#### T0.7.14 · `ci: build and push all three images tagged with the git sha` ⛔ blocked
 Buildx job on push to main: build `api`, `worker`, `web`, run the smoke and size tests against them, then push as `<registry>/posta-<app>:<sha>` with a GitHub Actions layer cache. `latest` may move as a convenience tag, never as the only one — a deploy pinned to `latest` cannot be rolled back to a known artifact.
+
+**Blocked for the same underlying reason as T0.5.6:** no container registry is configured, and no git remote exists for this repo — "a merge to main pushes three digests" cannot literally happen yet. `images.yml` is written correct-by-construction (valid YAML — checked with `actionlint` — real action versions, the right trigger, buildx + a GHA layer cache, registry parameterized via a `vars.REGISTRY` placeholder so the provider stays unchosen) and its build/smoke/size steps run for real value today; only the login/push steps are gated inert behind `REGISTRY` being set.
 → **files** `.github/workflows/images.yml` · **verify** a merge to main pushes three digests whose tags match `git rev-parse HEAD` · **after** T0.7.13

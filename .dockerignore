@@ -1,0 +1,53 @@
+# Posta — shared Docker build-context excludes (T0.7.1)
+#
+# The build context for all three app images (apps/{api,worker,web}/Dockerfile)
+# is the repo root — each Dockerfile's `pruner` stage needs the whole
+# workspace to compute a per-app subset via `turbo prune` (T0.7.3). Without
+# this file, `docker build` uploads every one of these directories to the
+# daemon on EVERY build, which busts the build cache on any file change at
+# all (a touched .md file invalidates the same layers as a source change)
+# and, for node_modules especially, makes the context multiple GB.
+
+# --- dependencies & build output --------------------------------------------
+# Reinstalled/rebuilt inside the image; never useful from the host. A bare
+# `node_modules/` only matches a TOP-LEVEL node_modules — Docker's ignore
+# patterns are not recursive like .gitignore's, so every one of these needs
+# the `**/` prefix to also catch apps/*/node_modules, apps/web/.next, etc.
+**/node_modules/
+**/.next/
+**/dist/
+**/.turbo/
+# TypeScript's incremental-build cache (packages/*/tsconfig.json set
+# `composite: true`). Discovered the hard way in T0.7.4: a STALE
+# .tsbuildinfo left on the host from a local `tsc` run rides along into
+# the pruner stage's COPY . . and — because it's gitignored, so a fresh
+# clone never has one, but this workstation did — makes `tsc -p
+# tsconfig.json` believe the (never-yet-built, in a fresh image) dist/ is
+# already up to date and skip emitting it entirely. `tsc` then exits 0
+# having produced nothing, and the next workspace package to import it
+# fails with "cannot find module" — a confusing failure two stages away
+# from the actual cause.
+**/*.tsbuildinfo
+
+# --- secrets -----------------------------------------------------------------
+# Never bake local credentials into an image layer. `**/` matters here for
+# the same reason it does above: an unprefixed `.env.*` only excludes a
+# root-level .env — a nested apps/*/.env would ride along into the pruner
+# stage's COPY . . otherwise (security review, T0.7.1/T0.7.4).
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# --- vcs, editor config & docs -----------------------------------------------
+.git/
+docs/
+# A local Claude Code checkout can carry its own config/settings under
+# .claude/ at the repo root — never something the image needs, and never
+# something that should ride into a build context by accident.
+.claude/
+
+# --- data files ----------------------------------------------------------
+# GeoIP .mmdb files (S0.7, T0.7.9/10 — a later batch): fetched or baked in
+# a dedicated step, never picked up implicitly via the build context.
+**/*.mmdb
