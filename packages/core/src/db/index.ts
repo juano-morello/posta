@@ -5,3 +5,4 @@
 // change when the db seam grows.
 export * from './client';
 export * from './tenant';
+export * from './sql-migrate';
