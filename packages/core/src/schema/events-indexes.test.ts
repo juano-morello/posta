@@ -15,8 +15,36 @@ import { startPgContainer, type PgContainerHandle } from '../test/pg-container';
 const CONTAINER_TEST_TIMEOUT_MS = 120_000;
 const MIGRATIONS_DIR = path.join(__dirname, '..', '..', 'migrations', 'sql');
 
-const JULY_PARTITION = 'events_y2026m07';
-const AUGUST_PARTITION = 'events_y2026m08';
+// Computed relative to whenever the test actually runs, offset a full
+// year+ ahead — never hardcoded absolute months. T1.3.3's bootstrap
+// migration (005_bootstrap_partitions.sql) creates partitions for the
+// CURRENT real-world month plus the next 3 using `now()` at migration-run
+// time, so a hardcoded '2026-07'/'2026-08' collides the moment "today"
+// falls inside that bootstrap window (verified: it does, today) —
+// +12/+13 months stays safely outside "current + 3" regardless of when
+// this suite runs.
+function monthStart(monthsFromNow: number): { year: number; monthIndex: number } {
+  const date = new Date();
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + monthsFromNow, 1));
+  return { year: target.getUTCFullYear(), monthIndex: target.getUTCMonth() };
+}
+
+function dateStringFor(year: number, monthIndex: number): string {
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}-01`;
+}
+
+function partitionNameFor(year: number, monthIndex: number): string {
+  return `events_y${year}m${String(monthIndex + 1).padStart(2, '0')}`;
+}
+
+const FIRST_MONTH = monthStart(12);
+const SECOND_MONTH = monthStart(13);
+const JULY_PARTITION = partitionNameFor(FIRST_MONTH.year, FIRST_MONTH.monthIndex);
+const AUGUST_PARTITION = partitionNameFor(SECOND_MONTH.year, SECOND_MONTH.monthIndex);
+const FIRST_MONTH_START = dateStringFor(FIRST_MONTH.year, FIRST_MONTH.monthIndex);
+const SECOND_MONTH_START = dateStringFor(SECOND_MONTH.year, SECOND_MONTH.monthIndex);
+const THIRD_MONTH = monthStart(14);
+const THIRD_MONTH_START = dateStringFor(THIRD_MONTH.year, THIRD_MONTH.monthIndex);
 
 describe('events parent-level indexes (T1.2.3)', () => {
   let handle: PgContainerHandle;
@@ -27,11 +55,11 @@ describe('events parent-level indexes (T1.2.3)', () => {
 
     await handle.pool.query(`
       CREATE TABLE ${JULY_PARTITION} PARTITION OF events
-      FOR VALUES FROM ('2026-07-01') TO ('2026-08-01')
+      FOR VALUES FROM ('${FIRST_MONTH_START}') TO ('${SECOND_MONTH_START}')
     `);
     await handle.pool.query(`
       CREATE TABLE ${AUGUST_PARTITION} PARTITION OF events
-      FOR VALUES FROM ('2026-08-01') TO ('2026-09-01')
+      FOR VALUES FROM ('${SECOND_MONTH_START}') TO ('${THIRD_MONTH_START}')
     `);
   }, CONTAINER_TEST_TIMEOUT_MS);
 
@@ -63,10 +91,11 @@ describe('events parent-level indexes (T1.2.3)', () => {
     // (same technique as links.test.ts's T1.1.5 EXPLAIN assertion).
     await handle.pool.query('SET enable_seqscan = off');
 
+    const midMonthDate = `${FIRST_MONTH.year}-${String(FIRST_MONTH.monthIndex + 1).padStart(2, '0')}-15`;
     const result = await handle.pool.query<{ 'QUERY PLAN': string }>(`
       EXPLAIN SELECT event_id FROM events
       WHERE tenant_id = 'tenant-x' AND link_id = 'link-x'
-        AND occurred_at >= '2026-07-01' AND occurred_at < '2026-07-15'
+        AND occurred_at >= '${FIRST_MONTH_START}' AND occurred_at < '${midMonthDate}'
     `);
     const plan = result.rows.map((row) => row['QUERY PLAN']).join('\n');
 
