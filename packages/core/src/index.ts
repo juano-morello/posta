@@ -10,3 +10,18 @@
 // schema, and the tenant-scoped repository helper.
 export * from './db';
 export * from './ulid';
+// T1.5.5 — the first consumer that needs schema TABLE OBJECTS through
+// the barrel, not just the db seam: packages/core/scripts/seed.ts runs
+// under Node directly (never through this package's own tsc build,
+// which only covers src/ — see packages/core/scripts/tsconfig.json's own
+// comment), so it consumes @posta/core the same way apps/api/apps/worker
+// do, through this compiled entry point, rather than reaching into
+// ../src/schema/*.ts sibling files whose ESM import/export syntax only
+// resolves correctly once tsc has compiled them to this package's
+// declared "commonjs" module system. schema/events.ts stays out
+// deliberately (see this file's own history / events.ts's docstring):
+// it is a read-only typing mirror of hand-written SQL, not a table
+// anything inserts through Drizzle.
+export * from './schema/auth';
+export * from './schema/bio';
+export * from './schema/links';

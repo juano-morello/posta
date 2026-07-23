@@ -24,10 +24,12 @@
     "migrate:status": "dotenv -e ../../.env -- node dist/db/migrate-status.js",
     "migrate:down": "dotenv -e ../../.env -- node dist/db/migrate-down.js",
     "vendor:asn": "bash scripts/vendor-asn.sh",
-    "seed:asn": "dotenv -e ../../.env -- node scripts/seed-asn.ts"
+    "seed:asn": "dotenv -e ../../.env -- node scripts/seed-asn.ts",
+    "seed": "dotenv -e ../../.env -- node scripts/seed.ts"
   },
   "dependencies": {
     "@posta/contracts": "workspace:*",
+    "better-auth": "^1.6.24",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.22.0",
     "ulid": "^3.0.2"
