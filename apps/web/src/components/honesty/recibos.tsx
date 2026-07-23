@@ -80,6 +80,19 @@ function sanitizeWhy(why: string): string {
     .join('');
 }
 
+// T6.4.14 — POSTA.md's rioplatense, direct voice, in the island's own
+// terminal register: no receipts is not an empty box, it's the terminal
+// telling you so, with a steady (not blinking — see this file's own
+// _tokens.scss comment) cursor block.
+function EmptyState() {
+  return (
+    <div className="flex items-center gap-1">
+      <span>~/posta $ todavía no hay clicks</span>
+      <span className="recibos-cursor inline-block h-4 w-2" aria-hidden="true" />
+    </div>
+  );
+}
+
 export function Recibos({ slug, receipts = [], className }: RecibosProps) {
   const rows = capReceipts(receipts);
   return (
@@ -95,14 +108,18 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
         </span>
       </div>
       <div data-testid="recibos-rows" className="flex flex-col gap-1 px-4 py-3">
-        {rows.map((row) => (
-          <div key={row.id} data-testid="recibos-row" className="flex flex-wrap items-baseline gap-2 break-words">
-            <span className="muted">{row.t}</span>
-            <span className="muted">{row.src}</span>
-            <span className={classificationClass(row.cls)}>[{row.cls}]</span>
-            <span>{sanitizeWhy(row.why)}</span>
-          </div>
-        ))}
+        {rows.length === 0 ? (
+          <EmptyState />
+        ) : (
+          rows.map((row) => (
+            <div key={row.id} data-testid="recibos-row" className="flex flex-wrap items-baseline gap-2 break-words">
+              <span className="muted">{row.t}</span>
+              <span className="muted">{row.src}</span>
+              <span className={classificationClass(row.cls)}>[{row.cls}]</span>
+              <span>{sanitizeWhy(row.why)}</span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

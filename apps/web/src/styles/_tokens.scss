@@ -298,6 +298,14 @@ $bp-mobile: 800px;
   }
 }
 
+// T6.4.14 — the empty-state's terminal cursor. Deliberately STEADY, not
+// animated: the task text itself says "a steady cursor", distinct from
+// the chrome's pulsing live dot above — no prefers-reduced-motion concern
+// here since there is no motion to begin with.
+.recibos-cursor {
+  background: #b4ff39;
+}
+
 // T6.4.11 — classification verdict colours for a Recibos row, keyed by
 // TOKEN NAME (matching CLASIFICACION_TOKEN in packages/contracts, never a
 // second independent verdict->colour map — that would reopen exactly the

@@ -134,3 +134,26 @@ describe('Recibos why-string hardening (T6.4.13) [security]', () => {
     expect(source).not.toMatch(/dangerouslySetInnerHTML/);
   });
 });
+
+// T6.4.14 — POSTA.md's own rioplatense, direct voice, in the island's own
+// terminal register: no receipts is not an empty box, it's the terminal
+// telling you so.
+describe('Recibos empty state (T6.4.14)', () => {
+  it('renders the empty-state copy with no receipts', () => {
+    render(<Recibos slug="promo" receipts={[]} />);
+    expect(screen.getByText('~/posta $ todavía no hay clicks')).toBeInTheDocument();
+  });
+
+  it('renders the empty-state copy when receipts is omitted entirely', () => {
+    render(<Recibos slug="promo" />);
+    expect(screen.getByText('~/posta $ todavía no hay clicks')).toBeInTheDocument();
+  });
+
+  it('disappears the instant the first receipt arrives', () => {
+    const { rerender } = render(<Recibos slug="promo" receipts={[]} />);
+    expect(screen.getByText('~/posta $ todavía no hay clicks')).toBeInTheDocument();
+
+    rerender(<Recibos slug="promo" receipts={[ROWS[0]!]} />);
+    expect(screen.queryByText('~/posta $ todavía no hay clicks')).not.toBeInTheDocument();
+  });
+});
