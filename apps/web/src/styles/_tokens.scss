@@ -191,3 +191,34 @@ $bp-mobile: 800px;
 @function t($name) {
   @return var(--#{$name});
 }
+
+// T6.4.7 — POSTA.md §8.4's `.badge-humano` block, ported verbatim (not a
+// Tailwind arbitrary-value bracket class like Badge's own `primary`
+// variant, T6.2.4): color-mix()'s color argument is interpolated through
+// `#{t(primary)}` so Sass passes the function through into the emitted
+// CSS untouched rather than trying (and failing) to evaluate a var()
+// reference at compile time. compile-tokens.ts's compileTokensCss() is
+// what actually proves this survives real Sass compilation, not just a
+// className string.
+.badge-humano {
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: var(--radius-badge);
+  color: var(--primary);
+  background: color-mix(in srgb, #{t(primary)} 16%, transparent);
+  border: 1px solid color-mix(in srgb, #{t(primary)} 40%, transparent);
+}
+
+// T6.4.7 [a11y deviation] — MEASURED, not asserted (see report.md): lime
+// text on this 16% tint clears AA in dark (~10.5:1 against the flattened
+// backdrop) but genuinely fails AA in light (~3.1:1 — under the 4.5:1
+// normal-text floor for a small badge label; light's own `primary` is
+// already the AA-adjusted green #3F9142, T6.1.2, and tinting that SAME
+// color into the backdrop closes the remaining gap further, it does not
+// widen it). Accessibility wins over the literal spec here: light
+// overrides the label to `fg` (~14.8:1 against the tint) instead of
+// shipping an inaccessible badge. Dark is unaffected and stays exactly
+// spec'd (lime on lime-tint).
+.light .badge-humano {
+  color: var(--fg);
+}
