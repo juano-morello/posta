@@ -21,6 +21,7 @@
     "db:generate": "dotenv -e ../../.env -- drizzle-kit generate",
     "db:migrate": "dotenv -e ../../.env -- drizzle-kit migrate",
     "migrate": "dotenv -e ../../.env -- node dist/db/migrate.js",
+    "migrate:status": "dotenv -e ../../.env -- node dist/db/migrate-status.js",
     "vendor:asn": "bash scripts/vendor-asn.sh",
     "seed:asn": "dotenv -e ../../.env -- node scripts/seed-asn.ts"
   },
