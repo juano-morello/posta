@@ -43,3 +43,20 @@ export async function ensurePartitionsAhead(
     await pool.query('SELECT create_events_partition($1::date)', [monthDateString]);
   }
 }
+
+/**
+ * T1.3.5 — the DEFAULT partition (T1.3.2) is a safety net, not a
+ * legitimate destination: a non-zero row count here always means the
+ * partition maintenance job (T1.3.4) failed to create a partition ahead
+ * of need, and the row landed somewhere unqueried instead. `ONLY`
+ * matters here for the same reason it does in EXPLAIN/count queries
+ * elsewhere in this epic — events_default has no partitions of its own,
+ * but being explicit keeps the query's intent (count exactly this
+ * relation's own rows) unambiguous.
+ */
+export async function countDefaultPartitionRows(pool: Pool): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    'SELECT count(*)::text AS count FROM ONLY events_default',
+  );
+  return Number(result.rows[0]?.count ?? '0');
+}

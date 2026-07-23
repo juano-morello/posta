@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startPgContainer, type PgContainerHandle } from '../test/pg-container';
+import { countDefaultPartitionRows } from './partitions';
 import { runSqlMigrations } from './sql-migrate';
 
 // T1.3.2 — `CREATE TABLE events_default PARTITION OF events DEFAULT`.
@@ -47,5 +48,9 @@ describe('events_default partition (T1.3.2)', () => {
       `SELECT count(*)::text AS count FROM ONLY events_2026_02`,
     );
     expect(februaryCount.rows[0]?.count).toBe('0');
+  });
+
+  it('countDefaultPartitionRows (T1.3.5) matches the raw count', async () => {
+    expect(await countDefaultPartitionRows(handle.pool)).toBe(1);
   });
 });

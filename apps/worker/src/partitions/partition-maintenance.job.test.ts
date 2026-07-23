@@ -3,8 +3,11 @@ import path from 'node:path';
 import { runSqlMigrations } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import { QueueEvents } from 'bullmq';
+import { Gauge, Registry } from 'prom-client';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  consoleErrorLogger,
+  DEFAULT_PARTITION_ROWS_GAUGE_NAME,
   PARTITION_MAINTENANCE_JOB_NAME,
   processPartitionMaintenanceJob,
   startPartitionMaintenanceJob,
@@ -51,6 +54,15 @@ async function listEventsPartitions(handle: PgContainerHandle): Promise<string[]
 
 describe('processPartitionMaintenanceJob (T1.3.4)', () => {
   let handle: PgContainerHandle;
+  // A dedicated Registry, not prom-client's shared global default one —
+  // this test only cares about the job's own behavior, not about a
+  // metric's registered value, so a private registry avoids any risk of
+  // colliding with another test file's own Gauge of the same name.
+  const gauge = new Gauge({
+    name: DEFAULT_PARTITION_ROWS_GAUGE_NAME,
+    help: 'test-only gauge, registered on a private Registry',
+    registers: [new Registry()],
+  });
 
   beforeAll(async () => {
     handle = await startPgContainer();
@@ -76,7 +88,7 @@ describe('processPartitionMaintenanceJob (T1.3.4)', () => {
     vi.useFakeTimers();
     vi.setSystemTime(twoMonthsFromNow);
 
-    await processPartitionMaintenanceJob(handle.pool);
+    await processPartitionMaintenanceJob(handle.pool, gauge, consoleErrorLogger);
 
     vi.useRealTimers();
 
@@ -96,7 +108,7 @@ describe('processPartitionMaintenanceJob (T1.3.4)', () => {
     vi.setSystemTime(twoMonthsFromNow);
 
     const before = (await listEventsPartitions(handle)).sort();
-    await processPartitionMaintenanceJob(handle.pool);
+    await processPartitionMaintenanceJob(handle.pool, gauge, consoleErrorLogger);
     const after = (await listEventsPartitions(handle)).sort();
 
     expect(after).toEqual(before);
@@ -125,7 +137,7 @@ describe('startPartitionMaintenanceJob (T1.3.4) — real BullMQ wiring', () => {
         jobHandle = await startPartitionMaintenanceJob(
           { url: REDIS_URL },
           handle.pool,
-          queueName,
+          { queueName },
         );
         queueEvents = new QueueEvents(queueName, { connection: { url: REDIS_URL } });
         await queueEvents.waitUntilReady();
