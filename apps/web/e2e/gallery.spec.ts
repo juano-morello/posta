@@ -51,8 +51,12 @@ const SHADCN_PRIMITIVES = [
 test.describe('/gallery shadcn primitives (T6.5.3)', () => {
   test('has a section heading for each of the twelve primitives', async ({ page }) => {
     await page.goto('/gallery');
+    // exact: true — Playwright's `name` option substring-matches by
+    // default, and "Badge" is a substring of the honesty section's own
+    // "BadgeHumano" heading (T6.5.4), so a loose match here is ambiguous
+    // the moment both sections exist on the same page.
     for (const name of SHADCN_PRIMITIVES) {
-      await expect(page.getByRole('heading', { name })).toBeVisible();
+      await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
     }
   });
 
@@ -61,6 +65,29 @@ test.describe('/gallery shadcn primitives (T6.5.3)', () => {
     for (const label of ['Primary', 'Secondary', 'Outline', 'Ghost', 'Destructive']) {
       await expect(page.getByRole('button', { name: label })).toBeVisible();
     }
+  });
+});
+
+// T6.5.4 — HumanoBar, BadgeHumano, SourceChip and Recibos from the
+// fixtures module (T6.5.2), in their normal (non-edge-case) state.
+// Recibos is shown as a live island — the real component, not a
+// screenshot: its own prompt line + pulsing dot render exactly as they
+// do everywhere else in the app.
+test.describe('/gallery honesty primitives (T6.5.4)', () => {
+  test('all four honesty primitives render with fixture data', async ({ page }) => {
+    await page.goto('/gallery');
+
+    const honestySection = page.getByRole('region', { name: 'Honesty primitives' });
+    await expect(honestySection.getByTestId('gallery-humano-bar').getByRole('img')).toBeVisible();
+    await expect(honestySection.getByTestId('gallery-badge-humano').getByText('60% humano')).toBeVisible();
+    // Scoped to the SourceChip block specifically: 'Instagram' is
+    // deliberately ALSO a Recibos fixture row's source (GALLERY_RECEIPTS),
+    // so a page-wide match is ambiguous once both are on the same page.
+    await expect(
+      honestySection.getByTestId('gallery-source-chip').getByText('Instagram', { exact: true }),
+    ).toBeVisible();
+    await expect(honestySection.getByTestId('recibos')).toBeVisible(); // Recibos
+    await expect(honestySection.getByTestId('recibos-live-dot')).toBeVisible();
   });
 });
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { HonestySection } from './sections/honesty-section';
 import { ShadcnSection } from './sections/shadcn-section';
 
 // T6.5.1 — the component gallery: every primitive rendered in isolation
@@ -54,6 +55,7 @@ export default function GalleryPage() {
           <h2 id="honesty-heading" className="mb-4 font-sans text-lg font-semibold">
             Honesty primitives
           </h2>
+          <HonestySection />
         </section>
 
         <section id="shell" aria-labelledby="shell-heading" className="mb-12">
