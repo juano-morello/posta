@@ -104,6 +104,45 @@ describe('HumanoBar sub-1% segment visibility', () => {
   });
 });
 
+// T6.4.15 [a11y] — carried forward from S6.1's review: the n1/n2/n3 gray
+// ramp's own ">0.35 luminance" floor does not guarantee WCAG 1.4.11's 3:1
+// NON-TEXT contrast between adjacent segments (measured as low as
+// ~1.3-1.6:1 in some pairings — see the measurement in _tokens.scss's own
+// T6.4.15 comment). An explicit per-segment border, not fill-vs-fill
+// contrast, is what actually satisfies 1.4.11 here: `bg`-coloured for the
+// bright lime humano segment (high contrast against a bright fill in
+// both themes), `fg`-coloured for the three gray-ramp segments (high
+// contrast against a darker/mid-toned fill in both themes). A segment
+// with a genuinely zero count gets NO border — a 0-width box with a
+// border would still paint a visible sliver, which is exactly the
+// "renders as present when it isn't" bug the floor logic (T6.4.5) exists
+// to prevent, just via a different mechanism.
+describe('HumanoBar segment borders (T6.4.15) [a11y]', () => {
+  it('borders the humano segment with bg (high contrast against bright lime)', () => {
+    render(<HumanoBar humano={60} bot={20} unfurler={12} prefetch={8} />);
+    const humano = screen.getByTestId('humano-bar-segment-humano');
+    expect(humano.className).toMatch(/\bborder\b/);
+    expect(humano.className).toMatch(/\bborder-bg\b/);
+  });
+
+  it('borders the three gray-ramp segments with fg (high contrast against mid-tone fills)', () => {
+    render(<HumanoBar humano={60} bot={20} unfurler={12} prefetch={8} />);
+    for (const key of ['bot', 'unfurler', 'prefetch']) {
+      const segment = screen.getByTestId(`humano-bar-segment-${key}`);
+      expect(segment.className).toMatch(/\bborder\b/);
+      expect(segment.className).toMatch(/\bborder-fg\b/);
+    }
+  });
+
+  it('never borders a genuinely zero-count segment (no phantom sliver)', () => {
+    render(<HumanoBar humano={100} bot={0} unfurler={0} prefetch={0} />);
+    for (const key of ['bot', 'unfurler', 'prefetch']) {
+      const segment = screen.getByTestId(`humano-bar-segment-${key}`);
+      expect(segment.className).not.toMatch(/\bborder-fg\b/);
+    }
+  });
+});
+
 // T6.4.6 [a11y] — colour alone never carries the meaning: a legend gives
 // every segment a Spanish label + its raw count (so a colour-blind user,
 // or anyone just not parsing bar-chart hues, still gets the honest split
