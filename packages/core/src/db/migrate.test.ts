@@ -1,7 +1,7 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDbClient, type DbClient } from './client';
-import { migrate } from './migrate';
+import { main, migrate } from './migrate';
 
 // T1.5.1 — the unified entrypoint (`pnpm migrate`) applies drizzle-kit's
 // migrations FIRST, then the hand-written SQL ones. The order is fixed,
@@ -85,4 +85,47 @@ describe('migrate (T1.5.1)', () => {
     // just report the same count by coincidence.
     expect(tables.rows.length).toBeGreaterThan(0);
   });
+});
+
+describe('main() — the real pnpm migrate CLI entrypoint (coverage, S1.5 review)', () => {
+  // main() reads DATABASE_URL/DB_POOL_MAX from env via createDbClient()
+  // (same as the real `pnpm migrate` invocation) — set and restored per
+  // test so this never leaks into other test files sharing the process.
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalPoolMax = process.env.DB_POOL_MAX;
+
+  afterEach(() => {
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalPoolMax === undefined) delete process.env.DB_POOL_MAX;
+    else process.env.DB_POOL_MAX = originalPoolMax;
+    vi.restoreAllMocks();
+  });
+
+  it('applies every migration against a real empty database and logs success', async () => {
+    const container = await new PostgreSqlContainer('postgres:16-alpine').start();
+    process.env.DATABASE_URL = container.getConnectionUri();
+    process.env.DB_POOL_MAX = '5';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await expect(main()).resolves.toBeUndefined();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('applied every pending drizzle and sql migration'),
+      );
+    } finally {
+      await container.stop();
+    }
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('a real migration failure (connecting to an already-stopped container) propagates, not swallowed by cleanup', async () => {
+    const container = await new PostgreSqlContainer('postgres:16-alpine').start();
+    const deadConnectionUri = container.getConnectionUri();
+    await container.stop();
+
+    process.env.DATABASE_URL = deadConnectionUri;
+    process.env.DB_POOL_MAX = '5';
+
+    await expect(main()).rejects.toThrow();
+  }, CONTAINER_TEST_TIMEOUT_MS);
 });

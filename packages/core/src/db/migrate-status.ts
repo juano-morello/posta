@@ -188,20 +188,56 @@ function printStatusTable(rows: readonly MigrationStatusRow[]): void {
   );
 }
 
-async function main(): Promise<void> {
+// Exported so migrate-status.test.ts can exercise the real CLI
+// entrypoint directly. Same capture-both-combine-if-both-fail pattern as
+// migrate.ts/migrate-down.ts/seed.ts/seed-asn.ts's main()s — a
+// closeDb() failure must never replace a real getMigrationStatus()
+// error.
+export async function main(): Promise<void> {
   const client = createDbClient();
+
+  let statusError: unknown;
+  let rows: MigrationStatusRow[] | undefined;
   try {
-    const rows = await getMigrationStatus(client.pool);
+    rows = await getMigrationStatus(client.pool);
     printStatusTable(rows);
     process.exitCode = hasPendingMigrations(rows) ? 1 : 0;
-  } finally {
-    await client.closeDb();
+  } catch (error) {
+    statusError = error;
   }
+
+  let closeError: unknown;
+  try {
+    await client.closeDb();
+  } catch (error) {
+    /* v8 ignore next -- pool.end() genuinely failing is impractical to
+     * trigger in a real integration test; see migrate.ts's identical
+     * annotation for the full reasoning (same deferred class of gap as
+     * the S1.3 review's queue-cleanup double-failure branch). */
+    closeError = error;
+  }
+
+  const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  /* v8 ignore next 5 -- requires BOTH getMigrationStatus() and
+   * closeDb() to fail in the same run. */
+  if (statusError && closeError) {
+    throw new Error(
+      `migrate:status: failed with "${describe(statusError)}", then closing the db pool also ` +
+        `failed with "${describe(closeError)}".`,
+    );
+  }
+  if (statusError) throw statusError;
+  if (closeError) throw closeError;
 }
 
+// `require.main` is the test runner's own entry module under vitest,
+// never this file — pure CLI-bootstrap wiring, same reasoning as
+// migrate.ts's own guard.
+/* v8 ignore start */
 if (require.main === module) {
   main().catch((error: unknown) => {
     console.error('migrate:status: failed:', error instanceof Error ? error.message : error);
     process.exit(1);
   });
 }
+/* v8 ignore stop */

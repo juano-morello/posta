@@ -2,9 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDbClient, runDrizzleMigrations, type DbClient } from './client';
-import { getMigrationStatus, hasPendingMigrations, loadDrizzleJournal, parseCreatedAtMs } from './migrate-status';
+import {
+  getMigrationStatus,
+  hasPendingMigrations,
+  loadDrizzleJournal,
+  main,
+  parseCreatedAtMs,
+} from './migrate-status';
 import { migrate } from './migrate';
 
 // T1.5.2 — `pnpm migrate:status` reports both migration flavors in one
@@ -104,4 +110,49 @@ describe('parseCreatedAtMs (S1.5 review, code-reviewer HIGH / typescript-reviewe
   it('throws, naming the bad value, rather than silently producing NaN', () => {
     expect(() => parseCreatedAtMs('not-a-number')).toThrow(/was not a numeric epoch-ms value/);
   });
+});
+
+describe('main() — the real pnpm migrate:status CLI entrypoint (coverage, S1.5 review)', () => {
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalPoolMax = process.env.DB_POOL_MAX;
+
+  afterEach(() => {
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalPoolMax === undefined) delete process.env.DB_POOL_MAX;
+    else process.env.DB_POOL_MAX = originalPoolMax;
+    vi.restoreAllMocks();
+  });
+
+  it('sets exitCode to 0 against a fully-migrated database and prints the table', async () => {
+    const container = await new PostgreSqlContainer('postgres:16-alpine').start();
+    const client = createDbClient({ connectionString: container.getConnectionUri(), max: 5 });
+    await migrate(client.pool, client.db);
+    await client.closeDb();
+
+    process.env.DATABASE_URL = container.getConnectionUri();
+    process.env.DB_POOL_MAX = '5';
+    const tableSpy = vi.spyOn(console, 'table').mockImplementation(() => undefined);
+    const originalExitCode = process.exitCode;
+
+    try {
+      await expect(main()).resolves.toBeUndefined();
+      expect(tableSpy).toHaveBeenCalled();
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = originalExitCode;
+      await container.stop();
+    }
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('a real getMigrationStatus() failure (connecting to an already-stopped container) propagates', async () => {
+    const container = await new PostgreSqlContainer('postgres:16-alpine').start();
+    const deadConnectionUri = container.getConnectionUri();
+    await container.stop();
+
+    process.env.DATABASE_URL = deadConnectionUri;
+    process.env.DB_POOL_MAX = '5';
+
+    await expect(main()).rejects.toThrow();
+  }, CONTAINER_TEST_TIMEOUT_MS);
 });

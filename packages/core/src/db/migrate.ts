@@ -28,7 +28,12 @@ export async function migrate(
   });
 }
 
-async function main(): Promise<void> {
+// Exported so migrate.test.ts can exercise the real CLI entrypoint (env
+// var driven createDbClient() + the capture-both-combine cleanup logic)
+// directly, not just the underlying migrate() function — the whole
+// reason coverage of this function matters is that error-handling
+// logic, which migrate() alone never touches.
+export async function main(): Promise<void> {
   const client = createDbClient();
 
   // [S1.5 review, silent-failure-hunter CRITICAL] A plain `finally {
@@ -48,10 +53,17 @@ async function main(): Promise<void> {
   try {
     await client.closeDb();
   } catch (error) {
+    /* v8 ignore next -- pool.end() genuinely failing (not just the
+     * connection never establishing) is impractical to trigger in a
+     * real integration test without mocking; same class of deferred
+     * gap as the S1.3 review's queue-cleanup double-failure branch. */
     closeError = error;
   }
 
   const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  /* v8 ignore next 5 -- requires BOTH migrate() and closeDb() to fail
+   * in the same run; see the closeError branch above for why that
+   * combination is impractical to construct for real. */
   if (migrateError && closeError) {
     throw new Error(
       `migrate: failed with "${describe(migrateError)}", then closing the db pool also failed ` +
@@ -67,10 +79,17 @@ async function main(): Promise<void> {
 // Only run main() when executed directly (`node dist/db/migrate.js` /
 // `pnpm migrate`), not when imported by migrate.test.ts or migrate-
 // status.ts (T1.5.2) reusing MigrateOptions/DEFAULT_SQL_MIGRATIONS_DIR's
-// sibling helpers.
+// sibling helpers. `require.main` is the test runner's own entry module
+// under vitest, never this file — this guard can never be true in a
+// test process, so it is pure CLI-bootstrap wiring (the same class of
+// thing vitest.config.ts's coverage already excludes for apps/*/src/
+// main.ts) rather than testable logic; main() itself is fully covered
+// above.
+/* v8 ignore start */
 if (require.main === module) {
   main().catch((error: unknown) => {
     console.error('migrate: failed:', error instanceof Error ? error.message : error);
     process.exit(1);
   });
 }
+/* v8 ignore stop */

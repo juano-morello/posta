@@ -76,7 +76,9 @@ export async function migrateDown(pool: Pool, options: MigrateDownOptions = {}):
   return filename;
 }
 
-async function main(): Promise<void> {
+// Exported so migrate-down.test.ts can exercise the real CLI entrypoint
+// directly.
+export async function main(): Promise<void> {
   const client = createDbClient();
 
   // Capture-both-combine-if-both-fail, same pattern as seed-asn.ts's
@@ -94,9 +96,15 @@ async function main(): Promise<void> {
   try {
     await client.closeDb();
   } catch (error) {
+    /* v8 ignore next -- pool.end() genuinely failing is impractical to
+     * trigger in a real integration test; see migrate.ts's identical
+     * annotation for the full reasoning (same deferred class of gap as
+     * the S1.3 review's queue-cleanup double-failure branch). */
     closeError = error;
   }
 
+  /* v8 ignore next 6 -- requires BOTH migrateDown() and closeDb() to
+   * fail in the same run. */
   if (downError && closeError) {
     const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
     throw new Error(
@@ -110,9 +118,14 @@ async function main(): Promise<void> {
   console.log(`migrate:down: reverted ${reverted}`);
 }
 
+// `require.main` is the test runner's own entry module under vitest,
+// never this file — pure CLI-bootstrap wiring, same reasoning as
+// migrate.ts's own guard.
+/* v8 ignore start */
 if (require.main === module) {
   main().catch((error: unknown) => {
     console.error('migrate:down: failed:', error instanceof Error ? error.message : error);
     process.exit(1);
   });
 }
+/* v8 ignore stop */
