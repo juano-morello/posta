@@ -22,26 +22,64 @@ const SEGMENTS = [
   { key: 'prefetch', colorClass: 'bg-n3' },
 ] as const satisfies ReadonlyArray<{ key: keyof HumanoBarProps; colorClass: string }>;
 
+// T6.4.5 — a segment that rounds away to a sliver of a pixel is a
+// rounded-away lie: the honest split is the whole point, so any non-zero
+// segment is floored at MIN_VISIBLE_PCT. The floor is paid for by
+// shrinking the segments ABOVE the floor proportionally to their own
+// share of that "donor" pool — never by shrinking another already-tiny
+// segment, and never by simply not summing to 100.
+const MIN_VISIBLE_PCT = 1.5;
+
+/** Pure and exported for direct testing — the redistribution math is the
+ * part worth verifying in isolation from rendering. */
+export function computeSegmentWidths(props: HumanoBarProps): Record<keyof HumanoBarProps, number> {
+  const keys = SEGMENTS.map((s) => s.key);
+  const total = keys.reduce((sum, key) => sum + props[key], 0);
+
+  if (total <= 0) {
+    return { humano: 0, bot: 0, unfurler: 0, prefetch: 0 };
+  }
+
+  const raw: Record<string, number> = {};
+  for (const key of keys) {
+    raw[key] = (props[key] / total) * 100;
+  }
+
+  const flooredKeys = keys.filter((key) => props[key] > 0 && raw[key]! < MIN_VISIBLE_PCT);
+  const deficit = flooredKeys.reduce((sum, key) => sum + (MIN_VISIBLE_PCT - raw[key]!), 0);
+
+  const donorKeys = keys.filter((key) => !flooredKeys.includes(key));
+  const donorTotal = donorKeys.reduce((sum, key) => sum + raw[key]!, 0);
+
+  const result: Record<string, number> = {};
+  for (const key of keys) {
+    if (flooredKeys.includes(key)) {
+      result[key] = MIN_VISIBLE_PCT;
+    } else if (donorTotal > 0) {
+      result[key] = raw[key]! - deficit * (raw[key]! / donorTotal);
+    } else {
+      result[key] = raw[key]!;
+    }
+  }
+  return result as Record<keyof HumanoBarProps, number>;
+}
+
 export function HumanoBar(props: HumanoBarProps) {
-  const total = props.humano + props.bot + props.unfurler + props.prefetch;
+  const widths = computeSegmentWidths(props);
 
   return (
     <div
       data-testid="humano-bar"
       className="flex h-4 gap-[2px] overflow-hidden rounded-badge bg-bg"
     >
-      {SEGMENTS.map(({ key, colorClass }) => {
-        const count = props[key];
-        const pct = total > 0 ? (count / total) * 100 : 0;
-        return (
-          <i
-            key={key}
-            data-testid={`humano-bar-segment-${key}`}
-            className={cn('block h-full', colorClass)}
-            style={{ width: `${pct}%` }}
-          />
-        );
-      })}
+      {SEGMENTS.map(({ key, colorClass }) => (
+        <i
+          key={key}
+          data-testid={`humano-bar-segment-${key}`}
+          className={cn('block h-full', colorClass)}
+          style={{ width: `${widths[key]}%` }}
+        />
+      ))}
     </div>
   );
 }

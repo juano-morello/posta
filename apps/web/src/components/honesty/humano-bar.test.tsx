@@ -65,3 +65,41 @@ describe('HumanoBar edge cases', () => {
     expect(screen.getByTestId('humano-bar-segment-prefetch').style.width).toBe('20%');
   });
 });
+
+// T6.4.5 — a segment that rounds away to a sliver of a pixel is a
+// rounded-away LIE, not a rendering nicety: the whole point of the
+// honesty primitives is that a single filtered click stays visible. The
+// floored segment's width is asserted with a tolerance (not an exact
+// literal) since the exact minimum is an implementation constant, not a
+// contract; what's load-bearing is (a) it clears some real visible floor
+// and (b) the total still sums to 100 — the floor must come FROM the
+// larger segments shrinking, never from thin air.
+describe('HumanoBar sub-1% segment visibility', () => {
+  function widthPct(testId: string): number {
+    const style = screen.getByTestId(testId).style.width;
+    expect(style.endsWith('%')).toBe(true);
+    return parseFloat(style);
+  }
+
+  it('keeps a 1-in-10000 segment visible and widths summing to 100%', () => {
+    render(<HumanoBar humano={9999} bot={1} unfurler={0} prefetch={0} />);
+
+    const botPct = widthPct('humano-bar-segment-bot');
+    // 1/10000 = 0.01% raw — must be floored well above that.
+    expect(botPct).toBeGreaterThanOrEqual(1);
+
+    const humanoPct = widthPct('humano-bar-segment-humano');
+    const unfurlerPct = widthPct('humano-bar-segment-unfurler');
+    const prefetchPct = widthPct('humano-bar-segment-prefetch');
+    expect(humanoPct + botPct + unfurlerPct + prefetchPct).toBeCloseTo(100, 5);
+
+    // The floor came from humano shrinking, not from nowhere.
+    expect(humanoPct).toBeLessThan(100);
+  });
+
+  it('never floors a genuinely zero segment', () => {
+    render(<HumanoBar humano={9999} bot={1} unfurler={0} prefetch={0} />);
+    expect(widthPct('humano-bar-segment-unfurler')).toBe(0);
+    expect(widthPct('humano-bar-segment-prefetch')).toBe(0);
+  });
+});
