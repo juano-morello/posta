@@ -9,6 +9,7 @@
     "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck && pnpm typecheck:tests && pnpm typecheck:scripts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "typecheck:scripts": "tsc --noEmit -p packages/core/scripts/tsconfig.json",
+    "migrate": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate",
     "lint": "eslint .",
     "depcruise": "depcruise --config .dependency-cruiser.js --output-type err-long apps packages",
     "test": "vitest run",
