@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { Recibos, type Recibo } from './recibos';
+import { MAX_RECIBOS, Recibos, type Recibo } from './recibos';
 
 // T6.4.11 — POSTA.md §5/§8.4: each row is `time · source · [classification]
 // · why`, with the bracketed verdict coloured from the T6.4.2 map. Colours
@@ -46,5 +46,34 @@ describe('Recibos rows (T6.4.11)', () => {
   it('colours a humano row with the primary token class', () => {
     render(<Recibos slug="promo" receipts={ROWS} />);
     expect(screen.getByText('[humano]').className).toMatch(/\bcls-primary\b/);
+  });
+});
+
+// T6.4.12 — a busy link streaming for an hour must not grow the DOM
+// without bound: Recibos caps to MAX_RECIBOS rows regardless of how many
+// receipts it's handed, keeping only the most recent ones, newest first —
+// `receipts` is chronological (oldest -> newest, matching how a live
+// subscriber would append incoming clicks onto an array over time).
+describe('Recibos row-buffer cap (T6.4.12)', () => {
+  it('caps to exactly MAX_RECIBOS rows, newest first, out of 5000 pushed receipts', () => {
+    const many: Recibo[] = Array.from({ length: 5000 }, (_, i) => ({
+      id: `id-${i}`,
+      t: `t-${i}`,
+      src: 'directo' as const,
+      cls: 'humano' as const,
+      why: `why-${i}`,
+    }));
+    render(<Recibos slug="promo" receipts={many} />);
+
+    const rows = screen.getAllByTestId('recibos-row');
+    expect(rows).toHaveLength(MAX_RECIBOS);
+    // Newest (last pushed, index 4999) first, oldest kept last.
+    expect(rows[0]).toHaveTextContent('t-4999');
+    expect(rows[rows.length - 1]).toHaveTextContent(`t-${5000 - MAX_RECIBOS}`);
+  });
+
+  it('does not truncate when under the cap', () => {
+    render(<Recibos slug="promo" receipts={ROWS} />);
+    expect(screen.getAllByTestId('recibos-row')).toHaveLength(ROWS.length);
   });
 });

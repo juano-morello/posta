@@ -31,7 +31,21 @@ function classificationClass(cls: Clasificacion): string {
   return `cls-${CLASIFICACION_TOKEN[cls]}`;
 }
 
+// T6.4.12 — a busy link streaming for an hour must not grow the DOM
+// without bound. `receipts` is chronological (oldest -> newest, matching
+// how a live subscriber appends incoming clicks onto an array over
+// time); this keeps only the most recent MAX_RECIBOS and reverses them
+// so the newest renders first, matching a `tail -f`-style recent-activity
+// feed. A named constant, not a literal, per the task's own requirement.
+export const MAX_RECIBOS = 200;
+
+function capReceipts(receipts: Recibo[]): Recibo[] {
+  const recent = receipts.length > MAX_RECIBOS ? receipts.slice(receipts.length - MAX_RECIBOS) : receipts;
+  return [...recent].reverse();
+}
+
 export function Recibos({ slug, receipts = [], className }: RecibosProps) {
+  const rows = capReceipts(receipts);
   return (
     <div data-testid="recibos" className={cn('island rounded-lg font-mono text-sm', className)}>
       <div className="recibos-chrome flex items-center gap-2 rounded-t-lg px-4 py-2">
@@ -45,8 +59,8 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
         </span>
       </div>
       <div data-testid="recibos-rows" className="flex flex-col gap-1 px-4 py-3">
-        {receipts.map((row) => (
-          <div key={row.id} className="flex flex-wrap items-baseline gap-2 break-words">
+        {rows.map((row) => (
+          <div key={row.id} data-testid="recibos-row" className="flex flex-wrap items-baseline gap-2 break-words">
             <span className="muted">{row.t}</span>
             <span className="muted">{row.src}</span>
             <span className={classificationClass(row.cls)}>[{row.cls}]</span>
