@@ -15,12 +15,13 @@ export interface HumanoBarProps {
   prefetch: number;
 }
 
+// T6.4.6 [a11y] — the Spanish label each segment gets in the legend.
 const SEGMENTS = [
-  { key: 'humano', colorClass: 'bg-primary' },
-  { key: 'bot', colorClass: 'bg-n1' },
-  { key: 'unfurler', colorClass: 'bg-n2' },
-  { key: 'prefetch', colorClass: 'bg-n3' },
-] as const satisfies ReadonlyArray<{ key: keyof HumanoBarProps; colorClass: string }>;
+  { key: 'humano', colorClass: 'bg-primary', label: 'humanos' },
+  { key: 'bot', colorClass: 'bg-n1', label: 'bots' },
+  { key: 'unfurler', colorClass: 'bg-n2', label: 'unfurlers' },
+  { key: 'prefetch', colorClass: 'bg-n3', label: 'prefetch' },
+] as const satisfies ReadonlyArray<{ key: keyof HumanoBarProps; colorClass: string; label: string }>;
 
 // T6.4.5 — a segment that rounds away to a sliver of a pixel is a
 // rounded-away lie: the honest split is the whole point, so any non-zero
@@ -64,22 +65,44 @@ export function computeSegmentWidths(props: HumanoBarProps): Record<keyof Humano
   return result as Record<keyof HumanoBarProps, number>;
 }
 
+// T6.4.6 [a11y] — colour is never the only channel: the bar itself carries
+// role="img" (it IS a single meaningful graphic, not four decorative
+// slivers) with an aria-label stating the whole split in words, and a
+// visible legend beneath it repeats every segment's label + raw count so
+// a sighted user doesn't have to decode bar-chart hues either.
+function buildAriaLabel(props: HumanoBarProps): string {
+  return SEGMENTS.map(({ key, label }) => `${props[key]} ${label}`).join(', ');
+}
+
 export function HumanoBar(props: HumanoBarProps) {
   const widths = computeSegmentWidths(props);
 
   return (
-    <div
-      data-testid="humano-bar"
-      className="flex h-4 gap-[2px] overflow-hidden rounded-badge bg-bg"
-    >
-      {SEGMENTS.map(({ key, colorClass }) => (
-        <i
-          key={key}
-          data-testid={`humano-bar-segment-${key}`}
-          className={cn('block h-full', colorClass)}
-          style={{ width: `${widths[key]}%` }}
-        />
-      ))}
+    <div>
+      <div
+        data-testid="humano-bar"
+        role="img"
+        aria-label={buildAriaLabel(props)}
+        className="flex h-4 gap-[2px] overflow-hidden rounded-badge bg-bg"
+      >
+        {SEGMENTS.map(({ key, colorClass }) => (
+          <i
+            key={key}
+            data-testid={`humano-bar-segment-${key}`}
+            className={cn('block h-full', colorClass)}
+            style={{ width: `${widths[key]}%` }}
+          />
+        ))}
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-muted">
+        {SEGMENTS.map(({ key, colorClass, label }) => (
+          <li key={key} className="flex items-center gap-1.5">
+            <span className={cn('h-2 w-2 rounded-full', colorClass)} aria-hidden="true" />
+            <span>{label}</span>
+            <span className="text-fg">{props[key]}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

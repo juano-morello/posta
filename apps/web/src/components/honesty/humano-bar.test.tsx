@@ -103,3 +103,38 @@ describe('HumanoBar sub-1% segment visibility', () => {
     expect(widthPct('humano-bar-segment-prefetch')).toBe(0);
   });
 });
+
+// T6.4.6 [a11y] — colour alone never carries the meaning: a legend gives
+// every segment a Spanish label + its raw count (so a colour-blind user,
+// or anyone just not parsing bar-chart hues, still gets the honest split
+// in words), and the bar itself is labelled as a whole via aria-label
+// naming all four groups' counts, matching how a screen reader would
+// actually encounter it (one image-like element, not four unlabelled
+// coloured slivers).
+describe('HumanoBar legend', () => {
+  it('renders a legend entry with the Spanish label and count for every segment', () => {
+    render(<HumanoBar humano={60} bot={20} unfurler={12} prefetch={8} />);
+    expect(screen.getByText('humanos')).toBeInTheDocument();
+    expect(screen.getByText('60')).toBeInTheDocument();
+    expect(screen.getByText('bots')).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.getByText('unfurlers')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('prefetch')).toBeInTheDocument();
+    expect(screen.getByText('8')).toBeInTheDocument();
+  });
+
+  it('gives the bar role="img" with an aria-label naming all four groups', () => {
+    render(<HumanoBar humano={60} bot={20} unfurler={12} prefetch={8} />);
+    const bar = screen.getByRole('img');
+    const label = bar.getAttribute('aria-label')!;
+    expect(label).toMatch(/60/);
+    expect(label).toMatch(/humano/i);
+    expect(label).toMatch(/20/);
+    expect(label).toMatch(/bot/i);
+    expect(label).toMatch(/12/);
+    expect(label).toMatch(/unfurler/i);
+    expect(label).toMatch(/8/);
+    expect(label).toMatch(/prefetch/i);
+  });
+});
