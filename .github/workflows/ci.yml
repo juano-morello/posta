@@ -29,7 +29,15 @@ jobs:
   ci:
     name: Install, lint, typecheck, test, build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # T6.5.9 — bumped from 20: the visual-regression step below has its
+    # OWN 10-minute budget (browser install + a second real `next build`
+    # + tests), and if the JOB's own ceiling were hit first, GitHub
+    # Actions cancels the whole job rather than failing the one step —
+    # `if: failure()` on the report-upload step does NOT run on a
+    # cancellation, only on an actual step failure. This margin is what
+    # keeps "the step times out" and "the job gets cancelled" from being
+    # the same event, so a real timeout still uploads its report.
+    timeout-minutes: 30
 
     # DATABASE_URL/REDIS_URL are exactly what apps/api, apps/worker, and
     # tests/infra/redis-policy.test.ts read at boot/runtime (S0.3's env
