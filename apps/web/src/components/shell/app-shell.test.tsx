@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@/lib/theme';
 import { AppShell } from './app-shell';
@@ -61,7 +61,12 @@ describe('AppShell', () => {
     const wordmark = screen.getByText('Posta');
     const compactBar = wordmark.closest('header') as HTMLElement;
     expect(compactBar.className).toMatch(/mobile:hidden/);
-    expect(screen.getByRole('button', { name: 'Nuevo' })).toBeInTheDocument();
+    // Scoped to compactBar: the desktop Topbar's CTA shares the same
+    // "Nuevo link" accessible name on purpose (WCAG 3.2.4 Consistent
+    // Identification), and both render simultaneously in jsdom (no real
+    // CSS media-query evaluation), so an unscoped query would be
+    // ambiguous.
+    expect(within(compactBar).getByRole('button', { name: 'Nuevo link' })).toBeInTheDocument();
   });
 
   it('renders children content', () => {

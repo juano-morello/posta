@@ -16,16 +16,21 @@ test.describe('AppShell keyboard traversal and focus visibility', () => {
     expect(results.violations).toEqual([]);
   });
 
-  test('logical tab order: skip link first, then topbar, then nav, then content', async ({ page }) => {
+  test('logical tab order: skip link, then topbar, then nav, then content', async ({ page }) => {
+    // T6.3.9's own a11y review found a CRITICAL bug here: an earlier
+    // flexbox + `order-*` AppShell nested <main> inside the same DOM
+    // subtree as Topbar, so real focusable content landed in Tab order
+    // BETWEEN Topbar and Sidebar, not after both — and this exact test
+    // couldn't catch it, because the fixture page had zero focusable
+    // elements inside <main> at the time. The "Ver más" button added to
+    // shell-preview/page.tsx exists specifically so this assertion can be
+    // real: AppShell is now CSS Grid (skip-link, topbar, sidebar, main as
+    // four independent grid items in that DOM order), not nested flexbox.
     await page.keyboard.press('Tab');
     await expect(page.getByText('Saltar al contenido')).toBeFocused();
 
-    // The next focusables belong to the topbar (search, Nuevo link,
-    // avatar) before the sidebar nav — confirmed by walking focus order
-    // and asserting each stop is inside the topbar until the sidebar's
-    // first link is reached.
     const focusOrder: string[] = [];
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 9; i++) {
       const tag = await page.evaluate(() => {
         const el = document.activeElement;
         return el ? `${el.tagName}:${el.getAttribute('aria-label') ?? el.textContent?.trim().slice(0, 20)}` : 'none';
@@ -33,13 +38,15 @@ test.describe('AppShell keyboard traversal and focus visibility', () => {
       focusOrder.push(tag);
       await page.keyboard.press('Tab');
     }
-    // The Sidebar's "Links" nav item must appear somewhere after the
-    // topbar's controls, never before them.
-    const sidebarIndex = focusOrder.findIndex((entry) => entry.includes('Links'));
     const searchIndex = focusOrder.findIndex((entry) => entry.toLowerCase().includes('buscar'));
-    expect(sidebarIndex).toBeGreaterThan(-1);
+    const sidebarIndex = focusOrder.findIndex((entry) => entry.includes('Links'));
+    const contentIndex = focusOrder.findIndex((entry) => entry.includes('Ver más'));
     expect(searchIndex).toBeGreaterThan(-1);
+    expect(sidebarIndex).toBeGreaterThan(-1);
+    expect(contentIndex).toBeGreaterThan(-1);
+    // topbar -> nav -> content, strictly in that order.
     expect(sidebarIndex).toBeGreaterThan(searchIndex);
+    expect(contentIndex).toBeGreaterThan(sidebarIndex);
   });
 
   test('every focused element has a visible (non-none) outline', async ({ page }) => {
@@ -85,5 +92,47 @@ test.describe('AppShell keyboard traversal and focus visibility', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toBeHidden();
     await expect(avatarTrigger).toBeFocused();
+  });
+});
+
+// T6.3.9's own a11y review, Finding 4: the desktop-only describe block
+// above forces `page.setViewportSize({ width: 1280, ... })` in its own
+// beforeEach — including under the `mobile` Playwright project, whose
+// default 390x844 viewport it overrides right back to 1280x800. That
+// left BottomTabs and CompactMobileTopbar (the one thing T6.3.5 actually
+// added — the 44px floor, the ring-inset focus style, the safe-area
+// padding) completely unexercised by axe or by a real keyboard/computed-
+// style check, despite this task being titled "...across the whole
+// shell." This block runs the same two checks at the mobile width.
+test.describe('AppShell mobile layout (390px) — the shell T6.3.5 actually changed', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/shell-preview');
+  });
+
+  test('has zero axe violations at mobile width', async ({ page }) => {
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
+  });
+
+  test('every visible BottomTabs/CompactMobileTopbar focusable has a visible ring', async ({ page }) => {
+    const focusableCount = await page
+      .locator('a:visible, button:visible, [tabindex]:not([tabindex="-1"]):visible')
+      .count();
+    expect(focusableCount).toBeGreaterThan(0);
+
+    for (let i = 0; i < focusableCount; i++) {
+      await page.keyboard.press('Tab');
+      const outline = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el) return null;
+        const style = window.getComputedStyle(el);
+        return { outlineStyle: style.outlineStyle, boxShadow: style.boxShadow };
+      });
+      expect(outline).not.toBeNull();
+      const hasOutline = outline!.outlineStyle !== 'none';
+      const hasRingShadow = outline!.boxShadow !== 'none' && outline!.boxShadow !== '';
+      expect(hasOutline || hasRingShadow).toBe(true);
+    }
   });
 });

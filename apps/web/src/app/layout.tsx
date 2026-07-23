@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import '@/styles/globals.css';
 import { ThemeProvider } from '@/lib/theme';
@@ -6,6 +6,19 @@ import { themeInitScript } from '@/lib/theme-script';
 
 export const metadata: Metadata = {
   title: 'Posta',
+};
+
+// T6.3.5 [a11y] — FOUND during this story's a11y review: BottomTabs'
+// pb-[env(safe-area-inset-bottom)] compiles to correct CSS, but every
+// env(safe-area-inset-*) variable resolves to 0 unless the page's
+// viewport declares viewport-fit=cover (CSS Environment Variables spec).
+// Without this, the safe-area padding this task shipped was a no-op —
+// syntactically present, doing nothing on a real notched device. Next.js
+// 13+ splits `viewport` out of `metadata` into its own export.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -31,8 +31,11 @@ function CompactMobileTopbar() {
         >
           {theme === 'dark' ? '☾' : '☀'}
         </button>
+        {/* T6.3.9 [a11y] — same accessible name as the desktop Topbar's
+            CTA (WCAG 3.2.4 Consistent Identification): the same control
+            shouldn't have two different names depending on viewport. */}
         <Button variant="primary" size="sm">
-          Nuevo
+          Nuevo link
         </Button>
       </div>
     </header>
@@ -41,15 +44,30 @@ function CompactMobileTopbar() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen bg-bg">
-      {/* T6.3.9 [a11y] — first focusable element in the shell: lets a
-          keyboard user skip Topbar+Sidebar and land directly on the
-          content, instead of tabbing through nav on every single page.
-          Border-only lime (not a filled bg-primary/text-primary), same
-          resolution as Sidebar/Tabs' active state (T6.3.2/T6.2.4) and for
-          the same reason T6.3.10 exists: reserve lime background/text
-          fills for the one CTA per view — this is a focus indicator, not
-          a second competing CTA. */}
+    // T6.3.9 [a11y] — FOUND during this story's own accessibility review:
+    // an earlier flexbox + `order-*` version nested <main> INSIDE the same
+    // subtree as Topbar, with Sidebar as a later sibling. CSS `order` only
+    // changes paint order, never DOM order — so real focusable content
+    // rendered as `{children}` landed in Tab order BETWEEN Topbar and
+    // Sidebar, not after both, on every page with anything interactive in
+    // it (confirmed empirically with a real Tab walk in a production
+    // build). Flexbox `order` cannot fix this: it cannot let one DOM
+    // sibling (main) share a visual column with a different, non-adjacent
+    // sibling (Topbar) without nesting them, and nesting is exactly what
+    // broke Tab order. CSS Grid can: Sidebar, the topbar row, and main are
+    // three INDEPENDENT grid items placed by `grid-column`/`grid-row`, so
+    // DOM order can be exactly skip-link -> topbar -> sidebar -> main
+    // (matching intended Tab order) while 2-D visual placement is fully
+    // decoupled from it.
+    <div className="grid min-h-screen grid-rows-[auto_1fr] bg-bg mobile:grid-cols-[220px_1fr]">
+      {/* First focusable element in the shell: lets a keyboard user skip
+          Topbar+Sidebar and land directly on the content, instead of
+          tabbing through nav on every single page. Border-only lime (not
+          a filled bg-primary/text-primary), same resolution as Sidebar/
+          Tabs' active state (T6.3.2/T6.2.4) and for the same reason
+          T6.3.10 exists: reserve lime background/text fills for the one
+          CTA per view — this is a focus indicator, not a second competing
+          CTA. */}
       <a
         href="#main-content"
         className="sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:left-4 focus-visible:top-4 focus-visible:z-50 focus-visible:rounded focus-visible:border-2 focus-visible:border-primary focus-visible:bg-surface focus-visible:px-4 focus-visible:py-2 focus-visible:font-sans focus-visible:font-semibold focus-visible:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -57,35 +75,38 @@ export function AppShell({ children }: { children: ReactNode }) {
         Saltar al contenido
       </a>
 
-      {/* T6.3.9 [a11y] — DOM order (and therefore tab order) is
-          Topbar-column FIRST, Sidebar SECOND, matching POSTA.md's
-          intended traversal (skip link -> topbar -> nav -> content):
-          page-level actions before site navigation. `order-*` decouples
-          that from VISUAL position, which still needs the sidebar on the
-          left — CSS flex order changes paint order, never DOM/tab order. */}
-      <div className="order-2 flex min-w-0 flex-1 flex-col">
+      {/* Topbar row: row 1, desktop column 2 (mobile: single implicit
+          column, so no explicit column needed below 800px). */}
+      <div className="mobile:col-start-2 mobile:row-start-1">
         <div className="hidden mobile:block">
           <Topbar />
         </div>
         <CompactMobileTopbar />
-
-        {/* T6.3.8 — POSTA.md §3: fluid page padding, no breakpoints.
-            tabIndex={-1}: a skip-link target that isn't itself normally
-            focusable still needs to be programmatically focusable so the
-            skip link's jump actually moves keyboard focus, not just the
-            page scroll position. */}
-        <main
-          id="main-content"
-          tabIndex={-1}
-          className="flex-1 p-[var(--pad-page)] pb-16 mobile:pb-0 focus-visible:outline-none"
-        >
-          {children}
-        </main>
       </div>
 
-      <div className="order-1 hidden mobile:flex">
+      {/* Sidebar: DOM order right after the topbar row and BEFORE <main>
+          — this is what fixes Tab order (topbar -> nav -> content).
+          Visually spans both rows in column 1 on desktop; `hidden` keeps
+          it out of layout (and out of Tab order) entirely below 800px,
+          where it occupies no grid cell at all. */}
+      <div className="hidden mobile:col-start-1 mobile:row-start-1 mobile:row-span-2 mobile:flex">
         <Sidebar />
       </div>
+
+      {/* T6.3.8 — POSTA.md §3: fluid page padding, no breakpoints.
+          tabIndex={-1}: a skip-link target that isn't itself normally
+          focusable still needs to be programmatically focusable so the
+          skip link's jump actually moves keyboard focus, not just the
+          page scroll position. Desktop: row 2/column 2. Mobile: the
+          remaining implicit row in the single column. `min-w-0` stops a
+          wide child (e.g. a table) from blowing out the grid track. */}
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-w-0 p-[var(--pad-page)] pb-16 mobile:col-start-2 mobile:row-start-2 mobile:pb-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        {children}
+      </main>
 
       <BottomTabs />
     </div>

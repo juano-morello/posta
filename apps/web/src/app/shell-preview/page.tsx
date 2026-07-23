@@ -32,6 +32,19 @@ export default function ShellPreviewPage() {
           </Card>
         ))}
       </div>
+      {/* T6.3.9 [a11y] — a real focusable element inside {children}. The
+          fixture previously had none, which is exactly why the DOM-order
+          bug this comment's sibling (app-shell.tsx) describes shipped
+          undetected: shell-a11y.spec.ts's tab-order test could not reveal
+          a bug in content's position when content had nothing focusable
+          to walk through. Simulates literally any future E7 screen (a
+          row-action button, a "Guardar" button, anything). */}
+      <button
+        type="button"
+        className="mt-6 rounded border border-border px-3 py-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Ver más
+      </button>
     </AppShell>
   );
 }
