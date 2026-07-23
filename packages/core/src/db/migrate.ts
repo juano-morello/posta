@@ -30,12 +30,38 @@ export async function migrate(
 
 async function main(): Promise<void> {
   const client = createDbClient();
+
+  // [S1.5 review, silent-failure-hunter CRITICAL] A plain `finally {
+  // await client.closeDb(); }` would let a closeDb() failure REPLACE a
+  // real migrate() error if both throw — the same class of bug already
+  // fixed in pg-container.ts's closeClientAndContainer(), seed-asn.ts's
+  // main(), migrate-down.ts's main(), and seed.ts's main(). Capture
+  // both, combine if both fail, never silently drop the primary error.
+  let migrateError: unknown;
   try {
     await migrate(client.pool, client.db);
-    console.log('migrate: applied every pending drizzle and sql migration');
-  } finally {
-    await client.closeDb();
+  } catch (error) {
+    migrateError = error;
   }
+
+  let closeError: unknown;
+  try {
+    await client.closeDb();
+  } catch (error) {
+    closeError = error;
+  }
+
+  const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  if (migrateError && closeError) {
+    throw new Error(
+      `migrate: failed with "${describe(migrateError)}", then closing the db pool also failed ` +
+        `with "${describe(closeError)}".`,
+    );
+  }
+  if (migrateError) throw migrateError;
+  if (closeError) throw closeError;
+
+  console.log('migrate: applied every pending drizzle and sql migration');
 }
 
 // Only run main() when executed directly (`node dist/db/migrate.js` /

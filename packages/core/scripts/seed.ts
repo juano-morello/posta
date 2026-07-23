@@ -85,6 +85,21 @@ export async function seed(pool: Pool, env: SeedEnv = loadSeedEnvFromProcessEnv(
     return findExistingSeedResult(db, existingUser[0].id);
   }
 
+  // [S1.5 review, security-reviewer MEDIUM][INV-9] Idempotency keyed on
+  // email alone would let a stale/misconfigured SEED_USER_EMAIL (a
+  // different value than whatever created the first account) silently
+  // create a SECOND tenant — quietly violating "seed one account" rather
+  // than erroring. v1 seeds exactly one account, globally, not just one
+  // per distinct email.
+  const anyExistingUser = await db.select().from(user).limit(1);
+  if (anyExistingUser[0]) {
+    throw new Error(
+      `seed: a different account already exists (${anyExistingUser[0].email}), but ` +
+        `SEED_USER_EMAIL is "${env.email}" — v1 seeds exactly one account. If rotating the ` +
+        `seed account is intentional, remove the existing user first.`,
+    );
+  }
+
   const userId = newId();
   const hashedPassword = await hashPassword(env.password);
 

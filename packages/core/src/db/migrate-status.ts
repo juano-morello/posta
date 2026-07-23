@@ -43,9 +43,66 @@ interface DrizzleJournal {
  * applied — so a journal entry is "applied" exactly when some tracking
  * row's `created_at` equals its `when`.
  */
+export function loadDrizzleJournal(journalPath: string): DrizzleJournal {
+  // [S1.5 review, typescript-reviewer HIGH] A raw JSON.parse(readFileSync(...))
+  // would surface a corrupted/malformed journal as a bare, contextless
+  // SyntaxError (or, worse, an `as DrizzleJournal` cast that silently
+  // accepts a shape with no `entries` array at all, failing later with a
+  // confusing ".map is not a function"). Both fail loudly here instead,
+  // naming the file.
+  let raw: string;
+  try {
+    raw = readFileSync(journalPath, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `migrate:status: failed to read the drizzle journal at ${journalPath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `migrate:status: ${journalPath} is not valid JSON: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const hasEntriesArray =
+    typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { entries?: unknown }).entries);
+  if (!hasEntriesArray) {
+    throw new Error(`migrate:status: ${journalPath} does not have the expected {"entries": [...]} shape`);
+  }
+
+  return parsed as DrizzleJournal;
+}
+
+/**
+ * `created_at` is a Postgres `bigint` (epoch ms) in drizzle's own
+ * `__drizzle_migrations` table — the pg driver returns bigint columns as
+ * strings, and `::text` makes that explicit. [S1.5 review, code-reviewer
+ * HIGH / typescript-reviewer MEDIUM] `Number()` on anything else (a
+ * genuine timestamp string, an unexpected format) silently produces
+ * `NaN`, which would then silently mis-key the Map below and report an
+ * APPLIED drizzle migration as PENDING with no indication why. Validated
+ * here instead of trusted implicitly.
+ */
+export function parseCreatedAtMs(rawCreatedAt: string): number {
+  const ms = Number(rawCreatedAt);
+  if (!Number.isFinite(ms)) {
+    throw new Error(
+      `migrate:status: drizzle.__drizzle_migrations.created_at was not a numeric epoch-ms value ` +
+        `(got "${rawCreatedAt}") — expected a bigint column.`,
+    );
+  }
+  return ms;
+}
+
 async function drizzleFlavorRows(pool: Pool, migrationsDir: string): Promise<MigrationStatusRow[]> {
   const journalPath = path.join(migrationsDir, 'meta', '_journal.json');
-  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as DrizzleJournal;
+  const journal = loadDrizzleJournal(journalPath);
 
   const tableExists = await pool.query<{ exists: boolean }>(`
     SELECT EXISTS (
@@ -59,7 +116,8 @@ async function drizzleFlavorRows(pool: Pool, migrationsDir: string): Promise<Mig
       `SELECT created_at::text AS created_at FROM drizzle.__drizzle_migrations`,
     );
     for (const row of applied.rows) {
-      appliedAtByWhen.set(Number(row.created_at), new Date(Number(row.created_at)).toISOString());
+      const ms = parseCreatedAtMs(row.created_at);
+      appliedAtByWhen.set(ms, new Date(ms).toISOString());
     }
   }
 

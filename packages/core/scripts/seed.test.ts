@@ -85,4 +85,18 @@ describe('seed (T1.5.5)', () => {
     expect(link.rows[0]?.tenant_id).toBe(userId);
     expect(link.rows[0]?.destination).toMatch(/^https:\/\//);
   });
+
+  it('[INV-9] refuses to create a second, different account — a stale SEED_USER_EMAIL must error, not silently seed a second tenant', async () => {
+    // Runs after the tests above, which have already seeded SEED_ENV's
+    // account into this shared container — asserting a DIFFERENT email
+    // is rejected, not silently accepted as a second account.
+    await expect(
+      seed(handle.pool, { ...SEED_ENV, email: 'someone-else@example.test' }),
+    ).rejects.toThrow(/seeds exactly one account/);
+
+    const userCount = await handle.db.execute<{ count: string }>(sql`
+      SELECT count(*)::text AS count FROM "user"
+    `);
+    expect(userCount.rows[0]?.count).toBe('1');
+  });
 });
