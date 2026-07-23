@@ -2,6 +2,7 @@
 
 import { HonestySection } from './sections/honesty-section';
 import { ShadcnSection } from './sections/shadcn-section';
+import { ShellSection } from './sections/shell-section';
 
 // T6.5.1 — the component gallery: every primitive rendered in isolation
 // (POSTA.md/spec §11.1) so E7/E8 assemble known-good parts. A client-only
@@ -62,6 +63,7 @@ export default function GalleryPage() {
           <h2 id="shell-heading" className="mb-4 font-sans text-lg font-semibold">
             App shell
           </h2>
+          <ShellSection />
         </section>
       </main>
     </div>

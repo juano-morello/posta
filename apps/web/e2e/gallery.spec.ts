@@ -91,3 +91,34 @@ test.describe('/gallery honesty primitives (T6.5.4)', () => {
   });
 });
 
+// T6.5.5 — Sidebar/Topbar (desktop) and BottomTabs (mobile) inspectable
+// on ONE page without resizing the real browser window. AppShell's
+// desktop/mobile swap (T6.3.6) is a real CSS media query keyed on the
+// VIEWPORT's width, not a containing element's width — so two divs of
+// different widths side by side on the same page would both see the
+// SAME (outer) viewport and render identically. An <iframe> is a
+// genuinely separate browsing context with its own viewport matching its
+// own width/height attributes, which is what actually makes both
+// breakpoints render correctly, simultaneously, on this one page — hence
+// "framed viewports" in the task's own wording.
+test.describe('/gallery shell frames (T6.5.5)', () => {
+  test('renders both the desktop and mobile shell frames simultaneously', async ({ page }) => {
+    await page.goto('/gallery');
+
+    const desktopFrame = page.getByTestId('shell-frame-desktop');
+    const mobileFrame = page.getByTestId('shell-frame-mobile');
+    await expect(desktopFrame).toBeVisible();
+    await expect(mobileFrame).toBeVisible();
+
+    const desktopNav = desktopFrame.contentFrame().locator('nav[aria-label="Principal"]:not(.fixed)');
+    const desktopBottomTabs = desktopFrame.contentFrame().locator('nav[aria-label="Principal"].fixed');
+    await expect(desktopNav).toBeVisible();
+    await expect(desktopBottomTabs).toBeHidden();
+
+    const mobileNav = mobileFrame.contentFrame().locator('nav[aria-label="Principal"]:not(.fixed)');
+    const mobileBottomTabs = mobileFrame.contentFrame().locator('nav[aria-label="Principal"].fixed');
+    await expect(mobileNav).toBeHidden();
+    await expect(mobileBottomTabs).toBeVisible();
+  });
+});
+
