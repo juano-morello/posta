@@ -24,6 +24,7 @@ export function BottomTabs() {
   return (
     <nav
       aria-label="Principal"
+      data-view="mobile-only"
       // T6.3.5 [a11y] — iOS home-indicator devices clip content flush to
       // the bottom edge without the safe-area padding below. A React
       // inline style doesn't survive jsdom (its CSSStyleDeclaration

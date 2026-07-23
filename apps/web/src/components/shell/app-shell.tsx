@@ -17,7 +17,10 @@ import { Topbar } from './topbar';
 function CompactMobileTopbar() {
   const { theme, setTheme } = useTheme();
   return (
-    <header className="flex h-14 items-center justify-between gap-3 border-b border-border-subtle bg-surface px-4 mobile:hidden">
+    <header
+      data-view="mobile-only"
+      className="flex h-14 items-center justify-between gap-3 border-b border-border-subtle bg-surface px-4 mobile:hidden"
+    >
       <span className="font-sans text-lg font-bold text-fg">Posta</span>
       <div className="flex items-center gap-2">
         <button
