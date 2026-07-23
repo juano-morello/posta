@@ -28,3 +28,40 @@ describe('HumanoBar segment widths', () => {
     expect(prefetch.className).toMatch(/\bbg-n3\b/);
   });
 });
+
+// T6.4.4 — three edge cases that collapse the naive `count / total`
+// division: a total of 0 (nothing has happened yet — no clicks at all),
+// 100% human (no bots ever), and 0% human (every click filtered). None of
+// them may divide by zero into NaN, and the track's 16px height must not
+// visually collapse in any of them — an inert empty bar still needs to
+// look like a bar, not vanish.
+describe('HumanoBar edge cases', () => {
+  it('renders an inert empty track for zero clicks — no NaN width', () => {
+    render(<HumanoBar humano={0} bot={0} unfurler={0} prefetch={0} />);
+    const bar = screen.getByTestId('humano-bar');
+    expect(bar.className).toMatch(/\bh-4\b/);
+    for (const key of ['humano', 'bot', 'unfurler', 'prefetch']) {
+      const segment = screen.getByTestId(`humano-bar-segment-${key}`);
+      expect(segment.style.width).not.toBe('NaN%');
+      expect(segment.style.width).toBe('0%');
+    }
+  });
+
+  it('renders one full lime segment for 100% human', () => {
+    render(<HumanoBar humano={100} bot={0} unfurler={0} prefetch={0} />);
+    const bar = screen.getByTestId('humano-bar');
+    expect(bar.className).toMatch(/\bh-4\b/);
+    expect(screen.getByTestId('humano-bar-segment-humano').style.width).toBe('100%');
+    expect(screen.getByTestId('humano-bar-segment-bot').style.width).toBe('0%');
+  });
+
+  it('renders the full gray ramp with no lime for 0% human', () => {
+    render(<HumanoBar humano={0} bot={50} unfurler={30} prefetch={20} />);
+    const bar = screen.getByTestId('humano-bar');
+    expect(bar.className).toMatch(/\bh-4\b/);
+    expect(screen.getByTestId('humano-bar-segment-humano').style.width).toBe('0%');
+    expect(screen.getByTestId('humano-bar-segment-bot').style.width).toBe('50%');
+    expect(screen.getByTestId('humano-bar-segment-unfurler').style.width).toBe('30%');
+    expect(screen.getByTestId('humano-bar-segment-prefetch').style.width).toBe('20%');
+  });
+});
