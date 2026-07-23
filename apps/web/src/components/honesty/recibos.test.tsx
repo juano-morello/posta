@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MAX_RECIBOS, Recibos, type Recibo } from './recibos';
@@ -75,5 +77,60 @@ describe('Recibos row-buffer cap (T6.4.12)', () => {
   it('does not truncate when under the cap', () => {
     render(<Recibos slug="promo" receipts={ROWS} />);
     expect(screen.getAllByTestId('recibos-row')).toHaveLength(ROWS.length);
+  });
+});
+
+// T6.4.13 [security] — `why` is built from raw, attacker-controlled
+// user-agent fragments captured at the edge. React already escapes text
+// nodes by default (the first test below is a regression guard on that
+// default, not new behaviour), but a hostile UA can still smuggle
+// invisible control characters or zero-width joiners that corrupt the
+// terminal layout without ever being visible in code review — that's the
+// genuinely new part.
+describe('Recibos why-string hardening (T6.4.13) [security]', () => {
+  it('renders a hostile HTML payload as visible text with no img element in the DOM', () => {
+    const { container } = render(
+      <Recibos
+        slug="promo"
+        receipts={[
+          {
+            id: 'x',
+            t: '00:00:00',
+            src: 'directo',
+            cls: 'bot',
+            why: '<img src=x onerror=alert(1)>',
+          },
+        ]}
+      />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
+  });
+
+  it('strips control characters and zero-width joiners from why', () => {
+    // Built from char codes, deliberately: embedding the literal invisible
+    // characters directly in this file's source would recreate exactly
+    // the "corrupts the layout without being visible in review" problem
+    // this task exists to catch, in the one file meant to demonstrate
+    // catching it. ZERO_WIDTH_JOINER (U+200D), a control char (BEL,
+    // U+0007) and ZERO_WIDTH_SPACE (U+200B) sandwiched inside an
+    // otherwise-ordinary UA fragment.
+    const ZERO_WIDTH_JOINER = String.fromCharCode(0x200d);
+    const BEL_CONTROL_CHAR = String.fromCharCode(0x07);
+    const ZERO_WIDTH_SPACE = String.fromCharCode(0x200b);
+    const hostile = `python-requests${ZERO_WIDTH_JOINER}${BEL_CONTROL_CHAR}${ZERO_WIDTH_SPACE}/2.31`;
+
+    render(
+      <Recibos
+        slug="promo"
+        receipts={[{ id: 'y', t: '00:00:01', src: 'directo', cls: 'bot', why: hostile }]}
+      />,
+    );
+    expect(screen.getByText('python-requests/2.31')).toBeInTheDocument();
+  });
+
+  it('never reaches for dangerouslySetInnerHTML (regression guard on the escaping default)', () => {
+    const source = readFileSync(path.resolve(__dirname, 'recibos.tsx'), 'utf-8');
+    expect(source).not.toMatch(/dangerouslySetInnerHTML/);
   });
 });

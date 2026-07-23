@@ -44,6 +44,42 @@ function capReceipts(receipts: Recibo[]): Recibo[] {
   return [...recent].reverse();
 }
 
+// T6.4.13 [security] — `why` is derived from raw, attacker-controlled
+// user-agent fragments captured at the edge. React already escapes text
+// nodes by default, so an HTML/script payload renders as inert visible
+// text with no injection risk — this function is NOT about that (see
+// this file's own regression-guard test for it). It strips what escaping
+// alone does not neutralize: C0/C1 control characters and zero-width/
+// bidi-override formatting characters a hostile UA can smuggle to corrupt
+// the terminal layout (or hide/reorder text) without ever showing up as
+// a suspicious diff in code review.
+//
+// Deliberately expressed as numeric code-point ranges, not a regex
+// character class: typing the actual invisible characters into a regex
+// literal would recreate, in this exact file, the "corrupts the layout
+// without being visible in review" problem this function exists to
+// prevent — and a regex escape sequence reads the same to the naked eye
+// as any other backslash-digit noise, which is precisely the low-scrutiny
+// spot a real mistake could hide.
+const CONTROL_AND_INVISIBLE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x00, 0x1f], // C0 controls (includes BEL, NUL, etc.)
+  [0x7f, 0x9f], // DEL + C1 controls
+  [0x200b, 0x200f], // zero-width space/non-joiner/joiner, LRM, RLM
+  [0x2028, 0x2029], // line separator, paragraph separator
+  [0x2060, 0x2060], // word joiner
+  [0xfeff, 0xfeff], // BOM / zero-width no-break space
+];
+
+function isControlOrInvisible(codePoint: number): boolean {
+  return CONTROL_AND_INVISIBLE_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end);
+}
+
+function sanitizeWhy(why: string): string {
+  return Array.from(why)
+    .filter((char) => !isControlOrInvisible(char.codePointAt(0)!))
+    .join('');
+}
+
 export function Recibos({ slug, receipts = [], className }: RecibosProps) {
   const rows = capReceipts(receipts);
   return (
@@ -64,7 +100,7 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
             <span className="muted">{row.t}</span>
             <span className="muted">{row.src}</span>
             <span className={classificationClass(row.cls)}>[{row.cls}]</span>
-            <span>{row.why}</span>
+            <span>{sanitizeWhy(row.why)}</span>
           </div>
         ))}
       </div>
