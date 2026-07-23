@@ -157,3 +157,38 @@ test.describe('/gallery honesty edge cases (T6.5.6)', () => {
   });
 });
 
+// T6.5.7 — a persistent toggle wired to the REAL useTheme() (T6.1.11),
+// not a gallery-local mock: this is how "verified in both themes"
+// actually gets checked by a human, and it must not touch Recibos'
+// always-dark island (T6.4.10) — the same invariant e2e/islands.spec.ts
+// already proves for the component in isolation, re-checked here in the
+// context this toggle actually lives in.
+test.describe('/gallery theme toggle (T6.5.7)', () => {
+  test('adds and removes .light on the root without changing the Recibos island background', async ({
+    page,
+  }) => {
+    await page.goto('/gallery');
+
+    const html = page.locator('html');
+    await expect(html).not.toHaveClass(/light/);
+
+    const recibosBg = async () =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-testid="gallery-recibos"] [data-testid="recibos"]');
+        if (!el) throw new Error('gallery.spec.ts: gallery Recibos instance not found');
+        return getComputedStyle(el).backgroundColor;
+      });
+
+    const darkBg = await recibosBg();
+    expect(darkBg).toBe('rgb(13, 17, 23)'); // #0D1117
+
+    const toggle = page.getByRole('switch', { name: /tema|theme/i });
+    await toggle.click();
+    await expect(html).toHaveClass(/light/);
+    expect(await recibosBg()).toBe(darkBg);
+
+    await toggle.click();
+    await expect(html).not.toHaveClass(/light/);
+  });
+});
+
