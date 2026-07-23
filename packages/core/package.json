@@ -19,7 +19,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "db:generate": "dotenv -e ../../.env -- drizzle-kit generate",
-    "db:migrate": "dotenv -e ../../.env -- drizzle-kit migrate"
+    "db:migrate": "dotenv -e ../../.env -- drizzle-kit migrate",
+    "vendor:asn": "bash scripts/vendor-asn.sh",
+    "seed:asn": "dotenv -e ../../.env -- node scripts/seed-asn.ts"
   },
   "dependencies": {
     "@posta/contracts": "workspace:*",
