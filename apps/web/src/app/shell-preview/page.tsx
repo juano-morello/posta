@@ -19,7 +19,11 @@ export default function ShellPreviewPage() {
       {/* T6.3.8 — AppShell's <main> already applies --pad-page; no
           redundant padding here. */}
       <h1 className="font-sans text-2xl font-bold text-fg">Contenido de ejemplo</h1>
-      <div className="grid-cards mt-6" data-testid="stat-card-grid">
+      {/* T6.3.9 [a11y] — axe's heading-order rule: CardTitle renders an
+          <h3>, so it needs an <h2> ancestor (not a bare <h1> parent) to
+          keep the document outline sequential. */}
+      <h2 className="mt-6 font-sans text-lg font-semibold text-fg">Resumen</h2>
+      <div className="grid-cards mt-3" data-testid="stat-card-grid">
         {STAT_CARDS.map((label) => (
           <Card key={label} data-testid="stat-card">
             <CardHeader>

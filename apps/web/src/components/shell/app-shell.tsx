@@ -39,18 +39,49 @@ function CompactMobileTopbar() {
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-bg">
-      <div className="hidden mobile:flex">
-        <Sidebar />
-      </div>
+      {/* T6.3.9 [a11y] — first focusable element in the shell: lets a
+          keyboard user skip Topbar+Sidebar and land directly on the
+          content, instead of tabbing through nav on every single page.
+          Border-only lime (not a filled bg-primary/text-primary), same
+          resolution as Sidebar/Tabs' active state (T6.3.2/T6.2.4) and for
+          the same reason T6.3.10 exists: reserve lime background/text
+          fills for the one CTA per view — this is a focus indicator, not
+          a second competing CTA. */}
+      <a
+        href="#main-content"
+        className="sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:left-4 focus-visible:top-4 focus-visible:z-50 focus-visible:rounded focus-visible:border-2 focus-visible:border-primary focus-visible:bg-surface focus-visible:px-4 focus-visible:py-2 focus-visible:font-sans focus-visible:font-semibold focus-visible:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        Saltar al contenido
+      </a>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* T6.3.9 [a11y] — DOM order (and therefore tab order) is
+          Topbar-column FIRST, Sidebar SECOND, matching POSTA.md's
+          intended traversal (skip link -> topbar -> nav -> content):
+          page-level actions before site navigation. `order-*` decouples
+          that from VISUAL position, which still needs the sidebar on the
+          left — CSS flex order changes paint order, never DOM/tab order. */}
+      <div className="order-2 flex min-w-0 flex-1 flex-col">
         <div className="hidden mobile:block">
           <Topbar />
         </div>
         <CompactMobileTopbar />
 
-        {/* T6.3.8 — POSTA.md §3: fluid page padding, no breakpoints. */}
-        <main className="flex-1 p-[var(--pad-page)] pb-16 mobile:pb-0">{children}</main>
+        {/* T6.3.8 — POSTA.md §3: fluid page padding, no breakpoints.
+            tabIndex={-1}: a skip-link target that isn't itself normally
+            focusable still needs to be programmatically focusable so the
+            skip link's jump actually moves keyboard focus, not just the
+            page scroll position. */}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 p-[var(--pad-page)] pb-16 mobile:pb-0 focus-visible:outline-none"
+        >
+          {children}
+        </main>
+      </div>
+
+      <div className="order-1 hidden mobile:flex">
+        <Sidebar />
       </div>
 
       <BottomTabs />

@@ -47,7 +47,7 @@ export function BottomTabs() {
             aria-current={isActive ? 'page' : undefined}
             // T6.3.5 [a11y] — WCAG 2.5.5/2.5.8 target-size floor: every
             // tab is at least 44x44px regardless of content size.
-            className="flex min-h-[44px] min-w-[44px] flex-1 flex-col items-center justify-center gap-1 py-2 font-sans text-xs text-muted"
+            className="flex min-h-[44px] min-w-[44px] flex-1 flex-col items-center justify-center gap-1 py-2 font-sans text-xs text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             <Icon className={cn('h-5 w-5', isActive ? 'text-primary' : 'text-muted')} aria-hidden="true" />
             <span className={cn(isActive && 'text-fg')}>{route.label}</span>

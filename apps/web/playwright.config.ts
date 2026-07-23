@@ -37,9 +37,15 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm exec next dev -p ${PORT}`,
+    // Production build, not `next dev`: found during T6.3.9 that dev
+    // mode injects its own dev-tools indicator button into every page,
+    // which was failing the "every focusable element has a visible
+    // focus ring" a11y assertion — a false positive against dev-only
+    // chrome that never ships. A production server is also the
+    // representative target for a11y/visual-regression claims anyway.
+    command: `pnpm build && pnpm exec next start -p ${PORT}`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    timeout: 120_000,
   },
 });

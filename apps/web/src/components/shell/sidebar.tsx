@@ -39,7 +39,7 @@ export function Sidebar() {
                 href={route.href}
                 aria-current={isActive ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-3 rounded border-l-2 border-l-transparent px-3 py-2 font-sans text-sm text-muted transition-colors hover:bg-surface-2 hover:text-fg',
+                  'flex items-center gap-3 rounded border-l-2 border-l-transparent px-3 py-2 font-sans text-sm text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   isActive &&
                     'border-l-primary bg-[color-mix(in_srgb,_var(--primary)_12%,_transparent)] text-fg',
                 )}
