@@ -47,6 +47,39 @@ describe('HumanoBar edge cases', () => {
     }
   });
 
+  // silent-failure-hunter review (S6.4 story review): a NaN count makes
+  // `total` NaN too, and `total <= 0` is FALSE for NaN (NaN comparisons
+  // are always false) — so the zero-guard above never catches it, and a
+  // malformed prop silently reaches the browser as `width: NaN%`. Real
+  // counts should never be negative or non-finite, but "never trust
+  // external data" (this system's own input-validation rule) applies at
+  // every boundary, not just the ones a caller is expected to respect.
+  it('never renders a NaN or negative width for malformed (NaN/negative) counts', () => {
+    render(<HumanoBar humano={NaN} bot={-5} unfurler={12} prefetch={8} />);
+    for (const key of ['humano', 'bot', 'unfurler', 'prefetch']) {
+      const style = screen.getByTestId(`humano-bar-segment-${key}`).style.width;
+      // jsdom's CSSStyleDeclaration silently REJECTS an invalid value like
+      // "NaN%" or "-5%" — the setter just leaves `width` as an empty
+      // string rather than storing the literal broken text. So the real
+      // proof isn't "the string isn't literally NaN%" (that's true either
+      // way, even when broken) — it's that `style.width` is a genuine,
+      // parseable, non-negative percentage. An empty string / non-'%'
+      // value here means the browser silently dropped the declaration,
+      // which is exactly the "renders as nothing" failure mode this test
+      // exists to catch.
+      expect(style.endsWith('%'), `${key}: style.width="${style}"`).toBe(true);
+      const parsed = parseFloat(style);
+      expect(Number.isFinite(parsed), `${key}: style.width="${style}"`).toBe(true);
+      expect(parsed, `${key}: style.width="${style}"`).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('never renders "NaN" in the aria-label or legend for malformed counts', () => {
+    render(<HumanoBar humano={NaN} bot={-5} unfurler={12} prefetch={8} />);
+    expect(screen.getByRole('img').getAttribute('aria-label')).not.toMatch(/NaN/);
+    expect(document.body.textContent).not.toMatch(/NaN/);
+  });
+
   it('renders one full lime segment for 100% human', () => {
     render(<HumanoBar humano={100} bot={0} unfurler={0} prefetch={0} />);
     const bar = screen.getByTestId('humano-bar');

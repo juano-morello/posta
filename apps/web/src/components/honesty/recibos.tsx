@@ -105,6 +105,16 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
   return (
     <div data-testid="recibos" className={cn('island rounded-lg font-mono text-sm', className)}>
       <div className="recibos-chrome flex items-center gap-2 rounded-t-lg px-4 py-2">
+        {/* a11y-architect review (S6.4 story review) — WCAG 2.2.2 (Pause,
+            Stop, Hide) requires a mechanism to pause auto-updating content
+            that moves/blinks for >5s, UNLESS it is "part of an activity
+            where it is essential". This dot's entire purpose is to BE the
+            live/streaming status indicator (the same class of exception
+            recording/on-air lights are usually treated under) — pausing
+            it would remove the one thing it exists to communicate, not
+            just its motion. `aria-hidden` because the status itself is
+            already conveyed in words by the prompt line beside it; the
+            dot is decorative reinforcement, not an independent channel. */}
         <span
           data-testid="recibos-live-dot"
           className="recibos-live-dot h-2 w-2 rounded-full"
@@ -114,7 +124,20 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
           <span className="lime">~/posta $</span> tail -f recibos --link={slug}
         </span>
       </div>
-      <div data-testid="recibos-rows" className="flex flex-col gap-1 px-4 py-3">
+      {/* a11y-architect review (S6.4 story review) — this IS a log
+          (POSTA.md's own "tail -f"), so `role="log"` is the correct
+          landmark even though nothing updates it live yet in E6 (a pure
+          prop-render today). `aria-live="off"` is explicit rather than
+          left to `role="log"`'s own implicit polite default, so that
+          whichever future story wires real live updates has to choose
+          polite/assertive with intent — not discover after shipping that
+          a busy link floods screen reader users by default. */}
+      <div
+        data-testid="recibos-rows"
+        role="log"
+        aria-live="off"
+        className="flex flex-col gap-1 px-4 py-3"
+      >
         {rows.length === 0 ? (
           <EmptyState />
         ) : (

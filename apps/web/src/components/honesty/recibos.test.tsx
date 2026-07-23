@@ -183,3 +183,23 @@ describe('Recibos empty state (T6.4.14)', () => {
     expect(screen.queryByText('~/posta $ todavía no hay clicks')).not.toBeInTheDocument();
   });
 });
+
+// a11y-architect review (S6.4 story review, T6.4.15) — Recibos renders a
+// stream of events by name (POSTA.md's own "tail -f"), which is exactly
+// what WCAG 4.1.3 (Status Messages) / the `role="log"` pattern exists
+// for. Nothing updates this list live yet in E6 (it's a pure prop-render
+// today), but the review flagged this as worth fixing NOW rather than
+// deferred: the cheap, safe thing to ship today is an EXPLICIT
+// `aria-live="off"`, so that whenever a future story wires real live
+// updates (E7/E8), the naive fix is "flip one attribute to polite/
+// assertive with intent" — not "discover `role="log"`'s own implicit
+// polite default was flooding screen readers on a busy link," which is
+// the failure mode of adding the role without an explicit live setting.
+describe('Recibos rows live-region semantics (T6.4.15 story review) [a11y]', () => {
+  it('exposes the rows container as a log region with an explicit non-live default', () => {
+    render(<Recibos slug="promo" receipts={ROWS} />);
+    const rows = screen.getByTestId('recibos-rows');
+    expect(rows).toHaveAttribute('role', 'log');
+    expect(rows).toHaveAttribute('aria-live', 'off');
+  });
+});

@@ -21,12 +21,24 @@ export interface HumanoBarProps {
 // ">0.35 luminance" floor does not guarantee WCAG 1.4.11's 3:1 NON-TEXT
 // contrast between ADJACENT segments (measured as low as ~1.3-1.6:1 in
 // some pairings). An explicit per-segment border class — not fill-vs-fill
-// contrast — is what actually satisfies 1.4.11: `border-bg` for the
-// bright lime humano segment (contrast against `bg` measures 15.59:1
-// dark / 3.69:1 light — both clear 3:1), `border-fg` for the three
-// gray-ramp segments (contrast against `fg` measures 5.37-11.23:1 dark /
-// 7.68-13.70:1 light — all clear 3:1 comfortably). Applied conditionally
-// in the render below, only when the segment's raw count is nonzero.
+// contrast — is what actually satisfies 1.4.11 for the three gray-ramp
+// segments: `border-fg` measures 5.37-11.23:1 dark / 7.68-13.70:1 light
+// against `fg`, all clearing 3:1 comfortably, and each gray segment's own
+// border is what makes ITS boundary against its neighbor legible — the
+// grays never rely on each other's fill contrast.
+//
+// `border-bg` on the humano segment is a DIFFERENT, narrower claim (a11y
+// review, T6.4.15 story review, caught this file's comment overclaiming
+// it): that border is the same colour as the bar's own background
+// showing through the 2px gap, so it is not itself a visible line at the
+// humano/bot boundary — it is bot's OWN border-fg that draws that
+// boundary. What border-bg actually establishes is the LIME FILL's
+// contrast against the surrounding page (`primary` vs `bg`: 15.59:1 dark
+// / 3.69:1 light, both clearing 3:1) — i.e. that the humano segment
+// itself is distinguishable from empty page background, a real but
+// separate 1.4.11 concern from "boundary between two adjacent segments".
+// Applied conditionally in the render below, only when the segment's raw
+// count is nonzero.
 const SEGMENTS = [
   { key: 'humano', colorClass: 'bg-primary', borderClass: 'border-bg', label: 'humanos' },
   { key: 'bot', colorClass: 'bg-n1', borderClass: 'border-fg', label: 'bots' },
@@ -47,10 +59,39 @@ const SEGMENTS = [
 // segment, and never by simply not summing to 100.
 const MIN_VISIBLE_PCT = 1.5;
 
+// silent-failure-hunter review (S6.4 story review) — a NaN count makes
+// `total` NaN too, and `total <= 0` is FALSE for NaN (NaN comparisons are
+// always false), so the zero-guard below never catches it: a malformed
+// prop would silently reach the browser as `width: NaN%` (and, separately,
+// as a literal "NaN humanos" in the aria-label and legend). Real counts
+// should never be negative or non-finite, but "never trust external
+// data" applies at every boundary, not just the ones a caller is
+// expected to respect — so every count is normalized to a non-negative
+// finite number ONCE, at the component's own entry point, and every
+// downstream consumer (width math, aria-label, legend, border logic)
+// reads the sanitized value, never the raw prop.
+function sanitizeCount(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Exported so computeSegmentWidths/buildAriaLabel/the render below share
+ * exactly one sanitization pass rather than three independent ones. */
+export function sanitizeHumanoBarProps(rawProps: HumanoBarProps): HumanoBarProps {
+  return {
+    humano: sanitizeCount(rawProps.humano),
+    bot: sanitizeCount(rawProps.bot),
+    unfurler: sanitizeCount(rawProps.unfurler),
+    prefetch: sanitizeCount(rawProps.prefetch),
+  };
+}
+
 /** Pure and exported for direct testing — the redistribution math is the
- * part worth verifying in isolation from rendering. */
-export function computeSegmentWidths(props: HumanoBarProps): Record<keyof HumanoBarProps, number> {
+ * part worth verifying in isolation from rendering. Sanitizes its own
+ * input regardless of whether the caller already did — an exported
+ * function has no guarantee its caller was HumanoBar itself. */
+export function computeSegmentWidths(rawProps: HumanoBarProps): Record<keyof HumanoBarProps, number> {
   const keys = SEGMENTS.map((s) => s.key);
+  const props = sanitizeHumanoBarProps(rawProps);
   const total = keys.reduce((sum, key) => sum + props[key], 0);
 
   if (total <= 0) {
@@ -90,7 +131,8 @@ function buildAriaLabel(props: HumanoBarProps): string {
   return SEGMENTS.map(({ key, label }) => `${props[key]} ${label}`).join(', ');
 }
 
-export function HumanoBar(props: HumanoBarProps) {
+export function HumanoBar(rawProps: HumanoBarProps) {
+  const props = sanitizeHumanoBarProps(rawProps);
   const widths = computeSegmentWidths(props);
 
   return (
