@@ -222,3 +222,29 @@ $bp-mobile: 800px;
 .light .badge-humano {
   color: var(--fg);
 }
+
+// T6.4.8 — SourceChip's per-platform dot. Neither POSTA.md nor DESIGN.md
+// pins literal brand colours (the source doc only says "each with a
+// colored dot"), so these four are this system's own choice: one
+// representative brand-ish hue per platform, distinct enough to tell
+// apart at a glance — though the dot is never the ONLY signal, the chip
+// always renders the platform's Spanish/brand-name label right beside it
+// (T6.4.15's a11y pass covers that). `directo` deliberately reuses the
+// existing `--muted` token rather than inventing a colour for "no
+// platform at all" — it is the absence of a brand, not a fifth brand.
+.source-chip-dot {
+  display: inline-block;
+  border-radius: 9999px;
+}
+.source-chip-dot--instagram {
+  background: #e4405f;
+}
+.source-chip-dot--whatsapp {
+  background: #25d366;
+}
+.source-chip-dot--tiktok {
+  background: #25f4ee;
+}
+.source-chip-dot--directo {
+  background: var(--muted);
+}
