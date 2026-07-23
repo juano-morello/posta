@@ -195,6 +195,55 @@ jobs:
         run: pnpm exec turbo run build
         timeout-minutes: 5
 
+      # T6.5.9 — the gallery (T6.5.1-7) and its visual-regression snapshots
+      # (T6.5.8, which also carries T6.1.12's no-FOUC check and T6.2.10's
+      # every-primitive-in-both-themes check — both explicitly deferred
+      # until /gallery existed) actually run here, not just locally.
+      # Scoped to gallery.spec.ts + gallery-visual.spec.ts specifically —
+      # this job's own name says "run the visual regression suite", and
+      # the OTHER apps/web e2e specs (shell/islands/honesty-a11y/safe-area)
+      # are a pre-existing gap this task does not claim to close.
+      #
+      # Both configured Playwright projects use devices['Desktop Chrome']
+      # only (see playwright.config.ts) — no WebKit/Firefox needed here.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+
+      # --with-deps installs the OS-level shared libraries headless
+      # Chromium needs, which the cache above never covers (GitHub-hosted
+      # runners are a fresh VM every run, so apt state never persists) —
+      # this step always runs, but Playwright's own installer skips
+      # re-downloading the browser BINARY when the cache already restored
+      # it, so a cache hit still makes this fast.
+      - name: Install Playwright Chromium
+        run: pnpm --filter @posta/web exec playwright install --with-deps chromium
+
+      # webServer (playwright.config.ts) runs its own `pnpm build && next
+      # start` regardless of the Build step above — a second, real `next
+      # build`, not reused from turbo's cache, so this gets its own
+      # dedicated timeout for the same reason the Build step has one.
+      - name: Visual regression (gallery + primitives)
+        run: pnpm --filter @posta/web exec playwright test gallery.spec.ts gallery-visual.spec.ts
+        timeout-minutes: 10
+
+      # Playwright's own HTML reporter (playwright.config.ts: `[['html',
+      # {open:'never'}], ['github']]` in CI) embeds the actual/expected/
+      # diff images for any failed screenshot comparison directly in the
+      # report — this is what makes "a snapshot break is reviewable from
+      # the PR" true, rather than just a pass/fail line in the log.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 14
+
       # S0.2's dependency-arrow rules (.dependency-cruiser.js) only protect
       # the architecture (web→contracts · api→core,contracts ·
       # worker→core,contracts · core→contracts, no app importing another
