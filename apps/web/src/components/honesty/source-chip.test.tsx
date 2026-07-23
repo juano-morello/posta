@@ -28,3 +28,21 @@ describe('SourceChip', () => {
     expect(classes.size).toBe(4);
   });
 });
+
+// T6.4.9 — source_platform is a free-text column the worker's enrichment
+// (E3) writes; the four-member zSourcePlatform enum is what the
+// DASHBOARD is prepared to render distinctly, not a runtime constraint
+// the database enforces. A referrer shape the worker doesn't recognize
+// yet — or none at all — must still render a real chip, never a blank
+// one: it falls back to `directo`.
+describe('SourceChip unknown-platform fallback', () => {
+  it.each([
+    ['empty string', ''],
+    ['undefined', undefined],
+    ['an unrecognized platform', 'Threads'],
+  ])('renders the directo chip for %s', (_label, platform) => {
+    render(<SourceChip platform={platform} />);
+    expect(screen.getByText('directo')).toBeInTheDocument();
+    expect(screen.getByTestId('source-chip-dot').className).toMatch(/\bsource-chip-dot--directo\b/);
+  });
+});
