@@ -59,7 +59,7 @@ const SUPPLEMENTAL_ENTRIES: readonly AsnEntry[] = (
   ] as const
 ).map(([asn, name]) => ({ asn, name, source: 'public ASN registration (bgp.he.net / PeeringDB)' }));
 
-function decodeEntities(text: string): string {
+export function decodeEntities(text: string): string {
   return text
     .replace(/&#(\d+);/g, (_match, code: string) => String.fromCharCode(Number(code)))
     .replace(/&amp;/gi, '&');
@@ -69,14 +69,22 @@ function decodeEntities(text: string): string {
 // before " - " is a machine-generated ASN handle, not the org name.
 // Rows with no " - " separator (e.g. "Voxility, Ro") are already a bare
 // name and pass through unchanged.
-function cleanName(rawName: string): string {
+export function cleanName(rawName: string): string {
   const decoded = decodeEntities(rawName).trim();
   const dashIndex = decoded.indexOf(' - ');
   const withoutPrefix = dashIndex === -1 ? decoded : decoded.slice(dashIndex + 3);
   return withoutPrefix.replace(/\s+/g, ' ').trim();
 }
 
-function parseCsvLine(line: string): string[] {
+// [S1.4 review, code-reviewer HIGH] A `"` is only valid CSV syntax at the
+// START of a field (opening a quoted field) or doubled inside one
+// (an escaped literal quote) — a bare `"` appearing mid-field
+// (`foo"bar,baz`) is malformed input. The upstream file never does this
+// today, but silently absorbing it as "start a quoted region here" would
+// misparse every field after it with no warning; failing loudly on a
+// future malformed pull is safer than trusting the CSV spec is honored
+// forever.
+export function parseCsvLine(line: string): string[] {
   const fields: string[] = [];
   let current = '';
   let inQuotes = false;
@@ -92,6 +100,11 @@ function parseCsvLine(line: string): string[] {
         current += char;
       }
     } else if (char === '"') {
+      if (current.length > 0) {
+        throw new Error(
+          `parseCsvLine: unexpected quote mid-field at position ${i} in line: ${line}`,
+        );
+      }
       inQuotes = true;
     } else if (char === ',') {
       fields.push(current);
@@ -104,29 +117,55 @@ function parseCsvLine(line: string): string[] {
   return fields;
 }
 
-interface RawRow {
+export interface RawRow {
   readonly asn: number;
   readonly name: string;
 }
 
-function parseCsv(csvText: string): RawRow[] {
+const EXPECTED_HEADER = 'ASN,Entity';
+
+export function parseCsv(csvText: string): RawRow[] {
   const lines = csvText.split('\n').filter((line) => line.trim().length > 0);
-  const [, ...rows] = lines; // drop the "ASN,Entity" header row
+  const [header, ...rows] = lines;
+  // [S1.4 review, silent-failure-hunter HIGH] Dropping the header row
+  // POSITIONALLY (just "the first line, whatever it is") would silently
+  // misparse every row if the upstream file ever reorders its columns or
+  // drops the header — checking its literal value first turns a future
+  // upstream format change into a loud, immediate failure here instead
+  // of a quietly wrong dataset.
+  if (header !== EXPECTED_HEADER) {
+    throw new Error(
+      `parseCsv: expected the CSV header to be "${EXPECTED_HEADER}", got "${header ?? '(empty file)'}" — ` +
+        'the upstream format may have changed; update this parser before trusting the output.',
+    );
+  }
   return rows.map((line) => {
     const [asnText, nameText] = parseCsvLine(line);
     return { asn: Number(asnText), name: cleanName(nameText ?? '') };
   });
 }
 
-function buildEntries(csvRows: readonly RawRow[]): AsnEntry[] {
+export function buildEntries(csvRows: readonly RawRow[]): AsnEntry[] {
   // A Map keyed by ASN: later writes overwrite earlier ones, which is
   // what lets SUPPLEMENTAL_ENTRIES (applied after the CSV rows) win over
   // upstream's messier/missing names for the same ASN, and also
   // resolves the handful of ASNs bad-asn-list itself lists twice.
   const byAsn = new Map<number, AsnEntry>();
+  let droppedCount = 0;
   for (const row of csvRows) {
-    if (!Number.isInteger(row.asn) || row.asn <= 0 || !row.name) continue;
+    if (!Number.isInteger(row.asn) || row.asn <= 0 || !row.name) {
+      droppedCount += 1;
+      continue;
+    }
     byAsn.set(row.asn, { asn: row.asn, name: row.name, source: 'brianhama/bad-asn-list' });
+  }
+  // [S1.4 review, silent-failure-hunter HIGH] A malformed row (non-numeric
+  // ASN, blank name) used to vanish with zero feedback — only noticeable
+  // if enough of them pushed the final count below 200. Logging the count
+  // makes upstream data-quality regressions visible on every run, not
+  // just the ones severe enough to trip the >=200 assertion below.
+  if (droppedCount > 0) {
+    console.warn(`vendor-asn: dropped ${droppedCount} malformed row(s) from the upstream CSV`);
   }
   for (const entry of SUPPLEMENTAL_ENTRIES) {
     byAsn.set(entry.asn, entry);
@@ -171,4 +210,9 @@ function main(): void {
   console.log(`vendor-asn: wrote ${entries.length} entries to ${outPath}`);
 }
 
-main();
+// Only run main() when executed directly (`node vendor-asn.ts` / via
+// vendor-asn.sh), not when imported by vendor-asn.test.ts for its
+// exported parsing/building functions.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
