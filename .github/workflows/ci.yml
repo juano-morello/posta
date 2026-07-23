@@ -203,3 +203,69 @@ jobs:
       # fixture) fails the build too.
       - name: Dependency boundaries (S0.2)
         run: pnpm depcruise
+
+  # T1.5.4 — "As a developer I want one command for both migration
+  # flavors so that hand-written SQL is not second-class" (S1.5). This is
+  # what actually catches drift: a schema change committed without
+  # regenerating the drizzle migration, or a migrations/sql/*.sql file
+  # renamed or edited after being applied (sql-migrate.ts's checksum
+  # check throws on exactly that). A separate job, not a step tacked onto
+  # `ci` above — GitHub Actions jobs get their own fresh runner and their
+  # own fresh service containers by default, which is genuinely "from
+  # empty" with no explicit teardown needed, and keeps this fast,
+  # narrowly-scoped check from being coupled to the main job's lint/test/
+  # build timing.
+  migrate-from-empty:
+    name: Migrate from empty
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL: postgresql://posta:posta@localhost:5432/posta
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: posta
+          POSTGRES_PASSWORD: posta
+          POSTGRES_DB: posta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U posta -d posta"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Drizzle's migrations, then the hand-written SQL ones, in the
+      # fixed order T1.5.1 asserts — against a genuinely empty database
+      # (a brand-new service container for this job), so this either
+      # produces every table/function/partition or fails loudly.
+      - name: pnpm migrate
+        run: pnpm migrate
+
+      # The real gate: exits non-zero if anything drizzle-kit or the sql
+      # runner tracks as unapplied is still pending after the migrate
+      # step above — which is exactly the "drift" this job exists to
+      # catch (an edited already-applied file fails migrate itself, via
+      # the checksum check; a genuinely NEW, un-migrated file would show
+      # up here as PENDING instead).
+      - name: pnpm migrate:status
+        run: pnpm migrate:status
