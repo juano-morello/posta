@@ -297,3 +297,23 @@ $bp-mobile: 800px;
     animation: none;
   }
 }
+
+// T6.4.11 — classification verdict colours for a Recibos row, keyed by
+// TOKEN NAME (matching CLASIFICACION_TOKEN in packages/contracts, never a
+// second independent verdict->colour map — that would reopen exactly the
+// drift T6.4.2's total Record was built to make a compile error). Fixed
+// dark-mode hex, same reasoning as .island/.lime above: these values are
+// tuned for legibility against Recibos' own permanently-dark background,
+// not whichever theme happens to be active.
+.island .cls-primary {
+  color: #b4ff39;
+}
+.island .cls-error {
+  color: #f85149;
+}
+.island .cls-info {
+  color: #58a6ff;
+}
+.island .cls-warning {
+  color: #e3b341;
+}

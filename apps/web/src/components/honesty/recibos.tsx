@@ -1,19 +1,37 @@
+import { CLASIFICACION_TOKEN, type Clasificacion, type SourcePlatform } from '@posta/contracts';
 import { cn } from '@/lib/utils';
 
 // T6.4.10 — POSTA.md §1/§8.3/§8.4: the recibos terminal log island. Colour
-// literals (`.island`, `.recibos-chrome`, `.recibos-live-dot`) live in
-// _tokens.scss (see that file's own comment) — this component is always
-// dark under BOTH themes, so it cannot read the normal `t()`-backed
-// tokens the rest of the system uses, and no literal hex may live in this
-// .tsx file either way (T6.1.13's grep gate). Rows land in T6.4.11, the
-// empty state in T6.4.14.
+// literals (`.island`, `.recibos-chrome`, `.recibos-live-dot`, `.cls-*`)
+// live in _tokens.scss (see that file's own comment) — this component is
+// always dark under BOTH themes, so it cannot read the normal
+// `t()`-backed tokens the rest of the system uses, and no literal hex may
+// live in this .tsx file either way (T6.1.13's grep gate). The empty
+// state lands in T6.4.14, why-string hardening in T6.4.13.
+export interface Recibo {
+  /** ULID (CLAUDE.md convention) — stable React key across the T6.4.12
+   * row-buffer prune, where the list shifts as new rows arrive and old
+   * ones drop; an index key would misattribute rows across that shift. */
+  id: string;
+  /** Already-formatted display time — the caller decides precision/locale. */
+  t: string;
+  src: SourcePlatform;
+  cls: Clasificacion;
+  why: string;
+}
+
 export interface RecibosProps {
   /** The link's slug, interpolated into the terminal prompt line. */
   slug: string;
+  receipts?: Recibo[];
   className?: string;
 }
 
-export function Recibos({ slug, className }: RecibosProps) {
+function classificationClass(cls: Clasificacion): string {
+  return `cls-${CLASIFICACION_TOKEN[cls]}`;
+}
+
+export function Recibos({ slug, receipts = [], className }: RecibosProps) {
   return (
     <div data-testid="recibos" className={cn('island rounded-lg font-mono text-sm', className)}>
       <div className="recibos-chrome flex items-center gap-2 rounded-t-lg px-4 py-2">
@@ -26,7 +44,16 @@ export function Recibos({ slug, className }: RecibosProps) {
           <span className="lime">~/posta $</span> tail -f recibos --link={slug}
         </span>
       </div>
-      <div data-testid="recibos-rows" className="px-4 py-3" />
+      <div data-testid="recibos-rows" className="flex flex-col gap-1 px-4 py-3">
+        {receipts.map((row) => (
+          <div key={row.id} className="flex flex-wrap items-baseline gap-2 break-words">
+            <span className="muted">{row.t}</span>
+            <span className="muted">{row.src}</span>
+            <span className={classificationClass(row.cls)}>[{row.cls}]</span>
+            <span>{row.why}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
