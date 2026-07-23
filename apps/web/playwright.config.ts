@@ -34,6 +34,14 @@ export default defineConfig({
     {
       name: 'mobile',
       use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 } },
+      // T6.5.8 — gallery-visual.spec.ts manages its OWN viewport per test
+      // (both 1280px and 390px cases live in the same file, each calling
+      // page.setViewportSize() explicitly) so its four/seven snapshots
+      // have exact, predictable names. Running it under both projects
+      // too would just re-run the identical assertions under a
+      // differently-named project suffix — doubling the baseline PNGs
+      // for zero additional coverage.
+      testIgnore: /gallery-visual\.spec\.ts/,
     },
   ],
   webServer: {
