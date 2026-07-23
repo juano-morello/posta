@@ -248,3 +248,52 @@ $bp-mobile: 800px;
 .source-chip-dot--directo {
   background: var(--muted);
 }
+
+// T6.4.10 — POSTA.md §8.3's `@mixin island`, ported as real classes:
+// terminal/log/code surfaces (login card, bio page, 404, recibos — E7/E8
+// build the rest, Recibos is the first S6.4 consumer) are ALWAYS dark in
+// BOTH themes (DESIGN.md §1), so this deliberately does NOT read `t()` —
+// every other component in this system resolves colour through a token
+// that flips under `.light`; an island is the one place that must not.
+// Literal hex here (exempt, this file only) is correct, not an oversight.
+.island {
+  background: #0d1117;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+}
+.island .lime {
+  color: #b4ff39;
+}
+.island .muted {
+  color: #8b949e;
+}
+
+// T6.4.10 — Recibos' own two-tone surface: the base #0D1117 from .island
+// plus a slightly lighter #161B22 "chrome" strip (the prompt-line header,
+// like a terminal window's title bar) — POSTA.md's own literal values.
+.recibos-chrome {
+  background: #161b22;
+}
+
+// T6.4.10 — the pulsing live dot. `prefers-reduced-motion` is honoured
+// immediately (not deferred to T6.4.15's a11y pass) since an infinitely
+// looping animation is exactly what that media query exists to catch,
+// and building it in from the start costs nothing here.
+.recibos-live-dot {
+  background: #b4ff39;
+  animation: recibos-pulse 1.6s ease-in-out infinite;
+}
+@keyframes recibos-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recibos-live-dot {
+    animation: none;
+  }
+}
