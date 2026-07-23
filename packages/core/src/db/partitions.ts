@@ -40,7 +40,23 @@ export async function ensurePartitionsAhead(
 
   for (let offset = 0; offset <= months; offset += 1) {
     const monthDateString = monthStartDateString(currentYear, currentMonthIndex + offset);
-    await pool.query('SELECT create_events_partition($1::date)', [monthDateString]);
+    try {
+      await pool.query('SELECT create_events_partition($1::date)', [monthDateString]);
+    } catch (error) {
+      // [silent-failure review, batch 1] Without this, a mid-loop
+      // failure (e.g. offset 2 of 4) propagates as whatever bare
+      // Postgres error create_events_partition happened to throw, with
+      // no indication of WHICH month it was for or that earlier months
+      // in this same call already succeeded. Naming the month here is
+      // what lets an operator immediately tell "months before this one
+      // are fine, this one and everything after are missing" apart from
+      // "nothing happened at all".
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `ensurePartitionsAhead: failed to create the partition for ${monthDateString} ` +
+          `(offset ${offset} of 0-${months}): ${reason}`,
+      );
+    }
   }
 }
 

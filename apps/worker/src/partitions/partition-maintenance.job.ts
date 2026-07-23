@@ -134,13 +134,59 @@ export async function startPartitionMaintenanceJob(
     { connection },
   );
 
+  // [silent-failure review, batch 1] BullMQ's own bookkeeping always
+  // marks a thrown-processor job as failed regardless of listeners — but
+  // nothing in THIS process previously surfaced that anywhere else (no
+  // log, no metric), so a real partition-creation failure would sit
+  // silently in Redis until someone thought to query job state by hand.
+  // This is exactly the same class of gap T1.3.5 closed for
+  // events_default: a failure with no visible signal.
+  worker.on('failed', (job, error) => {
+    logger.error(
+      `Partition maintenance job ${job?.id ?? '(unknown)'} failed: ${error.message}`,
+      { jobId: job?.id, error: error.message },
+    );
+  });
+
   return {
     queue,
     worker,
     async close(): Promise<void> {
+      // [silent-failure review, batch 1] Mirrors pg-container.ts's
+      // closeClientAndContainer(): attempt every cleanup step regardless
+      // of an earlier one failing, and report every failure together —
+      // a plain `.catch(() => undefined)` on obliterate() would silently
+      // drop a real cleanup failure (Redis unavailable, permissions)
+      // with no way to ever notice it happened.
       await worker.close();
-      await queue.obliterate({ force: true }).catch(() => undefined);
-      await queue.close();
+
+      let obliterateError: unknown;
+      try {
+        await queue.obliterate({ force: true });
+      } catch (error) {
+        obliterateError = error;
+      }
+
+      let closeError: unknown;
+      try {
+        await queue.close();
+      } catch (error) {
+        closeError = error;
+      }
+
+      if (obliterateError && closeError) {
+        throw new Error(
+          `Failed to clean up the partition maintenance queue: obliterate() failed with ` +
+            `"${describeCleanupError(obliterateError)}", then close() failed with ` +
+            `"${describeCleanupError(closeError)}".`,
+        );
+      }
+      if (obliterateError) throw obliterateError;
+      if (closeError) throw closeError;
     },
   };
+}
+
+function describeCleanupError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

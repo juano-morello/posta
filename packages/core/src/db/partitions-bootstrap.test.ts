@@ -1,3 +1,5 @@
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startPgContainer, type PgContainerHandle } from '../test/pg-container';
@@ -91,5 +93,41 @@ describe('bootstrap partitions on migrate (T1.3.3)', () => {
 
     const after = (await listEventsPartitions(handle)).sort();
     expect(after).toEqual(before);
+  });
+});
+
+describe('ensurePartitionsAhead error context (silent-failure review, batch 1)', () => {
+  let handle: PgContainerHandle;
+  let partialMigrationsDir: string;
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+
+    // A REAL failure, not a mock: apply only 001/002 (the events table +
+    // its indexes), deliberately WITHOUT 003_partition_fn.sql — so
+    // create_events_partition() genuinely does not exist, and
+    // ensurePartitionsAhead's first pool.query() call fails for real.
+    partialMigrationsDir = mkdtempSync(path.join(tmpdir(), 'posta-partial-migrations-'));
+    mkdirSync(partialMigrationsDir, { recursive: true });
+    copyFileSync(
+      path.join(MIGRATIONS_DIR, '001_events.sql'),
+      path.join(partialMigrationsDir, '001_events.sql'),
+    );
+    copyFileSync(
+      path.join(MIGRATIONS_DIR, '002_events_indexes.sql'),
+      path.join(partialMigrationsDir, '002_events_indexes.sql'),
+    );
+    await runSqlMigrations(handle.pool, { migrationsDir: partialMigrationsDir });
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    rmSync(partialMigrationsDir, { recursive: true, force: true });
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('names the specific month it failed on, not just a bare Postgres error', async () => {
+    await expect(ensurePartitionsAhead(handle.pool, 3)).rejects.toThrow(
+      /ensurePartitionsAhead: failed to create the partition for \d{4}-\d{2}-01 \(offset 0 of 0-3\)/,
+    );
   });
 });
