@@ -65,6 +65,13 @@ const CONTROL_AND_INVISIBLE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x00, 0x1f], // C0 controls (includes BEL, NUL, etc.)
   [0x7f, 0x9f], // DEL + C1 controls
   [0x200b, 0x200f], // zero-width space/non-joiner/joiner, LRM, RLM
+  [0x202a, 0x202e], // bidi embedding/override: LRE, RLE, PDF, LRO, RLO — the
+  // "Trojan Source" reorder characters (CVE-2021-42574's class): an
+  // unclosed RLO can visually reverse everything after it in the same
+  // block, which for a Recibos row means reversing the `[bot]`/`[humano]`
+  // verdict itself. Found by two independent reviewers (security-reviewer
+  // + silent-failure-hunter) as a real gap in the first cut of this list.
+  [0x2066, 0x2069], // bidi isolates: LRI, RLI, FSI, PDI — same reorder risk
   [0x2028, 0x2029], // line separator, paragraph separator
   [0x2060, 0x2060], // word joiner
   [0xfeff, 0xfeff], // BOM / zero-width no-break space

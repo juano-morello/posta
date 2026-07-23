@@ -129,6 +129,32 @@ describe('Recibos why-string hardening (T6.4.13) [security]', () => {
     expect(screen.getByText('python-requests/2.31')).toBeInTheDocument();
   });
 
+  // Security review (two independent reviewers, both flagging the same
+  // gap) found the first cut of this list untested against 4 of its 6
+  // ranges, including the one genuinely dangerous omission it also
+  // found: bidi override/isolate characters were entirely MISSING from
+  // the implementation, not just untested. Every range now gets its own
+  // representative code point exercised here.
+  it.each([
+    ['a C1 control character (NEL, U+0085)', 0x85],
+    ['zero-width non-joiner (U+200C)', 0x200c],
+    ['left-to-right mark (U+200E)', 0x200e],
+    ['RLO — the "Trojan Source" reorder character (U+202E)', 0x202e],
+    ['a bidi isolate (LRI, U+2066)', 0x2066],
+    ['line separator (U+2028)', 0x2028],
+    ['word joiner (U+2060)', 0x2060],
+    ['the BOM / zero-width no-break space (U+FEFF)', 0xfeff],
+  ])('strips %s', (_label, codePoint) => {
+    const hostile = `python-requests${String.fromCharCode(codePoint)}/2.31`;
+    render(
+      <Recibos
+        slug="promo"
+        receipts={[{ id: 'z', t: '00:00:02', src: 'directo', cls: 'bot', why: hostile }]}
+      />,
+    );
+    expect(screen.getByText('python-requests/2.31')).toBeInTheDocument();
+  });
+
   it('never reaches for dangerouslySetInnerHTML (regression guard on the escaping default)', () => {
     const source = readFileSync(path.resolve(__dirname, 'recibos.tsx'), 'utf-8');
     expect(source).not.toMatch(/dangerouslySetInnerHTML/);
