@@ -1,5 +1,7 @@
 'use client';
 
+import { ShadcnSection } from './sections/shadcn-section';
+
 // T6.5.1 — the component gallery: every primitive rendered in isolation
 // (POSTA.md/spec §11.1) so E7/E8 assemble known-good parts. A client-only
 // page — no `fetch`, no server action, no API call — so it renders while
@@ -45,6 +47,7 @@ export default function GalleryPage() {
           <h2 id="shadcn-heading" className="mb-4 font-sans text-lg font-semibold">
             shadcn
           </h2>
+          <ShadcnSection />
         </section>
 
         <section id="honesty" aria-labelledby="honesty-heading" className="mb-12">
