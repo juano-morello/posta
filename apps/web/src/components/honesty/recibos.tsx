@@ -142,11 +142,21 @@ export function Recibos({ slug, receipts = [], className }: RecibosProps) {
           <EmptyState />
         ) : (
           rows.map((row) => (
-            <div key={row.id} data-testid="recibos-row" className="flex flex-wrap items-baseline gap-2 break-words">
+            <div key={row.id} data-testid="recibos-row" className="flex flex-wrap items-baseline gap-2">
               <span className="muted">{row.t}</span>
               <span className="muted">{row.src}</span>
               <span className={classificationClass(row.cls)}>[{row.cls}]</span>
-              <span>{sanitizeWhy(row.why)}</span>
+              {/* T6.5.6 — `min-w-0` is load-bearing, not decoration: `why`
+                  is unbounded, attacker-influenced text (T6.4.13) that can
+                  contain a long unbroken token (a URL, say). As a flex
+                  item in this row, it would otherwise refuse to shrink
+                  below that token's own min-content width — the exact
+                  same flexbox "automatic minimum size" gotcha as the
+                  gallery's shell-preview iframes (T6.5.5/6) — and
+                  `break-words` on its own would never even get a chance
+                  to run, because the overflow happens one layer up, at
+                  the flex-sizing step, before wrapping is considered. */}
+              <span className="min-w-0 break-words">{sanitizeWhy(row.why)}</span>
             </div>
           ))
         )}

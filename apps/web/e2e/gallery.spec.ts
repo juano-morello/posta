@@ -86,8 +86,12 @@ test.describe('/gallery honesty primitives (T6.5.4)', () => {
     await expect(
       honestySection.getByTestId('gallery-source-chip').getByText('Instagram', { exact: true }),
     ).toBeVisible();
-    await expect(honestySection.getByTestId('recibos')).toBeVisible(); // Recibos
-    await expect(honestySection.getByTestId('recibos-live-dot')).toBeVisible();
+    // Scoped to gallery-recibos specifically: T6.5.6 later adds a SECOND
+    // Recibos instance (edge cases) to this same section, so an
+    // unscoped match becomes ambiguous once both exist on the page.
+    const galleryRecibos = honestySection.getByTestId('gallery-recibos');
+    await expect(galleryRecibos.getByTestId('recibos')).toBeVisible();
+    await expect(galleryRecibos.getByTestId('recibos-live-dot')).toBeVisible();
   });
 });
 
@@ -119,6 +123,37 @@ test.describe('/gallery shell frames (T6.5.5)', () => {
     const mobileBottomTabs = mobileFrame.contentFrame().locator('nav[aria-label="Principal"].fixed');
     await expect(mobileNav).toBeHidden();
     await expect(mobileBottomTabs).toBeVisible();
+  });
+});
+
+// T6.5.6 — the six cases the honesty primitives are most likely to break
+// on: 0 clicks, 100% human, 0% human, a 1-in-10000 segment (all
+// HumanoBar), a `why` long enough to wrap, and one carrying an HTML
+// payload (both Recibos). Each already has its own unit test (T6.4.4/
+// T6.4.5/T6.4.13) — this is the "a human can actually look at it, in a
+// real browser, at real widths" proof a passing unit test never gives.
+test.describe('/gallery honesty edge cases (T6.5.6)', () => {
+  test('all six edge cases render and the page has no horizontal overflow', async ({ page }) => {
+    await page.goto('/gallery');
+
+    const edgeCases = page.getByTestId('gallery-honesty-edge-cases');
+    await expect(edgeCases.getByTestId('edge-case-zero-clicks')).toBeVisible();
+    await expect(edgeCases.getByTestId('edge-case-all-human')).toBeVisible();
+    await expect(edgeCases.getByTestId('edge-case-no-human')).toBeVisible();
+    await expect(edgeCases.getByTestId('edge-case-tiny-segment')).toBeVisible();
+    await expect(edgeCases.getByText(/SemrushBot/)).toBeVisible();
+    await expect(edgeCases.getByText('<img src=x onerror=alert(1)>')).toBeVisible();
+    // The hostile payload must never become a real element (T6.4.13's
+    // own concern, re-verified here in a real browser rather than jsdom).
+    expect(await edgeCases.locator('img').count()).toBe(0);
+
+    // No horizontal overflow: the widest thing on this page is T6.5.5's
+    // 1280px desktop shell iframe, which must scroll WITHIN its own
+    // container rather than widen the page itself.
+    const hasHorizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    );
+    expect(hasHorizontalOverflow).toBe(false);
   });
 });
 

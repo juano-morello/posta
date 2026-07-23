@@ -68,3 +68,34 @@ export const GALLERY_RECEIPTS: GalleryRecibo[] = [
 ];
 
 export const GALLERY_SPLIT: GallerySplit = { humano: 60, bot: 20, unfurler: 12, prefetch: 8 };
+
+// T6.5.6 — the cases the honesty primitives are most likely to break on
+// (each one already has its own dedicated unit test — T6.4.4/T6.4.5 for
+// HumanoBar, T6.4.13 for the why payload — but the gallery is where a
+// human actually LOOKS at them rendered, in both themes, which a passing
+// unit test alone never proves).
+export const EDGE_CASE_HUMANO_BAR_SPLITS: Record<string, GallerySplit> = {
+  zeroClicks: { humano: 0, bot: 0, unfurler: 0, prefetch: 0 },
+  allHuman: { humano: 100, bot: 0, unfurler: 0, prefetch: 0 },
+  noHuman: { humano: 0, bot: 50, unfurler: 30, prefetch: 20 },
+  tinySegment: { humano: 9999, bot: 1, unfurler: 0, prefetch: 0 }, // 1-in-10000
+};
+
+export const EDGE_CASE_RECEIPTS: GalleryRecibo[] = [
+  {
+    id: '01J0000000000000000000EDG1',
+    t: '14:27:33',
+    src: 'directo',
+    cls: 'bot',
+    // Long enough to wrap across multiple lines inside Recibos' fixed-
+    // width island rather than forcing the page to scroll horizontally.
+    why: "user-agent 'Mozilla/5.0 (compatible; SemrushBot/7~bl; +http://www.semrush.com/bot.html) AppleWebKit/537.36 (KHTML, like Gecko)'",
+  },
+  {
+    id: '01J0000000000000000000EDG2',
+    t: '14:26:58',
+    src: 'directo',
+    cls: 'bot',
+    why: '<img src=x onerror=alert(1)>',
+  },
+];

@@ -42,7 +42,14 @@ export default function GalleryPage() {
           ))}
         </ul>
       </nav>
-      <main className="flex-1 p-8">
+      {/* T6.5.6 — `min-w-0` overrides flexbox's default `min-width: auto`
+          on this flex item: without it, a flex item never shrinks below
+          its CONTENT's intrinsic width, so T6.5.5's 1280px desktop shell
+          iframe (wrapped in its own `overflow-x-auto`, which only
+          contains overflow for a box that can actually shrink) would
+          otherwise force <main> — and the whole page — wider than the
+          viewport instead of scrolling within its own small wrapper. */}
+      <main className="min-w-0 flex-1 p-8">
         <h1 className="mb-8 font-sans text-2xl font-bold">Galería de componentes</h1>
 
         <section id="shadcn" aria-labelledby="shadcn-heading" className="mb-12">

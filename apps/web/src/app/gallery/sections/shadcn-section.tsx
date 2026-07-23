@@ -159,8 +159,13 @@ export function ShadcnSection() {
       <div>
         <Heading>Skeleton</Heading>
         <div className="flex flex-col gap-2">
-          <Skeleton className="h-4 w-48" />
-          <Skeleton className="h-4 w-32" />
+          {/* max-w-full: w-48 (192px) is wider than the gallery's own
+              content column at a 390px mobile viewport (T6.5.6 caught
+              this as a real horizontal-overflow bug, not a gallery-only
+              cosmetic one — a fixed-width skeleton is exactly as narrow-
+              viewport-fragile in a real dashboard column). */}
+          <Skeleton className="h-4 w-48 max-w-full" />
+          <Skeleton className="h-4 w-32 max-w-full" />
         </div>
       </div>
 

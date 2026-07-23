@@ -17,7 +17,14 @@ function FrameHeading({ children }: { children: string }) {
 export function ShellSection() {
   return (
     <div className="flex flex-wrap gap-8">
-      <div>
+      {/* T6.5.6 — `min-w-0 max-w-full` on THIS div, the actual flex item:
+          a flex item's default automatic min-width is its own min-content
+          size UNLESS the item itself (not just some descendant) has
+          non-visible overflow — putting `overflow-x-auto` only on the
+          inner child below was not enough, since this outer flex item
+          still reported the 1280px iframe's width as its own minimum
+          and pushed the page wider rather than shrinking to the row. */}
+      <div className="min-w-0 max-w-full">
         <FrameHeading>Desktop (≥800px)</FrameHeading>
         <div className="overflow-x-auto border border-border">
           <iframe
@@ -30,9 +37,14 @@ export function ShellSection() {
         </div>
       </div>
 
-      <div>
+      {/* Same fix, needed for a different reason: this 390px frame fits
+          fine at a 1280px desktop viewport, but the GALLERY page's own
+          192px nav sidebar leaves less than 390px of room for it at a
+          390px (mobile) TESTING viewport — so this needs the same
+          shrink-then-scroll treatment, not just the desktop frame. */}
+      <div className="min-w-0 max-w-full">
         <FrameHeading>Mobile (&lt;800px)</FrameHeading>
-        <div className="border border-border">
+        <div className="overflow-x-auto border border-border">
           <iframe
             data-testid="shell-frame-mobile"
             src="/shell-preview"

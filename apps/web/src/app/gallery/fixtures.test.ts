@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EDGE_CASE_HUMANO_BAR_SPLITS,
+  EDGE_CASE_RECEIPTS,
   GALLERY_LINKS,
   GALLERY_RECEIPTS,
   GALLERY_SPLIT,
@@ -35,5 +37,25 @@ describe('gallery fixtures (T6.5.2)', () => {
   it('rejects a fixture with an invalid classification (regression guard on the real enum)', () => {
     const invalid = { ...GALLERY_RECEIPTS[0]!, cls: 'not-a-real-verdict' };
     expect(zGalleryRecibo.safeParse(invalid).success).toBe(false);
+  });
+});
+
+// T6.5.6 — the honesty primitives' own edge cases, still real fixtures
+// (not inline literals scattered across the gallery page), so they too
+// go through the same schema gate as everything else here.
+describe('gallery edge-case fixtures (T6.5.6)', () => {
+  it('every EDGE_CASE_HUMANO_BAR_SPLITS entry parses against zGallerySplit', () => {
+    const splits = Object.values(EDGE_CASE_HUMANO_BAR_SPLITS);
+    expect(splits.length).toBe(4);
+    for (const split of splits) {
+      expect(zGallerySplit.safeParse(split).success).toBe(true);
+    }
+  });
+
+  it('every EDGE_CASE_RECEIPTS entry parses against zGalleryRecibo', () => {
+    expect(EDGE_CASE_RECEIPTS.length).toBe(2);
+    for (const receipt of EDGE_CASE_RECEIPTS) {
+      expect(zGalleryRecibo.safeParse(receipt).success).toBe(true);
+    }
   });
 });
