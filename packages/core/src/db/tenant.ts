@@ -1,6 +1,7 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { PgColumn } from 'drizzle-orm/pg-core';
+import type { CachedLink } from '@posta/contracts';
 import { bioLinks, bioPages } from '../schema/bio';
 import { domains } from '../schema/domains';
 import { links } from '../schema/links';
@@ -191,4 +192,58 @@ export async function resolveTenantByHandle(
     .where(eq(bioPages.handle, handle));
 
   return row?.tenantId ?? null;
+}
+
+// T2.2.4 — the redirect hot path's Postgres fallback tier for the LINK
+// cache: apps/api/src/redirect/resolve.ts's lookupCachedLink (T2.2.3)
+// checks Redis first; this is what it falls back to on a miss. Placed
+// here, next to resolveTenantByHandle, for the same reason that function
+// is: `apps/api` has no direct dependency on `drizzle-orm` (only
+// `@posta/core` does — see resolveTenantByHandle's own decisions, and
+// T2.2.2's report), so the query itself — unlike the caching ladder
+// wrapped around it — cannot be built in resolve.ts. This function stays
+// the plain, uncached Postgres tier; resolve.ts's own
+// `resolveLinkFromDb` wraps it in this file's dependency-injection shape.
+//
+// Unlike resolveTenantByHandle, this query IS tenant-scoped — the
+// tenant_id is already known by the time this tier runs (T2.2.2's
+// resolveTenant already resolved it from the handle) — so it goes
+// through forTenant(), never a hand-written `eq(links.tenantId, ...)`.
+// Two tenants can each own the slug `promo` on their own subdomains
+// (invariant 9's per-tenant UNIQUE constraint), so forgetting the tenant
+// scope here would serve one tenant's destination under another's
+// handle — forTenant() makes that scope unconditional, not something a
+// reviewer has to remember.
+//
+// `archived_at IS NULL` is part of the WHERE clause, not a filter
+// applied to the fetched row in JS: a user who archives a link has
+// revoked it, and "resolves to nothing" has to be a property of the
+// query itself, not of code a later refactor could drop.
+export async function resolveLinkBySlug(
+  db: NodePgDatabase,
+  tenantId: string,
+  slug: string,
+): Promise<CachedLink | null> {
+  const [row] = await forTenant(db, tenantId).links.select(
+    and(eq(links.slug, slug), isNull(links.archivedAt)),
+  );
+
+  if (!row) return null;
+
+  // Narrowed to exactly the three fields the redirect hot path (and
+  // T2.2.5's Redis backfill after it) needs — the CachedLink wire shape
+  // (@posta/contracts), the SAME shape lookupCachedLink returns on a
+  // cache HIT, so a caller layering "cache, then this" never has to
+  // reshape one tier's result to match the other's. `title`,
+  // `createdAt`, `updatedAt` and `archivedAt` are never copied out:
+  // forTenant().links.select() has no column-projection parameter today
+  // (only `links`'s two other consumers — T1.1.9's own tests — read the
+  // full row), so the fetch itself is unavoidably `SELECT *`, but
+  // nothing beyond `id`/`tenantId`/`destination` ever leaves this
+  // function.
+  return {
+    link_id: row.id,
+    tenant_id: row.tenantId,
+    destination: row.destination,
+  };
 }

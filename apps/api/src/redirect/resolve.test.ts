@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { bioPages, handleKey, newId, user } from '@posta/core';
+import { bioPages, handleKey, links, newId, user } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import type { CachedLink } from '@posta/contracts';
 import {
@@ -7,6 +7,7 @@ import {
   lookupCachedLink,
   MEMO_TTL_MS,
   rememberInMemo,
+  resolveLinkFromDb,
   type HandleCacheRedis,
   type LinkCacheRedis,
   type MemoEntry,
@@ -565,5 +566,105 @@ describe('lookupCachedLink (T2.2.3)', () => {
     } finally {
       process.off('unhandledRejection', unhandled);
     }
+  });
+});
+
+describe('resolveLinkFromDb (T2.2.4)', () => {
+  let handle: PgContainerHandle;
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  /** Mirrors packages/core/src/db/tenant.test.ts's own seedTenant() — a
+   * `user` row doubling as tenant_id (invariant 9). No bio_pages row here:
+   * this tier is reached only once a tenant_id is already known (the
+   * handle→tenant ladder is T2.2.2's job), so these tests never need one. */
+  async function seedTenant(): Promise<string> {
+    const tenantId = newId();
+    await handle.db.insert(user).values({
+      id: tenantId,
+      name: 'Test Tenant',
+      email: `${tenantId.toLowerCase()}@example.test`,
+    });
+    return tenantId;
+  }
+
+  async function seedLink(
+    tenantId: string,
+    slug: string,
+    destination: string,
+    archivedAt?: Date,
+  ): Promise<string> {
+    const linkId = newId();
+    await handle.db.insert(links).values({
+      id: linkId,
+      tenantId,
+      slug,
+      destination,
+      ...(archivedAt ? { archivedAt } : {}),
+    });
+    return linkId;
+  }
+
+  it('a live link resolves to its destination', async () => {
+    const tenantId = await seedTenant();
+    const linkId = await seedLink(tenantId, 'promo', 'https://example.test/promo');
+
+    const result = await resolveLinkFromDb(tenantId, 'promo', { db: handle.db });
+
+    expect(result).toEqual({
+      link_id: linkId,
+      tenant_id: tenantId,
+      destination: 'https://example.test/promo',
+    });
+  });
+
+  it('an archived link resolves to null, never its old destination', async () => {
+    const tenantId = await seedTenant();
+    await seedLink(tenantId, 'archived-promo', 'https://example.test/old', new Date());
+
+    const result = await resolveLinkFromDb(tenantId, 'archived-promo', { db: handle.db });
+
+    expect(result).toBeNull();
+  });
+
+  it('an unknown slug returns null', async () => {
+    const tenantId = await seedTenant();
+
+    const result = await resolveLinkFromDb(tenantId, 'never-created', { db: handle.db });
+
+    expect(result).toBeNull();
+  });
+
+  it('a slug that exists for a different tenant returns null (isolation, stated from the other direction)', async () => {
+    const tenantA = await seedTenant();
+    const tenantB = await seedTenant();
+    await seedLink(tenantA, 'only-in-a', 'https://example.test/a');
+
+    const result = await resolveLinkFromDb(tenantB, 'only-in-a', { db: handle.db });
+
+    expect(result).toBeNull();
+  });
+
+  it("[security] tenant A's slug is invisible to tenant B — same slug, colliding on purpose, different destinations", async () => {
+    const tenantA = await seedTenant();
+    const tenantB = await seedTenant();
+    await seedLink(tenantA, 'promo', 'https://example.test/a');
+    await seedLink(tenantB, 'promo', 'https://example.test/b');
+
+    const resultA = await resolveLinkFromDb(tenantA, 'promo', { db: handle.db });
+    const resultB = await resolveLinkFromDb(tenantB, 'promo', { db: handle.db });
+
+    expect(resultA?.destination).toBe('https://example.test/a');
+    expect(resultB?.destination).toBe('https://example.test/b');
+    expect(resultA?.tenant_id).toBe(tenantA);
+    expect(resultB?.tenant_id).toBe(tenantB);
+    // Stated the other way too: neither tenant's result is ever the other's.
+    expect(resultA?.destination).not.toBe(resultB?.destination);
   });
 });

@@ -1,5 +1,5 @@
 import type { DbClient } from '@posta/core';
-import { handleKey, linkKey, resolveTenantByHandle } from '@posta/core';
+import { handleKey, linkKey, resolveLinkBySlug, resolveTenantByHandle } from '@posta/core';
 import { parseCachedLink, type CachedLink } from '@posta/contracts';
 
 // T2.2.2 — resolveTenant(handle) bridges the request's Host-derived
@@ -446,4 +446,52 @@ export async function lookupCachedLink(
   }
 
   return { kind: 'hit', link };
+}
+
+// T2.2.4 — the tier below lookupCachedLink's Redis check: on a miss, one
+// query resolves the destination straight from Postgres, tenant-scoped
+// and archive-aware. The query itself lives in
+// packages/core/src/db/tenant.ts's resolveLinkBySlug, not here — same
+// reason resolveTenant (above) can't build resolveTenantByHandle's query
+// in this file either: apps/api has no direct dependency on
+// `drizzle-orm`, only `@posta/core` does. This function is the thin,
+// boot-resolved-dependency wrapper around it, matching every other
+// function in this file's shape (a `deps` object, never a per-request
+// construction) [INV-2].
+//
+// No try/catch, no timeout, and no fallback beyond this: unlike the
+// Redis tiers above, Postgres IS the resolution of last resort here —
+// there is nothing left to fall through to. A query failure propagates
+// to the caller unchanged, exactly like resolveTenantByHandle already
+// does for the handle tier.
+//
+// Scope, deliberately narrow — everything below is a later, separately
+// dispatched task, not this one's job:
+//   - No SETEX backfill into Redis on a hit (T2.2.5).
+//   - No negative-cache tombstone on a miss (T2.2.6).
+//   - No orchestration of "try the cache, then this" into one top-level
+//     resolveLink() — that composition is left for whichever task wires
+//     this and lookupCachedLink together behind the redirect middleware.
+
+export interface ResolveLinkFromDbDeps {
+  /** Built once at boot — see main.ts. Never constructed per request. */
+  readonly db: DbClient['db'];
+}
+
+/**
+ * The Postgres fallback for a link cache miss: `SELECT id, tenant_id,
+ * destination FROM links WHERE tenant_id = $1 AND slug = $2 AND
+ * archived_at IS NULL`, via resolveLinkBySlug (packages/core). Returns
+ * `null` for an unknown slug AND for an archived one — a revoked link
+ * must resolve to nothing, never to its old destination, and that has to
+ * be true whether the slug was never claimed or was claimed and later
+ * archived; this function does not distinguish the two to its caller,
+ * exactly as a 404 shouldn't.
+ */
+export async function resolveLinkFromDb(
+  tenant: string,
+  slug: string,
+  deps: ResolveLinkFromDbDeps,
+): Promise<CachedLink | null> {
+  return resolveLinkBySlug(deps.db, tenant, slug);
 }
