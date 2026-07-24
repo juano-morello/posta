@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Toast, ToastProvider, ToastTitle, ToastViewport } from '@/components/ui/toast';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { SectionHeading } from '../section-heading';
 
 // T6.5.3 — all twelve shadcn primitives (T6.2.2-9's own acceptance list:
 // button, input, sheet, dialog, toast, dropdown, tabs, select, switch,
@@ -32,15 +33,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 // (already covered by ui-primitives.test.tsx's open/focus-trap tests) —
 // this section's job is "does it render, themed, with its states,"
 // not "re-prove the interaction already tested elsewhere."
-function Heading({ children }: { children: string }) {
-  return <h3 className="mb-3 font-sans text-base font-semibold">{children}</h3>;
-}
-
 export function ShadcnSection() {
   return (
     <div className="flex flex-col gap-10">
       <div>
-        <Heading>Button</Heading>
+        <SectionHeading>Button</SectionHeading>
         <div className="flex flex-wrap gap-3">
           <Button variant="primary">Primary</Button>
           <Button variant="secondary">Secondary</Button>
@@ -57,7 +54,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Input</Heading>
+        <SectionHeading>Input</SectionHeading>
         <div className="flex max-w-sm flex-col gap-4">
           <Input placeholder="juano.example.test/promo" />
           <Input placeholder="juano.example.test/promo" error="Este slug ya existe" />
@@ -65,7 +62,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Select</Heading>
+        <SectionHeading>Select</SectionHeading>
         <Select defaultValue="terminal">
           <SelectTrigger className="max-w-sm">
             <SelectValue placeholder="Elegí un tema" />
@@ -78,7 +75,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Switch</Heading>
+        <SectionHeading>Switch</SectionHeading>
         <div className="flex items-center gap-6">
           <Switch aria-label="modo oscuro" defaultChecked />
           <Switch aria-label="notificaciones" />
@@ -86,7 +83,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Sheet</Heading>
+        <SectionHeading>Sheet</SectionHeading>
         <Sheet>
           <SheetTrigger asChild>
             <Button variant="outline">Nuevo link</Button>
@@ -98,7 +95,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Dialog</Heading>
+        <SectionHeading>Dialog</SectionHeading>
         <Dialog>
           <DialogTrigger asChild>
             <Button variant="outline">Borrar link</Button>
@@ -110,7 +107,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Dropdown menu</Heading>
+        <SectionHeading>Dropdown menu</SectionHeading>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">Opciones</Button>
@@ -123,7 +120,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Tooltip</Heading>
+        <SectionHeading>Tooltip</SectionHeading>
         <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -135,7 +132,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Toast</Heading>
+        <SectionHeading>Toast</SectionHeading>
         <ToastProvider>
           <Toast open>
             <ToastTitle>link creado: juano.example.test/promo</ToastTitle>
@@ -145,7 +142,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Tabs</Heading>
+        <SectionHeading>Tabs</SectionHeading>
         <Tabs defaultValue="dia">
           <TabsList>
             <TabsTrigger value="dia">7d</TabsTrigger>
@@ -157,7 +154,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Skeleton</Heading>
+        <SectionHeading>Skeleton</SectionHeading>
         <div className="flex flex-col gap-2">
           {/* max-w-full: w-48 (192px) is wider than the gallery's own
               content column at a 390px mobile viewport (T6.5.6 caught
@@ -170,7 +167,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Badge</Heading>
+        <SectionHeading>Badge</SectionHeading>
         <div className="flex flex-wrap gap-2">
           <Badge variant="default">default</Badge>
           <Badge variant="primary">primary</Badge>
@@ -182,7 +179,7 @@ export function ShadcnSection() {
       </div>
 
       <div>
-        <Heading>Card</Heading>
+        <SectionHeading>Card</SectionHeading>
         <Card className="max-w-sm">
           <CardHeader>
             <CardTitle>clicks reales</CardTitle>

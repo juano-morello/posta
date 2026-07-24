@@ -1,3 +1,5 @@
+import { SectionHeading } from '../section-heading';
+
 // T6.5.5 — Sidebar/Topbar (desktop) and BottomTabs (mobile) inspectable
 // on ONE page without resizing the real browser window. AppShell's
 // desktop/mobile swap (T6.3.6) is a real CSS media query keyed on the
@@ -10,10 +12,6 @@
 // viewports" in the task's own wording. Reuses /shell-preview (T6.3.6's
 // own fixture route for AppShell) rather than re-composing Sidebar/
 // Topbar/BottomTabs a second time here.
-function FrameHeading({ children }: { children: string }) {
-  return <h3 className="mb-3 font-sans text-base font-semibold">{children}</h3>;
-}
-
 export function ShellSection() {
   return (
     <div className="flex flex-wrap gap-8">
@@ -25,7 +23,7 @@ export function ShellSection() {
           still reported the 1280px iframe's width as its own minimum
           and pushed the page wider rather than shrinking to the row. */}
       <div className="min-w-0 max-w-full">
-        <FrameHeading>Desktop (≥800px)</FrameHeading>
+        <SectionHeading>Desktop (≥800px)</SectionHeading>
         <div className="overflow-x-auto border border-border">
           <iframe
             data-testid="shell-frame-desktop"
@@ -43,7 +41,7 @@ export function ShellSection() {
           390px (mobile) TESTING viewport — so this needs the same
           shrink-then-scroll treatment, not just the desktop frame. */}
       <div className="min-w-0 max-w-full">
-        <FrameHeading>Mobile (&lt;800px)</FrameHeading>
+        <SectionHeading>Mobile (&lt;800px)</SectionHeading>
         <div className="overflow-x-auto border border-border">
           <iframe
             data-testid="shell-frame-mobile"

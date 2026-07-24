@@ -9,32 +9,29 @@ import {
   GALLERY_RECEIPTS,
   GALLERY_SPLIT,
 } from '../fixtures';
+import { SectionHeading } from '../section-heading';
 
 // T6.5.4 — the four honesty primitives (S6.4), rendered from the
 // fixtures module (T6.5.2) in their normal state — never a live
 // endpoint. Recibos is shown as a LIVE island: the real component, with
 // its own prompt line + pulsing dot, not a static screenshot of one.
-function Heading({ children }: { children: string }) {
-  return <h3 className="mb-3 font-sans text-base font-semibold">{children}</h3>;
-}
-
 const SOURCE_CHIP_PLATFORMS = ['Instagram', 'WhatsApp', 'TikTok', 'directo'] as const;
 
 export function HonestySection() {
   return (
     <div className="flex flex-col gap-10">
       <div data-testid="gallery-humano-bar">
-        <Heading>HumanoBar</Heading>
+        <SectionHeading>HumanoBar</SectionHeading>
         <HumanoBar {...GALLERY_SPLIT} />
       </div>
 
       <div data-testid="gallery-badge-humano">
-        <Heading>BadgeHumano</Heading>
+        <SectionHeading>BadgeHumano</SectionHeading>
         <BadgeHumano percent={GALLERY_SPLIT.humano} />
       </div>
 
       <div data-testid="gallery-source-chip">
-        <Heading>SourceChip</Heading>
+        <SectionHeading>SourceChip</SectionHeading>
         <div className="flex flex-wrap gap-3">
           {SOURCE_CHIP_PLATFORMS.map((platform) => (
             <SourceChip key={platform} platform={platform} />
@@ -43,7 +40,7 @@ export function HonestySection() {
       </div>
 
       <div data-testid="gallery-recibos">
-        <Heading>Recibos</Heading>
+        <SectionHeading>Recibos</SectionHeading>
         <Recibos slug={GALLERY_LINKS[0]!.slug} receipts={GALLERY_RECEIPTS} />
       </div>
 
@@ -51,7 +48,7 @@ export function HonestySection() {
           each already has its own unit test (T6.4.4/T6.4.5/T6.4.13), but
           those never prove a human can actually LOOK at the result. */}
       <div data-testid="gallery-honesty-edge-cases">
-        <Heading>Casos límite</Heading>
+        <SectionHeading>Casos límite</SectionHeading>
         <div className="flex flex-col gap-6">
           <div data-testid="edge-case-zero-clicks">
             <p className="mb-2 font-mono text-xs text-muted">0 clicks</p>
