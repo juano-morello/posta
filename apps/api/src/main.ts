@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import express from 'express';
 import type { Request, Response } from 'express';
-import { formatEnvFailures, loadEnv } from '@posta/contracts';
+import { formatEnvFailures, loadEnv, makeUrlBuilders, resolveReservedHandles } from '@posta/contracts';
 import { AppModule } from './app.module';
 import { apiEnvSchema } from './env';
+import { makeRequestTargetParser } from './redirect/host';
+import { createRedirectMiddleware } from './redirect/middleware';
 
 // T0.3.8 — fail fast on invalid env (S0.3). The very first thing this
 // process does, before NestFactory.create or anything else: validate
@@ -21,12 +25,47 @@ if (!envResult.ok) {
 const env = envResult.data;
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // T2.1.4 [INV-2] — the redirect hot path must never pay for Nest's
+  // DI/controller ceremony, so it cannot be a Nest middleware/guard: it
+  // has to be mounted on the raw Express instance BEFORE Nest's router
+  // exists at all. That means construction order is inverted from the
+  // pre-E2 version of this file (which let NestFactory.create build its
+  // own Express instance internally): build `server` ourselves first,
+  // mount the redirect middleware on it, and only THEN hand it to
+  // NestFactory.create via ExpressAdapter. Ordering by construction — the
+  // redirect middleware physically cannot run after a router that does
+  // not exist yet when `server.use()` below executes — rather than by
+  // hoping `app.use()` on a Nest-created instance happens to run first.
+  //
+  // makeUrlBuilders + resolveReservedHandles + makeRequestTargetParser
+  // are each called exactly ONCE, right here, from already-validated env
+  // — never inside the returned middleware handler, which is what keeps
+  // the hot path free of per-request allocation.
+  const server = express();
+
+  const urls = makeUrlBuilders({
+    domain: env.POSTA_LINK_DOMAIN,
+    protocol: env.POSTA_PROTOCOL,
+    appSubdomain: env.POSTA_APP_SUBDOMAIN,
+    apiSubdomain: env.POSTA_API_SUBDOMAIN,
+  });
+  const parseRequestTarget = makeRequestTargetParser({
+    urls,
+    reservedHandles: resolveReservedHandles(env.POSTA_RESERVED_HANDLES),
+  });
+
+  server.use(createRedirectMiddleware({ parseRequestTarget }));
+
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule,
+    new ExpressAdapter(server),
+  );
 
   // Mounted directly on the underlying HTTP adapter, ahead of the Nest
-  // router. The redirect middleware E2 adds will mount the same way, so
-  // the hot path never pays for Nest's controller/DI ceremony — this
-  // health route is the first thing to use that pattern.
+  // router. The redirect middleware above mounts the same way, one level
+  // lower still (on `server` itself, before Nest ever sees it) — this
+  // health route was the first thing to use that pattern; T2.1.4 pushed
+  // it one step further.
   app.use('/health', (_req: Request, res: Response) => {
     res.status(200).send('ok');
   });
