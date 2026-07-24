@@ -81,23 +81,35 @@ The cache key is tenant-scoped but the request carries a handle, so `resolveTena
 On a miss, one query through the `forTenant` helper from T1.1.9: `SELECT id, tenant_id, destination FROM links WHERE tenant_id = $1 AND slug = $2 AND archived_at IS NULL`. Archived links resolve to nothing — never to their old destination, because a user who archives a link has revoked it and a cache-warm copy honouring it is a bug with a security shape.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` against the T1.1.2 testcontainer asserts a live link resolves, an archived link resolves to `null`, and tenant A's slug is invisible to tenant B · **after** T2.2.3, T1.1.9
 
-#### T2.2.5 · `feat: backfill the link cache on a postgres hit`
+#### T2.2.5 · `feat: backfill the link cache on a postgres hit` ✅ done (`da8c416`)
 After a Postgres hit, `SETEX link:{tenant}:{slug} 3600 <json>` (TTL from `LINK_CACHE_TTL_SECONDS`, default 3600). The write is fire-and-forget with a `.catch()` — a failed backfill costs the *next* request a Postgres query, and blocking this one on it would trade a guarantee for an optimisation.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` asserts a resolution after a miss leaves a key with `TTL` between 3590 and 3600, that a second request issues zero Postgres queries, and that a rejecting `setex` still returns the destination · **after** T2.2.4
 
-#### T2.2.6 · `feat: negative-cache unknown slugs for 60 seconds`
+#### T2.2.6 · `feat: negative-cache unknown slugs for 60 seconds` ✅ done (`88d895e`)
 Miss in both tiers writes a tombstone (`SETEX ... 60 "\0"`) so a scan over random slugs hits Redis instead of Postgres. `lookupCachedLink` recognises the tombstone and returns "known-absent", distinct from "miss", so a tombstone never falls through to Postgres. 60s, not 3600, so a freshly created link goes live within a minute even if someone probed it first.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` asserts 100 requests for an unknown slug produce exactly one Postgres query, the tombstone's TTL is ≤ 60, and creating the link then waiting out the TTL resolves it · **after** T2.2.5
 
-#### T2.2.7 · `feat: export invalidateLink() as the seam for e5`
+#### T2.2.7 · `feat: export invalidateLink() as the seam for e5` ✅ done (`a0a36dc`)
 `invalidateLink(tenantId, slug)` deletes `link:{tenant}:{slug}` (and `invalidateHandle(handle)` deletes `handle:{handle}`), exported from `packages/core/src/redis/`. E5's link edit, archive and delete call it; defining it here means E5 imports a seam rather than reaching into the keyspace and inventing a second copy of the key format.
 → **files** `packages/core/src/redis/invalidate.ts` · `packages/core/src/redis/invalidate.test.ts` · **verify** `pnpm test redis/invalidate.test.ts` asserts the key is gone after the call, that invalidating an absent key is a no-op returning 0, and that it deletes the tombstone from T2.2.6 too · **after** T2.2.6
 
-#### T2.2.8 · `test: redirect still resolves with redis down`
+#### T2.2.8 · `test: redirect still resolves with redis down` ✅ done (`9ef8675`)
 Boots the app, then stops the Redis container mid-suite and asserts requests keep serving 307s from Postgres with a `warn` per degraded lookup and no 5xx — then restarts it and asserts the cache repopulates. Mocking the client would let this pass while the real one blocks on a reconnect, which is precisely the failure being tested.
 → **files** `apps/api/src/redirect/resolve-degraded.test.ts` · **verify** `pnpm test redirect/resolve-degraded.test.ts` asserts 20 requests during the outage all return 307 with the correct `Location`, zero 5xx, and that the first request after recovery re-SETEXes the key · **after** T2.2.7
 
 > Redis being down must degrade latency, never availability. A shortener that 500s when its cache blinks is worse than one with no cache.
+
+> **⚠ Known defect, found by S2.2's story review fan-out (2026-07-24). Unresolved — E5 must close it.**
+>
+> **The cache writes in this story are not fenced against `invalidateLink()`.** `backfillLinkCache`, `writeLinkTombstone` and `backfillHandleCache` are unconditional `SETEX` writes with no ordering guarantee relative to the `DEL` that `invalidateLink`/`invalidateHandle` issue. A request that reads a link from Postgres moments *before* it is archived can have its fire-and-forget `SETEX` land *after* the archive's `DEL`, repopulating the cache with the now-revoked destination for up to `LINK_CACHE_TTL_SECONDS` (default **3600s**).
+>
+> This was reproduced empirically against the shipped functions, not merely reasoned about. It has a security shape rather than a staleness shape: **it defeats takedown.** The owner of a scam link controls when they send traffic to their own slug and can approximately time a moderator's archive action, so the race is attacker-repeatable at zero cost until they win it — and each win buys another hour of a revoked destination being served. The symmetric case is milder: a stale tombstone write racing a real backfill suppresses a just-created link for 60s.
+>
+> **Why it is not fixed here.** The defect lives at the seam between this story's writes and E5's revocation path, and E5 does not exist yet. `invalidateLink()` is only a seam in E2 — nothing calls it. Building compare-and-swap versioning now, with no consumer to validate it against, would be speculative; the fix belongs where the archive/edit mutation actually runs.
+>
+> **What E5 must do.** Version-stamp the cached payload (e.g. carry `updated_at`/`archived_at`) and make every cache write a compare-and-swap via a Lua `EVAL`, so a write can only land if it is not older than what is already stored, with the archive path writing an authoritative fence no earlier read can beat. A bare `DEL` is not sufficient and must not be treated as if it were. Re-checking `archived_at IS NULL` immediately before the `SETEX` shrinks the window but does not close it, and must not ship as the whole fix. Whatever lands needs its own test proving a late backfill cannot resurrect a revoked destination.
+>
+> Invariant note: this does not violate an existing numbered invariant, which is itself the finding — "archiving revokes" is relied on by S2.2's acceptance criteria and by E5, but is nowhere stated as an invariant. Consider promoting it.
 
 ---
 
