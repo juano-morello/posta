@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { createRedisClient } from '../redis/client';
+import { closeBoth } from './container-cleanup';
 
 // T2.2.7 — the shared testcontainers Redis harness this task's own
 // invalidate.test.ts is the first consumer of, and T2.6.1's full-app
@@ -20,10 +21,6 @@ export interface RedisContainerHandle {
   stop(): Promise<void>;
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Closes the ioredis client AND stops the container, unconditionally
  * attempting both even if the first fails — same reasoning as
@@ -31,35 +28,20 @@ function describeError(error: unknown): string {
  * `await client.quit(); await container.stop();` would leak the container
  * whenever `quit()` throws, since the second call would never run. If both
  * fail, both messages are reported (never just the first, silently
- * dropping the second).
+ * dropping the second). The attempt-both/report-both shape itself lives in
+ * ./container-cleanup.ts (T2.2.7 fix round 1) — shared with
+ * pg-container.ts's identical need — this function is just the
+ * Redis-shaped call into it.
  */
 async function closeClientAndContainer(
   client: Redis,
   container: StartedRedisContainer,
 ): Promise<void> {
-  let closeError: unknown;
-  try {
-    await client.quit();
-  } catch (error) {
-    closeError = error;
-  }
-
-  let stopError: unknown;
-  try {
-    await container.stop();
-  } catch (error) {
-    stopError = error;
-  }
-
-  if (closeError && stopError) {
-    throw new Error(
-      `Failed to clean up the testcontainers Redis: client.quit() failed with ` +
-        `"${describeError(closeError)}", then container.stop() failed with ` +
-        `"${describeError(stopError)}".`,
-    );
-  }
-  if (closeError) throw closeError;
-  if (stopError) throw stopError;
+  await closeBoth(
+    'Redis',
+    { label: 'client.quit()', run: () => client.quit() },
+    { label: 'container.stop()', run: () => container.stop() },
+  );
 }
 
 /**

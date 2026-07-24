@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { createDbClient, runDrizzleMigrations, type DbClient } from '../db/client';
+import { closeBoth, describeError } from './container-cleanup';
 
 // T1.1.2 — the shared testcontainers Postgres 16 harness every integration
 // test in E1-E4 reuses, instead of each test file booting its own
@@ -29,45 +30,26 @@ export interface PgContainerHandle {
   stop(): Promise<void>;
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Closes the db pool AND stops the container, unconditionally attempting
  * both even if the first fails — a plain `await closeDb(); await
  * container.stop();` sequence would leak the container whenever
  * `closeDb()` throws, since the second call would never run. If both
  * fail, both messages are reported (never just the first, silently
- * dropping the second).
+ * dropping the second). The attempt-both/report-both shape itself lives in
+ * ./container-cleanup.ts (T2.2.7 fix round 1) — shared with
+ * redis-container.ts's identical need — this function is just the
+ * Postgres-shaped call into it.
  */
 async function closeClientAndContainer(
   client: DbClient,
   container: StartedPostgreSqlContainer,
 ): Promise<void> {
-  let closeError: unknown;
-  try {
-    await client.closeDb();
-  } catch (error) {
-    closeError = error;
-  }
-
-  let stopError: unknown;
-  try {
-    await container.stop();
-  } catch (error) {
-    stopError = error;
-  }
-
-  if (closeError && stopError) {
-    throw new Error(
-      `Failed to clean up the testcontainers Postgres: closeDb() failed with ` +
-        `"${describeError(closeError)}", then container.stop() failed with ` +
-        `"${describeError(stopError)}".`,
-    );
-  }
-  if (closeError) throw closeError;
-  if (stopError) throw stopError;
+  await closeBoth(
+    'Postgres',
+    { label: 'closeDb()', run: () => client.closeDb() },
+    { label: 'container.stop()', run: () => container.stop() },
+  );
 }
 
 /**
