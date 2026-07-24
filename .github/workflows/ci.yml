@@ -222,6 +222,12 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://posta:posta@localhost:5432/posta
+      # createDbClient()'s resolvePoolMax() (packages/core/src/db/client.ts,
+      # T1.1.1) requires DB_POOL_MAX explicitly — pool max is never left to
+      # the pg driver default on purpose (CLAUDE.md). Without this, `pnpm
+      # migrate` in this job fails immediately with "DB_POOL_MAX must be
+      # set" before it ever reaches Postgres — confirmed live on PR #3.
+      DB_POOL_MAX: '5'
 
     services:
       postgres:
