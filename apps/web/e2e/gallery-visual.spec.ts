@@ -14,12 +14,24 @@ import { expect, test } from '@playwright/test';
 // here rather than in a separate file, exactly as the prior session's
 // notes said they would.
 //
-// KNOWN CAVEAT: Playwright screenshot comparisons are sensitive to the
-// OS/font-rendering environment they were recorded in. These baselines
-// were generated on macOS (Darwin) in this sandbox. If CI runs on a
-// different OS (Linux is typical), a first CI run may need its own
-// baseline generation rather than reusing these byte-for-byte — that
-// reconciliation is T6.5.9's job (wiring the CI job), not this one's.
+// CROSS-OS BASELINES (PR #2 review — CI was red without this): Playwright
+// screenshot comparisons are sensitive to the OS/font-rendering
+// environment they were recorded in, so `*-darwin.png` baselines (built
+// on macOS, in this sandbox) don't match a Linux CI runner's rendering.
+// `*-linux.png` baselines are committed alongside them, generated inside
+// `mcr.microsoft.com/playwright:v1.61.1-noble` (the exact image/version
+// matching this repo's `@playwright/test` pin) against an isolated copy
+// of the repo — never against this worktree's own `node_modules`, so the
+// container's Linux-native installs never touch the macOS ones this
+// session depends on. Playwright's own snapshot resolution picks the
+// right suffix for whichever OS is actually running the test, so both
+// sets coexist here without either side needing to know about the
+// other. Regenerate the `-linux.png` set the same way if this file's
+// assertions ever change: `docker run --rm -v <isolated-copy>:/work -w
+// /work mcr.microsoft.com/playwright:v1.61.1-noble bash -lc "corepack
+// enable && pnpm install --frozen-lockfile && pnpm --filter
+// @posta/contracts build && pnpm --filter @posta/web exec playwright
+// test gallery-visual.spec.ts gallery.spec.ts --update-snapshots"`.
 const DESKTOP = { width: 1280, height: 800 };
 const MOBILE = { width: 390, height: 844 };
 
