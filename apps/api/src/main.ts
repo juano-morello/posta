@@ -8,7 +8,11 @@ import { formatEnvFailures, loadEnv, makeUrlBuilders, resolveReservedHandles } f
 import { AppModule } from './app.module';
 import { apiEnvSchema } from './env';
 import { makeRequestTargetParser } from './redirect/host';
-import { createRedirectMiddleware } from './redirect/middleware';
+import {
+  consoleErrorLogger,
+  createHandleRootHitsCounter,
+  createRedirectMiddleware,
+} from './redirect/middleware';
 
 // T0.3.8 — fail fast on invalid env (S0.3). The very first thing this
 // process does, before NestFactory.create or anything else: validate
@@ -37,10 +41,13 @@ async function bootstrap(): Promise<void> {
   // not exist yet when `server.use()` below executes — rather than by
   // hoping `app.use()` on a Nest-created instance happens to run first.
   //
-  // makeUrlBuilders + resolveReservedHandles + makeRequestTargetParser
-  // are each called exactly ONCE, right here, from already-validated env
-  // — never inside the returned middleware handler, which is what keeps
-  // the hot path free of per-request allocation.
+  // makeUrlBuilders + resolveReservedHandles + makeRequestTargetParser +
+  // createHandleRootHitsCounter are each called exactly ONCE, right here,
+  // from already-validated env — never inside the returned middleware
+  // handler, which is what keeps the hot path free of per-request
+  // allocation. No registry override is passed, so the counter registers
+  // against prom-client's own default registry (matches
+  // createDefaultPartitionRowsGauge's production call in the worker).
   const server = express();
 
   const urls = makeUrlBuilders({
@@ -53,8 +60,15 @@ async function bootstrap(): Promise<void> {
     urls,
     reservedHandles: resolveReservedHandles(env.POSTA_RESERVED_HANDLES),
   });
+  const handleRootHitsCounter = createHandleRootHitsCounter();
 
-  server.use(createRedirectMiddleware({ parseRequestTarget }));
+  server.use(
+    createRedirectMiddleware({
+      parseRequestTarget,
+      logger: consoleErrorLogger,
+      handleRootHitsCounter,
+    }),
+  );
 
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,

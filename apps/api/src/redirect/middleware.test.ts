@@ -5,10 +5,16 @@ import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import express from 'express';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Counter, Registry, register } from 'prom-client';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeUrlBuilders, resolveReservedHandles } from '@posta/contracts';
 import { makeRequestTargetParser } from './host';
-import { createRedirectMiddleware } from './middleware';
+import {
+  consoleErrorLogger,
+  createHandleRootHitsCounter,
+  createRedirectMiddleware,
+  HANDLE_ROOT_HITS_COUNTER_NAME,
+} from './middleware';
 
 // T2.1.4 [INV-2] — proves the ordering claim, not just the branching:
 // the redirect middleware must be mounted on the Express instance BEFORE
@@ -91,6 +97,56 @@ interface RawResponse {
   readonly headers: http.IncomingHttpHeaders;
 }
 
+/**
+ * A minimal Express Response double shared by every isolated-handler test
+ * below (T2.1.4's original three, plus T2.1.5's alarm and reserved-path
+ * ones) — hoisted to module scope in T2.1.5 so all of them exercise the
+ * identical fake rather than near-duplicate copies drifting apart.
+ */
+function makeRes() {
+  const headers: Record<string, string> = {};
+  const res = {
+    statusCode: undefined as number | undefined,
+    ended: false,
+    set(name: string, value: string) {
+      headers[name] = value;
+      return res;
+    },
+    status(code: number) {
+      res.statusCode = code;
+      return res;
+    },
+    end() {
+      res.ended = true;
+      return res;
+    },
+    headers,
+  };
+  return res;
+}
+
+/**
+ * The exact shape of RedirectMiddlewareLogger#error, spelled out so
+ * `vi.fn<LoggerErrorFn>()` produces a Mock whose call signature is
+ * structurally assignable to RedirectMiddlewareLogger — an untyped
+ * `vi.fn()` infers `(...args: any[]) => any`, which typechecks fine at
+ * the call site but fails `tsc --noEmit -p tsconfig.test.json` (T2.6.1's
+ * separate, stricter typecheck pass) when assigned to the interface.
+ */
+type LoggerErrorFn = (message: string, meta?: Record<string, unknown>) => void;
+
+/**
+ * Reads a Counter's current registered value off a dedicated Registry —
+ * the shape T2.1.5's brief calls out explicitly (getMetricsAsJSON /
+ * getSingleMetric), so these tests assert the real value prom-client has
+ * recorded rather than merely that `.inc()` was called.
+ */
+async function getCounterValue(registry: Registry, name: string): Promise<number> {
+  const metrics = await registry.getMetricsAsJSON();
+  const metric = metrics.find((entry) => entry.name === name);
+  return metric?.values[0]?.value ?? 0;
+}
+
 function request(port: number, host: string, path: string): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -129,8 +185,16 @@ describe('createRedirectMiddleware — mounted ahead of the Nest router', () => 
     });
 
     // Mirrors the ordering main.ts must use: mount on `server` BEFORE
-    // NestFactory.create ever sees it.
-    server.use(createRedirectMiddleware({ parseRequestTarget }));
+    // NestFactory.create ever sees it. A dedicated Registry avoids
+    // colliding with another test file's own posta_handle_root_hits
+    // Counter registered against prom-client's shared global default.
+    server.use(
+      createRedirectMiddleware({
+        parseRequestTarget,
+        logger: consoleErrorLogger,
+        handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      }),
+    );
 
     app = await NestFactory.create<NestExpressApplication>(
       TestAppModule,
@@ -216,29 +280,11 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     urls,
     reservedHandles: resolveReservedHandles(),
   });
-  const middleware = createRedirectMiddleware({ parseRequestTarget });
-
-  function makeRes() {
-    const headers: Record<string, string> = {};
-    const res = {
-      statusCode: undefined as number | undefined,
-      ended: false,
-      set(name: string, value: string) {
-        headers[name] = value;
-        return res;
-      },
-      status(code: number) {
-        res.statusCode = code;
-        return res;
-      },
-      end() {
-        res.ended = true;
-        return res;
-      },
-      headers,
-    };
-    return res;
-  }
+  const middleware = createRedirectMiddleware({
+    parseRequestTarget,
+    logger: consoleErrorLogger,
+    handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+  });
 
   it('calls next() exactly once for a not-ours host and touches nothing else', () => {
     const req = { headers: { host: `api.${DOMAIN}` }, path: '/v1/ping' } as never;
@@ -274,5 +320,187 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     expect(res.statusCode).toBe(404);
     expect(res.headers['Cache-Control']).toBe('no-store');
     expect(res.ended).toBe(true);
+  });
+});
+
+// T2.1.5 — mirrors createDefaultPartitionRowsGauge's own coverage test
+// (apps/worker/src/partitions/partition-maintenance.job.test.ts): the
+// `...(registry ? { registers: [registry] } : {})` spread has two
+// branches, and every other test in this file deliberately exercises
+// only the "a registry was given" one (to avoid colliding with another
+// test file's own posta_handle_root_hits Counter on prom-client's shared
+// global default registry). This is the one place that intentionally
+// exercises the omitted-registry default, so it must clean up
+// immediately after asserting.
+describe('createHandleRootHitsCounter — both registry paths (coverage)', () => {
+  it('registers on the given registry when one is provided', () => {
+    const registry = new Registry();
+
+    const counter = createHandleRootHitsCounter(registry);
+
+    expect(registry.getSingleMetric(HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(counter);
+  });
+
+  it("falls back to prom-client's shared default registry when none is provided", () => {
+    try {
+      const counter = createHandleRootHitsCounter();
+
+      expect(register.getSingleMetric(HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(counter);
+    } finally {
+      register.removeSingleMetric(HANDLE_ROOT_HITS_COUNTER_NAME);
+    }
+  });
+});
+
+// T2.1.5 — "/" on a handle host means the Cloudflare Origin Rule
+// (path == "/" -> Next) is misconfigured: the bio page's visitor is
+// getting a 404 instead of their page, and without a signal here nobody
+// would ever find out. A fresh Registry + Counter + spy logger per test
+// (via beforeEach) so "exactly 1" and "exactly 2" assertions below can
+// never be polluted by a previous test's increment or log call.
+describe('createRedirectMiddleware — handle-root alarm (T2.1.5)', () => {
+  const urls = makeUrlBuilders({
+    domain: DOMAIN,
+    protocol: 'http',
+    appSubdomain: 'app',
+    apiSubdomain: 'api',
+  });
+  const parseRequestTarget = makeRequestTargetParser({
+    urls,
+    reservedHandles: resolveReservedHandles(),
+  });
+
+  let registry: Registry;
+  let handleRootHitsCounter: Counter<string>;
+  let logger: { error: ReturnType<typeof vi.fn<LoggerErrorFn>> };
+  let middleware: ReturnType<typeof createRedirectMiddleware>;
+
+  beforeEach(() => {
+    registry = new Registry();
+    handleRootHitsCounter = createHandleRootHitsCounter(registry);
+    logger = { error: vi.fn<LoggerErrorFn>() };
+    middleware = createRedirectMiddleware({ parseRequestTarget, logger, handleRootHitsCounter });
+  });
+
+  it('404s "/" on a handle host, with Cache-Control: no-store and no next()', () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/' } as never;
+    const res = makeRes();
+    const next = vi.fn();
+
+    middleware(req, res as never, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['Cache-Control']).toBe('no-store');
+    expect(res.ended).toBe(true);
+  });
+
+  it('emits exactly one error log naming the handle', () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/' } as never;
+
+    middleware(req, makeRes() as never, vi.fn());
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [message, meta] = logger.error.mock.calls[0] as [
+      string,
+      Record<string, unknown> | undefined,
+    ];
+    expect(message).toContain('juano');
+    expect(meta).toMatchObject({ handle: 'juano' });
+  });
+
+  it('increments posta_handle_root_hits by exactly 1', async () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/' } as never;
+
+    middleware(req, makeRes() as never, vi.fn());
+
+    expect(await getCounterValue(registry, HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(1);
+  });
+
+  it('two separate handle-root hits log twice and increment by exactly 2 — no per-layer double counting', async () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/' } as never;
+
+    middleware(req, makeRes() as never, vi.fn());
+    middleware(req, makeRes() as never, vi.fn());
+
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(await getCounterValue(registry, HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(2);
+  });
+});
+
+// T2.1.5 — reserved paths (and the other non-alarm kinds already covered
+// by T2.1.4) must answer immediately with no side effect beyond the 404
+// itself. The brief's verify line asks for "no Redis GET, no Postgres
+// query, no enqueue" — that is a STRUCTURAL fact at this task, not a
+// behavioral one: the middleware holds no Redis client and no database
+// handle at all yet (see RedirectMiddlewareDeps' own comment in
+// middleware.ts — `redis` is deliberately deferred to T2.2.3, the first
+// task that reads it). There is nothing to spy on here. What these tests
+// assert instead: the observable response (404, no-store, no next()) and
+// that neither of the alarm's two side effects — the error log, the
+// counter increment — fire for anything other than handle-root. The
+// end-to-end "zero lookups against a real client" assertion lands at
+// T2.6.5, once `redis` actually exists on this middleware's deps.
+describe('createRedirectMiddleware — reserved paths short-circuit, no alarm (T2.1.5)', () => {
+  const urls = makeUrlBuilders({
+    domain: DOMAIN,
+    protocol: 'http',
+    appSubdomain: 'app',
+    apiSubdomain: 'api',
+  });
+  const parseRequestTarget = makeRequestTargetParser({
+    urls,
+    reservedHandles: resolveReservedHandles(),
+  });
+
+  let registry: Registry;
+  let handleRootHitsCounter: Counter<string>;
+  let logger: { error: ReturnType<typeof vi.fn<LoggerErrorFn>> };
+  let middleware: ReturnType<typeof createRedirectMiddleware>;
+
+  beforeEach(() => {
+    registry = new Registry();
+    handleRootHitsCounter = createHandleRootHitsCounter(registry);
+    logger = { error: vi.fn<LoggerErrorFn>() };
+    middleware = createRedirectMiddleware({ parseRequestTarget, logger, handleRootHitsCounter });
+  });
+
+  it.each([['/favicon.ico'], ['/robots.txt'], ['/.well-known/x']])(
+    '404s %s immediately with no-store, no alarm log, no counter increment',
+    async (path) => {
+      const req = { headers: { host: `juano.${DOMAIN}` }, path } as never;
+      const res = makeRes();
+      const next = vi.fn();
+
+      middleware(req, res as never, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(404);
+      expect(res.headers['Cache-Control']).toBe('no-store');
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(await getCounterValue(registry, HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(0);
+    },
+  );
+
+  it('a reserved-handle target 404s with no alarm log and no counter increment', async () => {
+    const req = { headers: { host: `www.${DOMAIN}` }, path: '/promo' } as never;
+    const res = makeRes();
+
+    middleware(req, res as never, vi.fn());
+
+    expect(res.statusCode).toBe(404);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(await getCounterValue(registry, HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(0);
+  });
+
+  it('an invalid-path target 404s with no alarm log and no counter increment', async () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/PROMO' } as never;
+    const res = makeRes();
+
+    middleware(req, res as never, vi.fn());
+
+    expect(res.statusCode).toBe(404);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(await getCounterValue(registry, HANDLE_ROOT_HITS_COUNTER_NAME)).toBe(0);
   });
 });
