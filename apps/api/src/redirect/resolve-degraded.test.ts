@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createServer, type Server, type Socket } from 'node:net';
 import type Redis from 'ioredis';
 import { createRedisClient, linkKey } from '@posta/core';
 import {
@@ -8,7 +9,7 @@ import {
   type RedisContainerHandle,
 } from '@posta/core/testing';
 import type { CachedLink } from '@posta/contracts';
-import { resolveLink } from './resolve-link';
+import { lookupCachedLink, resolveLink } from './resolve-link';
 import {
   CONTAINER_TEST_TIMEOUT_MS,
   TEST_CACHE_TTL_SECONDS,
@@ -48,6 +49,36 @@ import {
 // No production code changes: if this task had needed one to be
 // testable, the brief asked for that to be reported as a finding instead
 // of made — see this task's report for whether that came up.
+//
+// [Fix round 1] The three-phase test above proves resolveLink survives a
+// real, fully-dead Redis — but review caught that withRedisTimeout's own
+// RACE branch (the Promise.race actually timing out, as opposed to the
+// connection rejecting on its own) had zero coverage against real
+// infrastructure anywhere in this codebase: resolve-link.test.ts's own
+// "a GET that never settles" case uses a plain object literal
+// (`{ get: () => new Promise(() => {}) }`) that never touches ioredis's
+// connection state machine at all — exactly the "mocking the client"
+// this task's own brief says defeats the purpose, just one level deeper
+// (the STUB is fine for testing lookupCachedLink's own logic in
+// isolation; it says nothing about whether a REAL ioredis client
+// actually behaves the way that stub assumes once its peer stops
+// answering).
+//
+// Reproducing that condition faithfully needs more care than "a
+// `net.createServer()` that never speaks": `enableReadyCheck: true` is
+// ioredis's own default (createRedisClient, client.ts, never overrides
+// it) — a peer that never speaks at all means the client never reaches
+// 'ready' in the first place, and `enableOfflineQueue: false` then
+// fast-rejects every command anyway, reproducing the SAME non-representative
+// "instant reject" outcome the separate-client trick above already had to
+// work around. The client has to actually reach 'ready' — genuinely
+// believe it is talking to a healthy Redis — and only THEN go silent.
+// startFakeRedisPeer (below) is a real TCP server speaking just enough
+// RESP to satisfy ioredis's own handshake (the two `CLIENT SETINFO`
+// calls every connection makes, then the `INFO` command
+// `enableReadyCheck` sends) before going silent on the next command —
+// still a genuine TCP peer, still no client-side mock, just enough
+// hand-rolled protocol to get past the point a bare socket cannot.
 
 const OUTAGE_BATCH_SIZE = 20; // mirrors the brief's own "20 requests" batch size
 
@@ -68,6 +99,28 @@ const DEGRADED_TIMEOUT_MS = 40;
 // orders of magnitude, not by a few multiples.
 const MAX_RESOLUTION_LATENCY_MS = 500;
 
+// [Fix round 1 hardening] Observed intermittently under vitest's default
+// (concurrent) test-file scheduling, never under a sequential single-file
+// run: `client.connect()` rejecting with "Connection is closed", surfaced
+// from a `[ioredis] Unhandled error event: AggregateError ... at
+// internalConnectMultiple`. testcontainers' `getHost()` resolves to
+// `localhost` on this setup, which Node's own dual-stack
+// (`internalConnectMultiple`, Happy Eyeballs) connect logic tries over
+// BOTH `127.0.0.1` and `::1` — under heavy concurrent Docker port-forward
+// load from several container-booting test files running at once, one of
+// those two attempts can transiently fail. This is setup-phase flakiness
+// in the TCP handshake itself, not a failure of anything this test
+// actually asserts, so a small bounded retry — a new client and a fresh
+// attempt, never reusing a client that just failed — is the right tool,
+// the same way a real deployment's own startup probe would tolerate one
+// bad dial. (This hardens THIS function's own client only — the SAME
+// race also affects startRedisContainer()'s internal client, in
+// packages/core/src/test/redis-container.ts, which is shared test
+// infrastructure out of scope for this task; see this task's report for
+// that finding.)
+const CONNECT_RETRY_ATTEMPTS = 3;
+const CONNECT_RETRY_DELAY_MS = 100;
+
 /**
  * Connects a SEPARATE ioredis client to the outage-phase container,
  * deliberately NOT `redisHandle.client` itself (the handle
@@ -83,19 +136,42 @@ const MAX_RESOLUTION_LATENCY_MS = 500;
  *
  * `lazyConnect` + an explicit `connect()` mirrors redis-container.ts's
  * own reasoning: without it, the very first command in the healthy phase
- * could race the socket handshake.
+ * could race the socket handshake. The error listener is attached BEFORE
+ * `connect()` is awaited, not after — attaching it only on success would
+ * leave a failed connection ATTEMPT's own error events genuinely
+ * unlistened, which is what produced the "[ioredis] Unhandled error
+ * event" log during the flake this function's retry loop now tolerates.
  */
 async function connectDegradedClient(url: string): Promise<Redis> {
-  const client = createRedisClient({ url, lazyConnect: true });
-  await client.connect();
-  // Once the container is stopped, ioredis's own automatic reconnect
-  // attempts keep firing 'error' events against a server that no longer
-  // exists. Redis (an EventEmitter) throws if an 'error' event has no
-  // listener at all — this no-op keeps that background noise from
-  // crashing the test process. The resilience under test is resolveLink's
-  // fallback behaviour, not this raw client's own reconnect bookkeeping.
-  client.on('error', () => {});
-  return client;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CONNECT_RETRY_ATTEMPTS; attempt += 1) {
+    const client = createRedisClient({ url, lazyConnect: true });
+    // Once the container is stopped (later, deliberately, by this test's
+    // own outage phase), ioredis's own automatic reconnect attempts keep
+    // firing 'error' events against a server that no longer exists. Redis
+    // (an EventEmitter) throws if an 'error' event has no listener at all
+    // — this no-op keeps that background noise from crashing the test
+    // process. The resilience under test is resolveLink's fallback
+    // behaviour, not this raw client's own reconnect bookkeeping.
+    client.on('error', () => {});
+
+    try {
+      await client.connect();
+      return client;
+    } catch (error) {
+      lastError = error;
+      client.disconnect();
+      if (attempt < CONNECT_RETRY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_DELAY_MS * attempt));
+      }
+    }
+  }
+
+  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `connectDegradedClient: failed to connect to ${url} after ${CONNECT_RETRY_ATTEMPTS} attempts: ${reason}`,
+  );
 }
 
 /**
@@ -108,6 +184,128 @@ async function connectDegradedClient(url: string): Promise<Redis> {
 async function flushMicrotasks(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Parses ONE complete RESP array-of-bulk-strings command (the shape every
+ * command ioredis sends takes: `*<argc>\r\n$<len>\r\n<bytes>\r\n...`) off
+ * the front of `buf`, or returns `null` if `buf` does not yet contain a
+ * full command — the caller re-invokes this as more bytes arrive. Just
+ * enough of RESP to read a client REQUEST, not a general-purpose parser:
+ * this file only ever needs to read commands, never array/error/integer
+ * REPLIES (the fake peer below only ever WRITES simple strings and one
+ * bulk string, by hand, which needs no parser at all).
+ */
+function tryParseRespCommand(buf: Buffer): { args: string[]; consumed: number } | null {
+  if (buf.length === 0 || buf[0] !== 0x2a /* '*' */) return null;
+  const headerEnd = buf.indexOf('\r\n');
+  if (headerEnd === -1) return null;
+  const argc = Number(buf.subarray(1, headerEnd).toString('ascii'));
+  if (!Number.isInteger(argc) || argc < 0) return null;
+
+  let offset = headerEnd + 2;
+  const args: string[] = [];
+  for (let i = 0; i < argc; i += 1) {
+    if (buf[offset] !== 0x24 /* '$' */) return null;
+    const lenEnd = buf.indexOf('\r\n', offset);
+    if (lenEnd === -1) return null;
+    const len = Number(buf.subarray(offset + 1, lenEnd).toString('ascii'));
+    const dataStart = lenEnd + 2;
+    const dataEnd = dataStart + len;
+    if (buf.length < dataEnd + 2) return null; // argument bytes + trailing CRLF not fully buffered yet
+    args.push(buf.subarray(dataStart, dataEnd).toString('utf8'));
+    offset = dataEnd + 2;
+  }
+  return { args, consumed: offset };
+}
+
+interface FakeRedisPeer {
+  readonly port: number;
+  /** Resolves once the peer has parsed a GET command — proof the client
+   * genuinely got that far (reached 'ready', then issued the command
+   * under test), not merely proof SOME TCP handshake happened. */
+  readonly sawGet: Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * A real TCP peer speaking just enough RESP to reach ioredis's OWN
+ * 'ready' state, then goes silent on the very next command — see this
+ * file's header comment (fix round 1) for why a peer that never speaks
+ * at all does NOT reproduce the same condition. Answers, in the order a
+ * plain (no auth, no db-select) `createRedisClient` connection sends
+ * them:
+ *   - `CLIENT SETINFO LIB-VER ...` / `CLIENT SETINFO LIB-NAME ...` — a
+ *     `+OK\r\n` simple string, same as real Redis. Both are wrapped in
+ *     `.catch(noop)` on ioredis's side, so any reply (even an error)
+ *     would unblock them; `+OK\r\n` is simplest and matches reality.
+ *   - `INFO` (ioredis's own `_readyCheck`, since `enableReadyCheck` is
+ *     ioredis's default and createRedisClient never overrides it) — an
+ *     EMPTY bulk string (`$0\r\n\r\n`). ioredis's ready check only fails
+ *     closed on a `loading:` field reporting nonzero; an empty INFO body
+ *     has no such field, so this is read as "ready" — no need to fake a
+ *     realistic INFO payload.
+ *   - anything else (`GET`, the command this test actually cares about)
+ *     — no reply, ever. The socket stays open; the peer stays silent.
+ *     That silence, after a genuine ready-check pass, is the "TCP
+ *     connected, server unresponsive" condition withRedisTimeout exists
+ *     to bound.
+ *
+ * Dispatch is by command NAME (case-insensitive), not by position in a
+ * scripted sequence: ioredis fires the two `CLIENT SETINFO` calls without
+ * awaiting between them, so they can arrive in the same TCP segment or
+ * two separate ones — matching by name is robust to that either way,
+ * where a purely positional script would not be.
+ */
+function startFakeRedisPeer(): Promise<FakeRedisPeer> {
+  let resolveSawGet: () => void = () => {};
+  const sawGet = new Promise<void>((resolve) => {
+    resolveSawGet = resolve;
+  });
+  const sockets = new Set<Socket>();
+
+  return new Promise<FakeRedisPeer>((resolveServer, rejectServer) => {
+    const server: Server = createServer((socket: Socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+      socket.on('error', () => {}); // the client destroying its socket at teardown is expected here, not a failure
+
+      let buffer = Buffer.alloc(0);
+      socket.on('data', (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        for (;;) {
+          const parsed = tryParseRespCommand(buffer);
+          if (!parsed) return;
+          buffer = buffer.subarray(parsed.consumed);
+
+          const name = (parsed.args[0] ?? '').toUpperCase();
+          if (name === 'GET') {
+            resolveSawGet();
+            return; // the deliberate wedge under test — never reply
+          }
+          socket.write(name === 'INFO' ? '$0\r\n\r\n' : '+OK\r\n');
+        }
+      });
+    });
+
+    server.once('error', rejectServer);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        rejectServer(new Error('Fake Redis peer failed to bind a TCP port.'));
+        return;
+      }
+      resolveServer({
+        port: address.port,
+        sawGet,
+        close: () =>
+          new Promise<void>((resolve, reject) => {
+            for (const socket of sockets) socket.destroy();
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      });
+    });
+  });
 }
 
 describe('resolveLink stays available through a real Redis outage (T2.2.8)', () => {
@@ -249,6 +447,16 @@ describe('resolveLink stays available through a real Redis outage (T2.2.8)', () 
         expect(recoveryQuerySpy).not.toHaveBeenCalled();
         recoveryQuerySpy.mockRestore();
 
+        // Redis is genuinely healthy again by this point — neither the cold
+        // resolution (an ORDINARY cache miss on a freshly-started, empty
+        // container, which lookupCachedLink never warns about) nor the warm
+        // one should have logged anything. Tightens this phase beyond "did
+        // not throw": a regression that kept treating the recovered Redis as
+        // degraded (e.g. a stale timeout/backoff state leaking from the
+        // outage phase) would still return the right destination here but
+        // would show up as an unexpected warning.
+        expect(recoveryLogger.warn).not.toHaveBeenCalled();
+
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
         process.off('unhandledRejection', unhandled);
@@ -259,4 +467,81 @@ describe('resolveLink stays available through a real Redis outage (T2.2.8)', () 
     },
     CONTAINER_TEST_TIMEOUT_MS,
   );
+});
+
+// [Fix round 1] withRedisTimeout's RACE branch specifically — real
+// infrastructure, not the object-literal stub resolve-link.test.ts's own
+// "a GET that never settles" case uses. No Postgres needed here: this is
+// narrowly about lookupCachedLink's own GET/timeout handling, the same
+// withRedisTimeout call resolve-tenant.ts's handle tier shares, so
+// pinning it once here at the mechanism's actual call site is what closes
+// the gap for both tiers, rather than duplicating this same real-TCP-peer
+// harness a second time for a helper that has no logic of its own beyond
+// calling withRedisTimeout identically.
+describe('lookupCachedLink — the timeout race against a REAL peer that reaches ready, then goes silent (T2.2.8 fix round 1)', () => {
+  it('a GET a real, ready ioredis connection never gets answered returns a miss via the TIMEOUT warning specifically, within a bound close to timeoutMs — not the REJECT warning, and not the 500ms ceiling the outage test above uses', async () => {
+    const peer = await startFakeRedisPeer();
+    let client: Redis | undefined;
+
+    try {
+      client = createRedisClient({ url: `redis://127.0.0.1:${peer.port}`, lazyConnect: true });
+      client.on('error', () => {}); // see connectDegradedClient's own comment above — same reconnect-noise reasoning
+
+      // The crux of this fix: ioredis's own `_connect()` resolves the
+      // `connect()` promise from the 'ready' EVENT, not from the TCP
+      // 'connect' event (verified by reading ioredis's own source while
+      // building this test) — so this awaiting successfully is proof the
+      // peer above genuinely completed ioredis's handshake. The client
+      // believes it is talking to a healthy Redis, exactly the state a
+      // production connection would be in the instant before a network
+      // partition, not merely "a socket opened".
+      await client.connect();
+      expect(client.status).toBe('ready');
+
+      const logger = makeSpyLogger();
+      const timeoutMs = 40;
+
+      const startedAt = Date.now();
+      const result = await lookupCachedLink('tenant-1', 'wedged-real-peer', {
+        redis: client,
+        logger,
+        timeoutMs,
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      // The peer genuinely received the GET — this call's outcome is
+      // actually about the scenario under test, not an earlier handshake
+      // failure that happened to also produce a miss.
+      await peer.sawGet;
+
+      expect(result).toEqual({ kind: 'miss' });
+
+      // Close to timeoutMs, not the 500ms ceiling the outage test above
+      // uses: THIS is the mechanism under test, so the bound has to be
+      // tight enough that a broken race (e.g. falling back to awaiting
+      // `operation` directly) fails it outright — that call would simply
+      // never resolve against this peer, timing out the whole test via
+      // vitest's own test timeout, not sneaking through with a merely
+      // slower number.
+      expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs);
+      expect(elapsedMs).toBeLessThan(timeoutMs + 200);
+
+      // The assertion that actually proves the RACE decided the outcome,
+      // not merely that SOME code path degraded to a miss: the TIMEOUT
+      // warning (resolve-link.ts:136, "Redis GET timed out...") fires,
+      // and the REJECT warning (resolve-link.ts:145, "Redis GET
+      // failed...") — lookupCachedLink's OTHER, already-covered failure
+      // path — does not. A regression that broke the race but left the
+      // reject path intact would still produce a miss and still log
+      // exactly one warning, so message content, not just call count, is
+      // what tells the two apart.
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const [message] = logger.warn.mock.calls[0] ?? [];
+      expect(message).toMatch(/timed out/i);
+      expect(message).not.toMatch(/failed/i);
+    } finally {
+      client?.disconnect();
+      await peer.close();
+    }
+  });
 });
