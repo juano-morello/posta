@@ -1,0 +1,22 @@
+{
+  // S1.4 review fan-out (code-reviewer + typescript-reviewer, both
+  // independently): packages/core/tsconfig.json's `include: ["src"]` (plus
+  // its `rootDir: "src"` / `composite: true` / `outDir: "dist"`, which
+  // would break if "scripts" were added there) means vendor-asn.ts and
+  // seed-asn.ts were checked by NO `tsc` invocation at all — only
+  // seed-asn.ts got indirect coverage, via seed-asn.test.ts importing it
+  // under tsconfig.test.json. This is a standalone `tsc --noEmit` program
+  // over just this directory, the same "separate program, not a project
+  // reference" approach tsconfig.test.json already uses for *.test.ts
+  // files repo-wide (see that file's own T0.5.7 comment) — applied here
+  // to this directory's plain scripts instead.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "esnext",
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

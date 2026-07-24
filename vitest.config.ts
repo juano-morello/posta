@@ -35,8 +35,13 @@ import { configDefaults, defineConfig } from 'vitest/config';
 //     and apps/worker — zero logic until E2/E3 add providers.
 //   - apps/web/src/app/{layout,page}.tsx: the default Next.js app-router
 //     scaffold and a one-line placeholder home page — no logic yet either.
-//   - packages/core/src/index.ts: a documented placeholder (`export {}`)
-//     until E1 adds the Drizzle schema — nothing to cover yet.
+//   - packages/core/src/index.ts: a pure re-export barrel (E1, T1.1.3) —
+//     nothing in it to unit test directly; every export it re-exposes is
+//     already covered where it's actually defined (db/, ulid.ts, ...).
+//     apps/api and apps/worker import through this file (not its
+//     submodules), so it only executes once E2/E3 add integration tests
+//     that do — nothing changes here when that happens, it just starts
+//     showing up in the report with the same 100% its constituents have.
 //
 // thresholds (T0.5.4): global, not per-file — S0.5's acceptance criterion
 // is "floor 80%, build fails below it" as a single number, and per-file
@@ -61,6 +66,17 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // coverage/reporters/resolveSnapshotPath at the root config and forces
 // every project to share that single resolved coverage — duplicating it
 // per-project isn't supported and wouldn't do anything if it were.
+//
+// 'packages/core' project (T1.1.2, E1): a bare glob string, not an inline
+// object like the two above — this tells Vitest to resolve
+// packages/core/vitest.config.ts as ITS OWN standalone project (same
+// mechanism 'packages/*' would use for every package, scoped here to just
+// the one package that needs it). That file raises hookTimeout to 120s for
+// the testcontainers Postgres harness's cold image pulls (src/test/
+// pg-container.ts), which every integration test in E1-E4 reuses — so
+// every test under packages/core benefits, not only the harness's own
+// test. 'default' excludes 'packages/core/**' below so its tests run
+// under exactly one project, never both.
 export default defineConfig({
   test: {
     projects: [
@@ -71,7 +87,7 @@ export default defineConfig({
           // configDefaults.exclude must be spread explicitly — setting
           // `exclude` replaces Vitest's own node_modules/.git defaults
           // rather than adding to them.
-          exclude: [...configDefaults.exclude, 'tests/containers/**'],
+          exclude: [...configDefaults.exclude, 'tests/containers/**', 'packages/core/**'],
         },
       },
       {
@@ -110,6 +126,7 @@ export default defineConfig({
           setupFiles: ['apps/web/vitest.setup.ts'],
         },
       },
+      'packages/core',
     ],
     coverage: {
       provider: 'v8',
@@ -123,6 +140,22 @@ export default defineConfig({
         'apps/web/src/app/layout.tsx',
         'apps/web/src/app/page.tsx',
         'packages/core/src/index.ts',
+        // T1.1.4: auth.ts's four tables are consumed two ways, and
+        // NEITHER one is a TypeScript import that would make v8 count its
+        // lines as executed. drizzle-kit reads it as a static file path
+        // (a separate CLI process, `db:generate`) to emit the SQL
+        // migration auth.test.ts actually migrates and asserts against —
+        // that test's coverage is real, it just lands on the generated
+        // .sql file, which isn't a coverage target at all. At runtime,
+        // only Better Auth's OWN drizzle adapter will ever import these
+        // exports (`user`, `session`, ...), and that wiring is E5's job,
+        // outside packages/core. Unlike links.ts/bio.ts/domains.ts
+        // (T1.1.5-8), which T1.1.9's tenant-scoped repository helper
+        // imports within this same epic and so pick up real coverage —
+        // this exclude is scoped to auth.ts specifically, not the whole
+        // schema/ folder, so a genuine future gap in one of those files
+        // still fails the threshold instead of being silently masked.
+        'packages/core/src/schema/auth.ts',
       ],
       thresholds: {
         lines: 80,

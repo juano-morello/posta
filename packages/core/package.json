@@ -5,13 +5,39 @@
   "type": "commonjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/test/index.d.ts",
+      "default": "./dist/test/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "db:generate": "dotenv -e ../../.env -- drizzle-kit generate",
+    "db:migrate": "dotenv -e ../../.env -- drizzle-kit migrate",
+    "migrate": "dotenv -e ../../.env -- node dist/db/migrate.js",
+    "migrate:status": "dotenv -e ../../.env -- node dist/db/migrate-status.js",
+    "migrate:down": "dotenv -e ../../.env -- node dist/db/migrate-down.js",
+    "vendor:asn": "bash scripts/vendor-asn.sh",
+    "seed:asn": "dotenv -e ../../.env -- node scripts/seed-asn.ts",
+    "seed": "dotenv -e ../../.env -- node scripts/seed.ts"
   },
   "dependencies": {
-    "@posta/contracts": "workspace:*"
+    "@posta/contracts": "workspace:*",
+    "better-auth": "^1.6.24",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^12.0.4",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "typescript": "5.9.3"
   }
 }

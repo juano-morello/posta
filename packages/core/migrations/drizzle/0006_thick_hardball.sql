@@ -1,0 +1,1 @@
+ALTER TABLE "bio_pages" ADD CONSTRAINT "bio_pages_avatar_url_absolute_url_check" CHECK ("bio_pages"."avatar_url" IS NULL OR "bio_pages"."avatar_url" ~* '^https?://');
