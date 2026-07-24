@@ -33,17 +33,39 @@ import { handleKey, resolveTenantByHandle } from '@posta/core';
 // handles, so it has to happen here.
 //
 // Scope, deliberately narrow: no slug lookup, no lookupCachedLink, no
-// hard-timeout Promise.race wrapper (that pattern is T2.2.3's, and
-// specific to the link cache's GET) — this file grows those in later
-// tasks. This function DOES catch a Redis GET/SETEX failure and fall
-// through rather than throw: with maxRetriesPerRequest: 1 and
-// enableOfflineQueue: false already fixed at the client level
-// (packages/core/src/redis/client.ts), a dead Redis fails a command
-// fast, not hung, so a plain try/catch — not a race against a timer — is
-// enough to keep a Redis outage from ever failing tenant resolution
-// itself.
+// hard-timeout Promise.race wrapper. This function DOES catch a Redis
+// GET/SETEX failure and fall through rather than throw, but be precise
+// about what that buys: maxRetriesPerRequest: 1 and enableOfflineQueue:
+// false (packages/core/src/redis/client.ts) bound the CONNECTION-REFUSED
+// / OFFLINE cases — a Redis that is down or unreachable rejects fast, and
+// the try/catch below turns that rejection into a Postgres fall-through.
+//
+// [reviewer, T2.2.2 fix round 1] An EARLIER version of this comment
+// additionally claimed those two settings mean "a dead Redis fails a
+// command fast, not hung" in general, and used that to argue the plain
+// try/catch alone is "enough". That is wrong for the failure mode that
+// matters most here: a HALF-OPEN socket (TCP still connected, the server
+// unresponsive) trips neither setting — ioredis still considers the
+// client "ready", still sends the command, and the `await` on that
+// command can hang for the OS's own TCP timeout, commonly minutes. A
+// hang throws nothing, so a try/catch does not touch it: resolveTenant
+// would block indefinitely, and because handle resolution runs before
+// EVERY redirect resolves anything, one wedged Redis connection stalls
+// all traffic, not just analytics — the exact class of outage invariant
+// 1 exists to prevent.
+//
+// So, accurately: the try/catch here converts REJECTED Redis calls to a
+// degraded (Postgres-only) fall-through; it does NOT bound latency, and
+// this file does not yet bound it at all. T2.2.3 (which owns
+// REDIS_LOOKUP_TIMEOUT_MS and the Promise.race wrapper for the link
+// cache's GET) is planned to apply that same wrapper to this handle tier
+// too, so the codebase ends up with one resilience shape for "Redis is
+// unresponsive", not two independently-invented ones. Until that lands,
+// a truly hung Redis socket is a known, tracked gap in THIS function —
+// not a covered case, whatever the surrounding try/catch might suggest
+// at a glance.
 
-const MEMO_TTL_MS = 60_000;
+export const MEMO_TTL_MS = 60_000;
 // A generous cap: real tenants own a handful of handles at most — v1 is
 // literally one seeded tenant (invariant 9) — so this bounds a DIFFERENT
 // case entirely: an attacker driving many distinct, never-repeating

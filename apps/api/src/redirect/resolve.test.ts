@@ -3,6 +3,7 @@ import { bioPages, handleKey, newId, user } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import {
   createResolveTenant,
+  MEMO_TTL_MS,
   rememberInMemo,
   type HandleCacheRedis,
   type MemoEntry,
@@ -23,7 +24,6 @@ import {
 // it to 120s. A cold testcontainers image pull blows the 10s default, so
 // both hooks below pass an explicit third-argument timeout.
 const CONTAINER_TEST_TIMEOUT_MS = 120_000;
-const MEMO_TTL_MS = 60_000;
 
 /**
  * A recording double for the minimal Redis surface resolveTenant needs
