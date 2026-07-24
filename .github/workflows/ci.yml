@@ -146,28 +146,34 @@ jobs:
       # -- --coverage` produces no coverage/ directory at all; `pnpm test
       # --project default --coverage` does.
       #
-      # --project default --project core: vitest.config.ts's `projects`
-      # split (batch 9 review) put tests/containers/** (image-smoke.test.ts,
-      # image-size.test.ts) in their own "containers" project — those
-      # tests' beforeAll shells out to `docker compose build/run` against
-      # services declaring `env_file: .env`, which THIS workflow never
-      # writes (no images are built here at all). Running the unscoped
-      # suite would try and fail to run them here — redundant AND a false
-      # failure, since images.yml already owns them, run targeted
-      # (`pnpm test tests/containers/image-smoke.test.ts` /
+      # --project default --project web --project core: vitest.config.ts's
+      # `projects` split (batch 9 review) put tests/containers/**
+      # (image-smoke.test.ts, image-size.test.ts) in their own "containers"
+      # project — those tests' beforeAll shells out to `docker compose
+      # build/run` against services declaring `env_file: .env`, which THIS
+      # workflow never writes (no images are built here at all). Running
+      # the unscoped suite would try and fail to run them here — redundant
+      # AND a false failure, since images.yml already owns them, run
+      # targeted (`pnpm test tests/containers/image-smoke.test.ts` /
       # `image-size.test.ts`) right after it builds the images they need.
       # `default` runs every other test (including
       # tests/infra/redis-policy.test.ts, against the Redis service +
-      # CONFIG SET step above); `core` (T1.1.2, E1) is packages/core's own
-      # project (packages/core/vitest.config.ts, 120s hookTimeout) —
-      # its testcontainers-based integration tests boot a REAL Postgres
-      # via the runner's own Docker daemon (already available on
+      # CONFIG SET step above); `web` (E6/S6.1) is apps/web's component
+      # tests (*.test.tsx — Testing Library + jsdom), which live in their
+      # own project because they need a DOM and a JSX transform the
+      # 'default' project doesn't set up (see vitest.config.ts) — omitting
+      # it here would mean every apps/web component test silently never
+      # runs in CI even though `pnpm test <file>` passes locally; `core`
+      # (T1.1.2, E1) is packages/core's own project
+      # (packages/core/vitest.config.ts, 120s hookTimeout) — its
+      # testcontainers-based integration tests boot a REAL Postgres via
+      # the runner's own Docker daemon (already available on
       # ubuntu-latest, no service container needed) rather than the
-      # postgres:// service above. Both projects' coverage still
+      # postgres:// service above. All three projects' coverage still
       # computes/gates at 80% together — the container-build tests never
       # contributed application-source coverage in the first place.
       - name: Test (with coverage)
-        run: pnpm test --project default --project core --coverage
+        run: pnpm test --project default --project web --project core --coverage
 
       - name: Upload coverage summary
         if: always()
@@ -203,6 +209,77 @@ jobs:
       # fixture) fails the build too.
       - name: Dependency boundaries (S0.2)
         run: pnpm depcruise
+
+  # T6.5.9, fixed post-review — the gallery (T6.5.1-7) and its visual-
+  # regression snapshots (T6.5.8, which also carries T6.1.12's no-FOUC
+  # check and T6.2.10's every-primitive-in-both-themes check — both
+  # explicitly deferred until /gallery existed) actually run here, not
+  # just locally. A SEPARATE job, not a step in `ci` above, and it runs
+  # INSIDE the exact `mcr.microsoft.com/playwright:v1.61.1-noble` image
+  # (version pinned to match @playwright/test's own package.json version
+  # exactly — bump both together) that the committed `*-linux.png`
+  # baselines were generated from.
+  #
+  # This container is load-bearing, not a convenience: the first attempt
+  # at this job ran plain `ubuntu-latest` + `playwright install
+  # --with-deps chromium`, and CI still failed against freshly-generated
+  # Linux baselines — "Linux" alone doesn't guarantee matching pixels.
+  # `--with-deps` pulls whatever font/library versions happen to be
+  # current in Ubuntu's apt repos on the day the job runs, which is NOT
+  # the same fixed, reproducible font stack Microsoft bakes into the
+  # versioned Playwright image. Running the test itself inside that same
+  # image is what actually makes local-baseline-generation and CI
+  # rendering deterministic against each other, not just "both Linux".
+  #
+  # Scoped to gallery.spec.ts + gallery-visual.spec.ts specifically — this
+  # job's own name says "visual regression", and the OTHER apps/web e2e
+  # specs (shell/islands/honesty-a11y/safe-area) are a pre-existing gap
+  # this task does not claim to close.
+  visual-regression:
+    name: Visual regression (gallery + primitives)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The image ships Node + corepack already (verified: node v24,
+      # matching .nvmrc's major version 24) — no actions/setup-node here,
+      # that would just fight the container's own preinstalled runtime.
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # apps/web imports @posta/contracts by package name (dist/, built
+      # output) — this job doesn't run `turbo run build` for the other
+      # four packages (api/core/worker have nothing this suite touches),
+      # just the one real dependency.
+      - name: Build contracts
+        run: pnpm --filter @posta/contracts build
+
+      # webServer (playwright.config.ts) runs its own `pnpm build && next
+      # start` — a real `next build`, not shared with the `ci` job above
+      # (separate job, separate checkout, no cache between them).
+      - name: Visual regression (gallery + primitives)
+        run: pnpm --filter @posta/web exec playwright test gallery.spec.ts gallery-visual.spec.ts
+
+      # Playwright's own HTML reporter (playwright.config.ts: `[['html',
+      # {open:'never'}], ['github']]` in CI) embeds the actual/expected/
+      # diff images for any failed screenshot comparison directly in the
+      # report — this is what makes "a snapshot break is reviewable from
+      # the PR" true, rather than just a pass/fail line in the log.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 14
 
   # T1.5.4 — "As a developer I want one command for both migration
   # flavors so that hand-written SQL is not second-class" (S1.5). This is

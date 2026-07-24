@@ -1,3 +1,5 @@
+import path from 'node:path';
+import react from '@vitejs/plugin-react';
 import { configDefaults, defineConfig } from 'vitest/config';
 
 // Root-level Vitest config. tests/** holds workspace-level tests — checks
@@ -93,6 +95,35 @@ export default defineConfig({
           name: 'containers',
           include: ['tests/containers/**/*.test.ts'],
           fileParallelism: false,
+        },
+      },
+      // E6 (S6.1) — apps/web's component tests need a DOM (Testing
+      // Library) and JSX transform, neither of which the 'default'
+      // project provides (node environment, plain esbuild tsx transform
+      // with no React refresh/runtime wiring). Scoped to *.test.tsx only:
+      // apps/web's *.test.ts files (tokens.test.ts, contrast.test.ts, the
+      // grep tests, etc.) have no DOM and stay on 'default' — jsdom would
+      // only slow those down for no benefit. Kept as its own project
+      // rather than switching 'default' to jsdom repo-wide, so
+      // packages/contracts, api and worker's node-only tests are
+      // unaffected.
+      {
+        plugins: [react()],
+        resolve: {
+          // Mirrors apps/web/tsconfig.json's "@/*" -> "./src/*" path alias.
+          // Vite/Vitest doesn't read tsconfig `paths` on its own, so
+          // components importing e.g. '@/styles/globals.css' (layout.tsx)
+          // would otherwise fail to resolve under this project.
+          alias: {
+            '@': path.resolve(__dirname, 'apps/web/src'),
+          },
+        },
+        test: {
+          name: 'web',
+          environment: 'jsdom',
+          include: ['apps/web/**/*.test.tsx'],
+          exclude: [...configDefaults.exclude],
+          setupFiles: ['apps/web/vitest.setup.ts'],
         },
       },
       'packages/core',

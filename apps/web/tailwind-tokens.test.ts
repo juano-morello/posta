@@ -1,0 +1,81 @@
+import resolveConfig from 'tailwindcss/resolveConfig';
+import { describe, expect, it } from 'vitest';
+import { compileTokensCss } from './src/styles/compile-tokens';
+import tailwindConfig from './tailwind.config';
+
+// Non-color scales (radius/spacing/shadow/fluid) also live under :root or
+// the theme maps in _tokens.scss but are never Tailwind "colors" —
+// excluded so the drift comparison below only ever looks at the color
+// vocabulary the two systems actually share. shadow-overlay (T6.2.8)
+// lives in Tailwind's `boxShadow` theme key instead (elevation.test.tsx);
+// pad-page/text-hero (T6.3.8) are plain CSS values consumed directly via
+// var(), never wired into any Tailwind theme key at all.
+const NON_COLOR_PREFIXES = ['radius', 'space-', 'shadow-', 'pad-', 'text-hero'];
+
+function isColorName(name: string): boolean {
+  return !NON_COLOR_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** Every distinct `--name` custom property _tokens.scss emits, color-only. */
+function tokenColorNames(): Set<string> {
+  const css = compileTokensCss();
+  const names = new Set<string>();
+  for (const match of css.matchAll(/--([a-z0-9-]+):/g)) {
+    const name = match[1]!;
+    if (isColorName(name)) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+// T6.1.6 — `bg-primary` and `var(--primary)` must resolve to one value, so
+// tailwind.config.ts's `theme.colors` is a CLOSED palette (not `extend`,
+// which would merge alongside Tailwind's own stock reds/blues/grays) where
+// every entry is a var() reference to a CSS custom property _tokens.scss
+// actually emits — never a literal hex. `resolveConfig` is Tailwind's own
+// API for producing the fully-merged theme object; using it here (rather
+// than reading the raw config module) is what proves the *effective*
+// theme Tailwind will build classes from, not just what the file says.
+const resolved = resolveConfig(tailwindConfig);
+
+// Tailwind's own `DefaultColors` type describes its stock palette (fixed,
+// known keys) and has no index signature, so it doesn't structurally
+// overlap with `Record<string, unknown>` — our closed, arbitrarily-keyed
+// palette replaced that stock type at runtime (T6.1.6), but the static
+// type resolveConfig() returns still reflects the default shape. Routing
+// through `unknown` is the correct, explicit way to say "trust the
+// runtime value over the built-in type" here, rather than papering over
+// it with a direct cast tsc rejects as almost certainly a mistake.
+function resolvedColors(): Record<string, unknown> {
+  return resolved.theme.colors as unknown as Record<string, unknown>;
+}
+
+describe('tailwind.config.ts', () => {
+  it('resolves every color to a var(--token) reference, never a hex literal', () => {
+    const colors = resolvedColors();
+    const entries = Object.entries(colors);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [name, value] of entries) {
+      expect(typeof value, `color "${name}" should be a string`).toBe('string');
+      expect(value as string, `color "${name}" = "${value}"`).toMatch(/^var\(--/);
+    }
+  });
+
+  // T6.1.7 — the test that catches a token added in one place only. Neither
+  // side may have a name the other lacks: a color added to _tokens.scss
+  // but never wired into tailwind.config.ts is unusable as a Tailwind
+  // class; a Tailwind color pointing at a var() _tokens.scss never emits
+  // resolves to nothing at runtime. Deleting one entry from
+  // tailwind.config.ts is exactly what should make this fail.
+  it('never drifts from _tokens.scss — same color names on both sides', () => {
+    const scssNames = tokenColorNames();
+    const tailwindNames = new Set(Object.keys(resolvedColors()));
+
+    const missingFromTailwind = [...scssNames].filter((name) => !tailwindNames.has(name));
+    const missingFromScss = [...tailwindNames].filter((name) => !scssNames.has(name));
+
+    expect(missingFromTailwind, 'emitted by _tokens.scss but absent from tailwind.config.ts').toEqual([]);
+    expect(missingFromScss, 'in tailwind.config.ts but never emitted by _tokens.scss').toEqual([]);
+  });
+});

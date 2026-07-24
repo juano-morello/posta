@@ -1,0 +1,327 @@
+@use 'sass:map';
+
+// _tokens.scss — the single token source (POSTA.md §8.1). SCSS is the
+// token source and nothing else: this file emits CSS custom properties so
+// runtime theme switching stays a `.light` class toggle (no rebuild), and
+// the Tailwind config (T6.1.6) reads the same variables — one value per
+// token, never two definitions that can drift.
+//
+// T6.1.1 — dark theme only. $themes gains a `light` entry in T6.1.2; the
+// gray ramp (n1/n2/n3) lands in T6.1.3; the shadcn aliases in T6.1.4; the
+// radius/spacing/breakpoint scales in T6.1.5. Building this up task-by-task
+// (rather than transcribing the full POSTA.md §8.1/§8.2 block in one shot)
+// is what keeps each commit's verify command meaningful on its own.
+$themes: (
+  dark: (
+    bg: #0D1117,
+    surface: #161B22,
+    surface-2: #21262D,
+    fg: #E6EDF3,
+    muted: #8B949E,
+    border: #30363D,
+    border-subtle: #21262D,
+    primary: #B4FF39,
+    primary-fg: #0D1117,
+    success: #3FB950,
+    warning: #E3B341,
+    error: #F85149,
+    // T6.2.5 — DESIGN.md §2.2's shadcn reference block pins
+    // --destructive-foreground to white (0 0% 100%) in BOTH themes. Added
+    // here, not invented at the component layer, because Button's
+    // destructive variant needs a real token (never a bare `text-white` —
+    // Tailwind's stock `white`/`black` keywords don't exist once
+    // theme.colors is a closed palette, T6.1.6). White-on-dark-error
+    // measures 3.35:1 — clears the 3:1 large-text floor, not 4.5:1 normal
+    // text, so the destructive label needs the same large/bold treatment
+    // as primary's.
+    error-fg: #FFFFFF,
+    info: #58A6FF,
+    ring: #B4FF39,
+    // T6.1.3 — no-humano gray ramp (POSTA.md §1). Bots/unfurlers/prefetch
+    // paint on n1/n2/n3 rather than a flat gray, so the HumanoBar's
+    // non-human segments read as a graded ramp, not one undifferentiated
+    // block. Never near-black on white — that guarantee is theme-specific
+    // (light gets its own brighter set below), so this is per-theme, not
+    // one shared value.
+    n1: #5a6069,
+    n2: #3f444c,
+    n3: #2b3038,
+    // T6.2.8 — DESIGN.md §2.3: "Sombras: mínimas. Elevación real solo en
+    // overlays (dropdown, modal, drawer, toast)." One shadow, reserved for
+    // exactly those four components — flat surfaces (Card, T6.2.7) stay on
+    // borders. Per-theme because a dark shadow this heavy would look wrong
+    // (too harsh, too visible) floating over a pale light-mode page.
+    shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.35),
+  ),
+  // T6.1.2 — light is support, not an inverted dark. Pure lime on white
+  // fails AA (T6.1.14 is what proves it), so light drops primary to the
+  // green #3F9142 — and ring follows primary, since ring IS the focus
+  // color. Cards stay pure #FFFFFF against a subtle #F6F8FA page so
+  // surfaces are never grayer than the page behind them (DESIGN.md §1).
+  light: (
+    bg: #F6F8FA,
+    surface: #FFFFFF,
+    surface-2: #EDF1F5,
+    fg: #0D1117,
+    muted: #57606A,
+    border: #D8DEE4,
+    border-subtle: #E7EBEF,
+    primary: #3F9142,
+    primary-fg: #FFFFFF,
+    success: #2DA44E,
+    warning: #BF8700,
+    error: #CF222E,
+    error-fg: #FFFFFF,
+    info: #0969DA,
+    ring: #3F9142,
+    // n1 is lightened from POSTA.md §1's literal #8B94A0 (relative
+    // luminance 0.29) to #9CA6B3 (0.38) — same blue-gray hue, just bright
+    // enough to clear the task's own >0.35 "never near-black on white"
+    // floor (T6.1.3) with headroom, while staying visibly darker than n2
+    // so the bot→unfurler→prefetch ramp keeps its ordering.
+    n1: #9CA6B3,
+    n2: #B7BFC9,
+    n3: #D6DCE3,
+    // Softened from dark's 0.35 alpha — a light page needs a lighter
+    // touch to still read as "floating above", not a heavy dark smear.
+    shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.15),
+  ),
+);
+
+// Emits one `--name: value` declaration per map entry.
+@mixin emit-vars($map) {
+  @each $key, $value in $map {
+    --#{$key}: #{$value};
+  }
+}
+
+// T6.1.4 — shadcn primitives read their own token names
+// (--background/--card/--muted-foreground/--destructive/--input);
+// _tokens.scss's canonical names are --bg/--surface/--muted/--error/
+// --border. Each alias is emitted as a `var()` reference to the canonical
+// name, never a second literal — so there is exactly one hex value per
+// colour, and it is structurally impossible for the two to drift apart.
+// Declared ONCE, at :root: a custom property's value (including a var()
+// it contains) is substituted at used-value time against whatever is
+// currently cascaded for that name on the same element, so --destructive
+// still resolves through to light's --error the moment .light overrides
+// it — no need to redeclare the alias itself per theme.
+$shadcn-aliases: (
+  background: bg,
+  card: surface,
+  muted-foreground: muted,
+  destructive: error,
+  destructive-foreground: error-fg,
+  input: border,
+);
+
+@mixin emit-aliases($aliases) {
+  @each $alias, $canonical in $aliases {
+    --#{$alias}: var(--#{$canonical});
+  }
+}
+
+// T6.1.5 — radius scale (DESIGN.md §2.3): tight terminal-look corners, never
+// pill except badges/avatars. Theme-independent (same corners in both
+// themes), so it is its own map emitted once under :root rather than
+// duplicated inside $themes. $radius-badge is a NAMED 6px — badges, chips
+// and the HumanoBar all read it so no component ever carries a bare `6px`
+// (a hardcoded value would fail T6.1.13's no-hex/off-scale grep gate).
+$radii: (
+  radius-sm: 4px,
+  radius-badge: 6px,
+  radius: 8px,
+  radius-lg: 12px,
+);
+
+// Spacing scale (POSTA.md §8.2), keyed on Tailwind's own numeric steps (1,
+// 2, 3, 4, 6, 8, 12, 16) so `p-4`/`gap-6` keep meaning what they already
+// mean in Tailwind once T6.1.6 points spacing at these same variables.
+$space: (
+  space-1: 4px,
+  space-2: 8px,
+  space-3: 12px,
+  space-4: 16px,
+  space-6: 24px,
+  space-8: 32px,
+  space-12: 48px,
+  space-16: 64px,
+);
+
+// T6.3.8 — POSTA.md §3: clamp() for page padding and large numerals (the
+// hero "clicks reales" number) so both scale continuously with viewport
+// width instead of jumping at breakpoints. --text-hero is POSTA.md's own
+// exact value; --pad-page is this system's own fluid padding scale,
+// bounded at the same floor/ceiling as the existing $space steps
+// (16px/space-4 to 32px/space-8) so it never reads as an arbitrary number.
+$fluid: (
+  pad-page: clamp(16px, 4vw, 32px),
+  text-hero: clamp(40px, 9vw, 52px),
+);
+
+// Mobile breakpoint (POSTA.md §8.2) — sidebar swaps for BottomTabs below
+// this width (S6.3). Deliberately NOT emitted as a CSS custom property:
+// @media conditions must be static at CSS-parse time, so a var() here
+// would simply fail to apply. Component SCSS uses the `mobile` mixin;
+// tailwind.config.ts (T6.1.6) mirrors the same literal for its `mobile`
+// screen, since a JS/TS config cannot import a SCSS variable.
+$bp-mobile: 800px;
+
+@mixin mobile {
+  @media (max-width: #{$bp-mobile - 1px}) {
+    @content;
+  }
+}
+
+// dark-first default — no class needed for dark, it is :root itself.
+:root {
+  @include emit-vars(map.get($themes, dark));
+  @include emit-aliases($shadcn-aliases);
+  @include emit-vars($radii);
+  @include emit-vars($space);
+  @include emit-vars($fluid);
+}
+
+// runtime theme toggle (T6.1.11 wires the actual class add/remove).
+.light {
+  @include emit-vars(map.get($themes, light));
+}
+
+// Helper so component SCSS reads tokens, never hex literals.
+@function t($name) {
+  @return var(--#{$name});
+}
+
+// T6.4.7 — POSTA.md §8.4's `.badge-humano` block, ported verbatim (not a
+// Tailwind arbitrary-value bracket class like Badge's own `primary`
+// variant, T6.2.4): color-mix()'s color argument is interpolated through
+// `#{t(primary)}` so Sass passes the function through into the emitted
+// CSS untouched rather than trying (and failing) to evaluate a var()
+// reference at compile time. compile-tokens.ts's compileTokensCss() is
+// what actually proves this survives real Sass compilation, not just a
+// className string.
+.badge-humano {
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: var(--radius-badge);
+  color: var(--primary);
+  background: color-mix(in srgb, #{t(primary)} 16%, transparent);
+  border: 1px solid color-mix(in srgb, #{t(primary)} 40%, transparent);
+}
+
+// T6.4.7 [a11y deviation] — MEASURED, not asserted (see report.md): lime
+// text on this 16% tint clears AA in dark (~10.5:1 against the flattened
+// backdrop) but genuinely fails AA in light (~3.1:1 — under the 4.5:1
+// normal-text floor for a small badge label; light's own `primary` is
+// already the AA-adjusted green #3F9142, T6.1.2, and tinting that SAME
+// color into the backdrop closes the remaining gap further, it does not
+// widen it). Accessibility wins over the literal spec here: light
+// overrides the label to `fg` (~14.8:1 against the tint) instead of
+// shipping an inaccessible badge. Dark is unaffected and stays exactly
+// spec'd (lime on lime-tint).
+.light .badge-humano {
+  color: var(--fg);
+}
+
+// T6.4.8 — SourceChip's per-platform dot. Neither POSTA.md nor DESIGN.md
+// pins literal brand colours (the source doc only says "each with a
+// colored dot"), so these four are this system's own choice: one
+// representative brand-ish hue per platform, distinct enough to tell
+// apart at a glance — though the dot is never the ONLY signal, the chip
+// always renders the platform's Spanish/brand-name label right beside it
+// (T6.4.15's a11y pass covers that). `directo` deliberately reuses the
+// existing `--muted` token rather than inventing a colour for "no
+// platform at all" — it is the absence of a brand, not a fifth brand.
+.source-chip-dot {
+  display: inline-block;
+  border-radius: 9999px;
+}
+.source-chip-dot--instagram {
+  background: #e4405f;
+}
+.source-chip-dot--whatsapp {
+  background: #25d366;
+}
+.source-chip-dot--tiktok {
+  background: #25f4ee;
+}
+.source-chip-dot--directo {
+  background: var(--muted);
+}
+
+// T6.4.10 — POSTA.md §8.3's `@mixin island`, ported as real classes:
+// terminal/log/code surfaces (login card, bio page, 404, recibos — E7/E8
+// build the rest, Recibos is the first S6.4 consumer) are ALWAYS dark in
+// BOTH themes (DESIGN.md §1), so this deliberately does NOT read `t()` —
+// every other component in this system resolves colour through a token
+// that flips under `.light`; an island is the one place that must not.
+// Literal hex here (exempt, this file only) is correct, not an oversight.
+.island {
+  background: #0d1117;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+}
+.island .lime {
+  color: #b4ff39;
+}
+.island .muted {
+  color: #8b949e;
+}
+
+// T6.4.10 — Recibos' own two-tone surface: the base #0D1117 from .island
+// plus a slightly lighter #161B22 "chrome" strip (the prompt-line header,
+// like a terminal window's title bar) — POSTA.md's own literal values.
+.recibos-chrome {
+  background: #161b22;
+}
+
+// T6.4.10 — the pulsing live dot. `prefers-reduced-motion` is honoured
+// immediately (not deferred to T6.4.15's a11y pass) since an infinitely
+// looping animation is exactly what that media query exists to catch,
+// and building it in from the start costs nothing here.
+.recibos-live-dot {
+  background: #b4ff39;
+  animation: recibos-pulse 1.6s ease-in-out infinite;
+}
+@keyframes recibos-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recibos-live-dot {
+    animation: none;
+  }
+}
+
+// T6.4.14 — the empty-state's terminal cursor. Deliberately STEADY, not
+// animated: the task text itself says "a steady cursor", distinct from
+// the chrome's pulsing live dot above — no prefers-reduced-motion concern
+// here since there is no motion to begin with.
+.recibos-cursor {
+  background: #b4ff39;
+}
+
+// T6.4.11 — classification verdict colours for a Recibos row, keyed by
+// TOKEN NAME (matching CLASIFICACION_TOKEN in packages/contracts, never a
+// second independent verdict->colour map — that would reopen exactly the
+// drift T6.4.2's total Record was built to make a compile error). Fixed
+// dark-mode hex, same reasoning as .island/.lime above: these values are
+// tuned for legibility against Recibos' own permanently-dark background,
+// not whichever theme happens to be active.
+.island .cls-primary {
+  color: #b4ff39;
+}
+.island .cls-error {
+  color: #f85149;
+}
+.island .cls-info {
+  color: #58a6ff;
+}
+.island .cls-warning {
+  color: #e3b341;
+}
