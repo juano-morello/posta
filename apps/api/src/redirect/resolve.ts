@@ -603,8 +603,11 @@ export interface ResolveLinkDeps {
  * `.safeParse()`) is intentional: a value that fails T2.2.1's own schema
  * here would mean resolveLinkFromDb returned something that isn't a
  * valid `CachedLink` at all — a bug worth surfacing as a caught, logged
- * `warn` (this function's catch block below), not a value worth writing
- * to the cache anyway.
+ * `warn`, not a value worth writing to the cache anyway. That case gets
+ * its OWN catch block, below, with its own message: it is a data-shape
+ * bug, not a Redis I/O failure, and folding it into the SETEX failure's
+ * "Redis SETEX failed" message would send whoever reads that log
+ * chasing a Redis outage that never happened.
  */
 async function backfillLinkCache(
   tenant: string,
@@ -613,10 +616,20 @@ async function backfillLinkCache(
   deps: Pick<ResolveLinkDeps, 'redis' | 'logger' | 'cacheTtlSeconds'>,
 ): Promise<void> {
   const { redis, logger, cacheTtlSeconds } = deps;
+  const key = linkKey(tenant, slug);
+
+  let value: string;
+  try {
+    value = JSON.stringify(CachedLinkSchema.parse(link));
+  } catch (error) {
+    logger.warn(
+      'Resolved link failed CachedLinkSchema validation; skipping the cache backfill.',
+      { tenant, slug, error: describeError(error) },
+    );
+    return;
+  }
 
   try {
-    const key = linkKey(tenant, slug);
-    const value = JSON.stringify(CachedLinkSchema.parse(link));
     await redis.setex(key, cacheTtlSeconds, value);
   } catch (error) {
     logger.warn(
