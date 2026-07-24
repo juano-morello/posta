@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isValidSlug } from './links';
 import {
   RESERVED_HANDLES,
   RESERVED_PATHS,
@@ -164,6 +165,68 @@ describe('isReservedPath', () => {
 
   it('does not match a nested path that merely ends in a reserved file name', () => {
     expect(isReservedPath('/promo/favicon.ico')).toBe(false);
+  });
+});
+
+describe('RESERVED_PATHS / RESERVED_PATH_PREFIXES — pre-decode matching stays safe [security, S2.1 story-review batch]', () => {
+  // apps/api/src/redirect/host.ts calls isReservedPath(path) BEFORE any
+  // percent-decoding — decoding happens later, inside extractSlug, only
+  // on the way to a slug lookup. That ordering is safe TODAY only
+  // because every entry below contains at least one character
+  // isValidSlug/SLUG_PATTERN rejects (a '.', currently): an attacker
+  // percent-encoding one character to slip the RAW string past
+  // isReservedPath (e.g. '/%66avicon.ico' for '/favicon.ico') still
+  // produces a DECODED result isValidSlug rejects for the same reason,
+  // landing on the same invalid-path 404 either way.
+  //
+  // A future reserved path that is a bare word — no punctuation, e.g.
+  // '/admin' — would NOT have this property: the raw '/%61dmin' fails
+  // isReservedPath, decodes to 'admin', and 'admin' passes isValidSlug
+  // (nothing else stops it looking like an ordinary slug) — so the
+  // request would fall through to a real link lookup instead of the
+  // intended 404, a genuine bypass. This test turns that regression into
+  // a failing assertion at PR time rather than a silent bypass
+  // discovered once 'link' starts doing real I/O (S2.2+). Deliberately
+  // does NOT restructure host.ts's decode ordering itself — pinning the
+  // invariant here is the cheaper, more durable guard.
+  const SLUG_CHARSET_ONLY = /^[a-z0-9-]*$/;
+
+  /** The word a reserved entry becomes once its leading slash (and, for
+   * a prefix, its trailing slash) is stripped — i.e. what extractSlug
+   * would hand isValidSlug if the whole reserved word were used as a
+   * slug. */
+  function wordFor(entry: string): string {
+    const withoutLeadingSlash = entry.startsWith('/') ? entry.slice(1) : entry;
+    return withoutLeadingSlash.endsWith('/')
+      ? withoutLeadingSlash.slice(0, -1)
+      : withoutLeadingSlash;
+  }
+
+  it.each(RESERVED_PATHS.filter((entry) => entry !== '/'))(
+    '%s contains a character outside the slug charset',
+    (entry) => {
+      const word = wordFor(entry);
+      // Matching the WHOLE word against [a-z0-9-]* means every character
+      // in it is one a slug is allowed to contain — i.e. NO offending
+      // character. The assertion is that this is false.
+      expect(SLUG_CHARSET_ONLY.test(word)).toBe(false);
+      // Belt-and-suspenders: the decoded word must also fail the REAL
+      // validator, not just this test's own regex restatement of it.
+      expect(isValidSlug(word)).toBe(false);
+    },
+  );
+
+  it.each(RESERVED_PATH_PREFIXES)(
+    '%s contains a character outside the slug charset',
+    (entry) => {
+      const word = wordFor(entry);
+      expect(SLUG_CHARSET_ONLY.test(word)).toBe(false);
+      expect(isValidSlug(word)).toBe(false);
+    },
+  );
+
+  it("'/' is exempt from this invariant: host.ts's handle-root branch matches it BEFORE isReservedPath ever runs, and an empty/root path has no decode-bypass vector — percent-decoding a non-empty encoded segment can never produce an empty string", () => {
+    expect(RESERVED_PATHS).toContain('/');
   });
 });
 

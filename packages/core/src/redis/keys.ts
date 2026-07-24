@@ -10,12 +10,22 @@
 //
 // No runtime sanitisation of `tenant` / `slug` / `handle` here, on
 // purpose: by the time any of these builders run, the input has already
-// been validated upstream — `slug` by contracts' isValidSlug, `handle`
-// by T0.3.3's parseHandleFromHost, `tenant` is a ULID minted by this
-// package's own newId(). Re-validating here would be a second, divergent
-// copy of rules that already live in exactly one place, spent on the
-// redirect hot path for no safety this module's callers don't already
-// provide [INV-2].
+// been validated upstream — `slug` by contracts' isValidSlug
+// (SLUG_PATTERN's charset + SLUG_MAX_LENGTH), `handle` by
+// packages/contracts/src/domain.ts's parseHandleFromHost, which enforces
+// HANDLE_PATTERN's lowercase-alnum-and-hyphen charset AND a 63-character
+// length ceiling (HANDLE_MAX_LENGTH, RFC 1035's DNS label limit) before
+// ever returning a handle to a caller — added in the S2.1 story-review
+// batch, T2.1.5's fallback fix, after a review found that charset/length
+// gate lived only in domain.ts's OTHER handle function
+// (assertClaimableHandle, the URL-construction direction) and not in the
+// parse direction this module's own callers (T2.2.2's resolveTenant, the
+// redirect hot path) actually go through — so this file's claim of
+// "already validated upstream" was false until that fix landed. `tenant`
+// is a ULID minted by this package's own newId(). Re-validating here
+// would be a second, divergent copy of rules that already live in
+// exactly one place, spent on the redirect hot path for no safety this
+// module's callers don't already provide [INV-2].
 
 /** Hot link cache: `tenant` + `slug` → resolved destination. 1h TTL
  * (spec §9); the TTL itself is set by the caller (T2.2.x), not here. */

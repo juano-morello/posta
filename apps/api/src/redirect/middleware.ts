@@ -122,19 +122,50 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
       return;
     }
 
-    if (target.kind === 'handle-root') {
-      // T2.1.5 — the alarm. This branch runs exactly once per matching
-      // request (there is only one middleware layer, and only one call
-      // to it per request), so one hit is one log line and one
-      // increment — never double-counted across layers.
-      logger.error(
-        `Handle-root hit for "${target.handle}" — "/" on a tenant handle host reached the ` +
-          'API. The Cloudflare Origin Rule (path == "/" -> Next) is supposed to route this ' +
-          'request to the bio page before it ever gets here; a real visitor is seeing a ' +
-          '404 that should have been their bio page.',
-        { handle: target.handle },
-      );
-      handleRootHitsCounter.inc();
+    // [security/typescript, S2.1 story-review batch] `target` here is
+    // Exclude<RequestTarget, { kind: 'not-ours' }> — TS narrows past the
+    // early return above. A `switch` over the remaining kinds, with an
+    // exhaustiveness check in `default`, is a compile-time guard, NOT a
+    // behavior change: every kind still falls through to the identical
+    // 404 below. What changes is that a SEVENTH RequestTarget kind added
+    // later (host.ts) without a matching case here fails `tsc` instead
+    // of silently landing in `default` and getting a bare 404 with no
+    // per-kind decision ever made about it — exactly the kind of gap
+    // this discriminated union exists to make impossible.
+    switch (target.kind) {
+      case 'handle-root':
+        // T2.1.5 — the alarm. This branch runs exactly once per matching
+        // request (there is only one middleware layer, and only one call
+        // to it per request), so one hit is one log line and one
+        // increment — never double-counted across layers.
+        logger.error(
+          `Handle-root hit for "${target.handle}" — "/" on a tenant handle host reached the ` +
+            'API. The Cloudflare Origin Rule (path == "/" -> Next) is supposed to route this ' +
+            'request to the bio page before it ever gets here; a real visitor is seeing a ' +
+            '404 that should have been their bio page.',
+          { handle: target.handle },
+        );
+        handleRootHitsCounter.inc();
+        break;
+
+      case 'reserved-path':
+      case 'reserved-handle':
+      case 'invalid-path':
+      case 'link':
+        // No alarm, no side effect beyond the shared 404 below — see the
+        // file header for why each of these stays a bare 404 for now.
+        break;
+
+      default: {
+        // Deliberately does NOT throw: an unrecognized kind still falls
+        // through to the exact same 404 every other terminal kind gets
+        // below, preserving this commit's runtime behavior byte-for-
+        // byte. `tsc` — not a runtime branch — is the enforcement
+        // mechanism: if this line stops compiling, a case is missing
+        // above.
+        const _exhaustive: never = target;
+        void _exhaustive;
+      }
     }
 
     res.set('Cache-Control', 'no-store');
