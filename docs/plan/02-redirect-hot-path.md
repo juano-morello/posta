@@ -27,23 +27,23 @@ The hot path is a **raw Express middleware mounted before Nest's router**, closi
 
 **Tasks:**
 
-#### T2.1.1 · `feat: reserved path matching in contracts`
+#### T2.1.1 · `feat: reserved path matching in contracts` ✅ done (`e92cc9f`)
 `isReservedHandle(handle)` and `isReservedPath(path)` added to the existing `reserved.ts` from T0.3.4 — the **same** module E5's slug validation uses, never a copy. `isReservedPath` handles both exact matches (`/favicon.ico`, `/robots.txt`) and the `/.well-known/` prefix, which the flat `RESERVED_PATHS` array cannot express on its own. Matching is case-insensitive and ignores a trailing slash.
 → **files** `packages/contracts/src/reserved.ts` · `packages/contracts/src/reserved.test.ts` · **verify** `pnpm test contracts/src/reserved.test.ts` asserts all 11 reserved handles match, `juano` does not, `/.well-known/acme-challenge/abc` matches, `/.well-knownx` does not, and `/FAVICON.ICO` matches · **after** T0.3.4
 
-#### T2.1.2 · `feat: host and path parser for the redirect hot path`
+#### T2.1.2 · `feat: host and path parser for the redirect hot path` ✅ done (`506cd99`)
 `parseRequestTarget(host, path)` in `host.ts` returns a discriminated union: `{ kind: 'link', handle, slug }` · `{ kind: 'reserved-path' }` · `{ kind: 'handle-root', handle }` · `{ kind: 'not-ours' }`. It delegates to `parseHandleFromHost` (T0.3.3) and the matchers from T2.1.1, strips a `:port` suffix, lowercases, and reads `POSTA_LINK_DOMAIN` from the validated env — no literal domain anywhere, so T0.3.9 stays green. A pure function: no I/O, no request object, so it is cheap to table-test.
 → **files** `apps/api/src/redirect/host.ts` · `apps/api/src/redirect/host.test.ts` · **verify** `pnpm test redirect/host.test.ts` is table-driven with `POSTA_LINK_DOMAIN` set to a non-production value and covers: valid handle+slug, `app.<domain>` → not-ours, `deep.sub.<domain>` → not-ours, bare `<domain>` → not-ours, an unrelated apex → not-ours, missing/empty `Host`, `HANDLE.<DOMAIN>:8080`, `/` → handle-root, `/favicon.ico` → reserved-path · **after** T2.1.1
 
-#### T2.1.3 · `feat: redis client and key builders in packages/core`
+#### T2.1.3 · `feat: redis client and key builders in packages/core` ✅ done (`5f627f8`)
 The Redis seam every later task shares: an ioredis singleton from `REDIS_URL` with `maxRetriesPerRequest: 1` and `enableOfflineQueue: false` so a dead Redis fails fast instead of queueing commands behind a reconnect, plus `closeRedis()` for test teardown. `keys.ts` owns every key string — `linkKey(tenant, slug)`, `handleKey(handle)`, `saltKey(dateUtc)` — so no key is ever built inline and the keyspace in spec §9 has exactly one definition.
 → **files** `packages/core/src/redis/client.ts` · `packages/core/src/redis/keys.ts` · `packages/core/src/redis/keys.test.ts` · **verify** `pnpm test redis/keys.test.ts` asserts the three key formats and that importing the client twice yields the same instance; a `PING` against the compose Redis returns `PONG` · **after** T0.3.5
 
-#### T2.1.4 · `feat: mount the redirect middleware before the nest router` [INV-2]
+#### T2.1.4 · `feat: mount the redirect middleware before the nest router` [INV-2] ✅ done (`e82702e`)
 `main.ts` creates the Express instance itself, mounts `createRedirectMiddleware({ redis })` on it, and only then calls `NestFactory.create(AppModule, new ExpressAdapter(server))` — ordering by construction rather than by hoping `app.use()` runs first. The factory is called **once** at boot and closes over the already-connected clients; the returned handler does no allocation beyond the request it is serving. Non-handle hosts call `next()` and fall through to Nest.
 → **files** `apps/api/src/main.ts` · `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/middleware.test.ts` · **verify** `pnpm test redirect/middleware.test.ts` boots the app with a catch-all Nest controller returning `nest`; a request to `<handle>.<domain>/promo` never returns that body, while `api.<domain>/v1/ping` does · **after** T2.1.2, T2.1.3
 
-#### T2.1.5 · `feat: short-circuit reserved paths and alarm on handle-root`
+#### T2.1.5 · `feat: short-circuit reserved paths and alarm on handle-root` ✅ done (`0ed4d87`)
 Reserved paths answer immediately — 404 with `Cache-Control: no-store`, no Redis GET, no Postgres query, no enqueue. `/` on a handle host means the Cloudflare Origin Rule is misconfigured (spec §14), so it logs at `error` with the handle, increments a `posta_handle_root_hits` counter, and 404s. The counter is the point: a silent 404 here looks like a dead link to the user and like nothing at all to us.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/middleware.test.ts` · **verify** `pnpm test redirect/middleware.test.ts` asserts `redis.get` is never called for `/favicon.ico`, `/robots.txt` and `/.well-known/x`, and that `/` on a handle host emits exactly one `error` log naming the handle and increments the counter · **after** T2.1.4
 
@@ -65,19 +65,19 @@ Reserved paths answer immediately — 404 with `Cache-Control: no-store`, no Red
 
 **Tasks:**
 
-#### T2.2.1 · `feat: cached link payload schema in contracts` [security]
+#### T2.2.1 · `feat: cached link payload schema in contracts` [security] ✅ done (`2e562e0`)
 `CachedLinkSchema` = `{ link_id, tenant_id, destination }`, with `destination` reusing the absolute-`http(s)` validator from T1.1.11. Every cache read is **parsed, not cast** — a Redis value is untrusted input the moment anything else can write to that instance, and an unparsed `destination` is an open redirect with a TTL. A parse failure is treated as a miss and logged at `warn`.
 → **files** `packages/contracts/src/cache.ts` · `packages/contracts/src/cache.test.ts` · **verify** `pnpm test contracts/src/cache.test.ts` asserts a well-formed payload round-trips, a payload missing `destination` rejects, `javascript:alert(1)` rejects, and non-JSON input rejects without throwing · **after** T1.1.11
 
-#### T2.2.2 · `feat: handle→tenant resolution for the hot path`
+#### T2.2.2 · `feat: handle→tenant resolution for the hot path` ✅ done (`8af70bb`)
 The cache key is tenant-scoped but the request carries a handle, so `resolveTenant(handle)` bridges the two: a process-local memo (60s, bounded map) → Redis `handle:{handle}` (SETEX 1h) → `SELECT tenant_id FROM bio_pages WHERE handle = $1`. The memo is what keeps the story's "one Redis round trip" true — handles change roughly never, so paying a GET for one on every request would double the round trips for nothing. 60s bounds the staleness window after a handle change.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` asserts a cold call queries Postgres once and SETEXes, a second call within 60s issues zero Redis and zero Postgres commands, and an unknown handle returns `null` · **after** T2.1.3, T1.1.6
 
-#### T2.2.3 · `feat: redis link lookup with a hard timeout`
+#### T2.2.3 · `feat: redis link lookup with a hard timeout` ✅ done (`c1b90c9`)
 `lookupCachedLink(tenant, slug)` issues `GET link:{tenant}:{slug}` inside a `Promise.race` against `REDIS_LOOKUP_TIMEOUT_MS` (default 30). A timeout, a connection error or a parse failure all resolve to "miss" and log at `warn` — never throw. A hung Redis must cost latency, not availability, and an unbounded `await` on a half-open socket is exactly how a cache outage turns into a total outage.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` asserts a stub client whose `get` never settles returns a miss in under 50 ms, a stub that rejects returns a miss and logs once, and a valid payload returns the parsed record · **after** T2.2.1, T2.2.2
 
-#### T2.2.4 · `feat: postgres fallback resolution, tenant-scoped and archive-aware`
+#### T2.2.4 · `feat: postgres fallback resolution, tenant-scoped and archive-aware` ✅ done (`8b483b8`)
 On a miss, one query through the `forTenant` helper from T1.1.9: `SELECT id, tenant_id, destination FROM links WHERE tenant_id = $1 AND slug = $2 AND archived_at IS NULL`. Archived links resolve to nothing — never to their old destination, because a user who archives a link has revoked it and a cache-warm copy honouring it is a bug with a security shape.
 → **files** `apps/api/src/redirect/resolve.ts` · `apps/api/src/redirect/resolve.test.ts` · **verify** `pnpm test redirect/resolve.test.ts` against the T1.1.2 testcontainer asserts a live link resolves, an archived link resolves to `null`, and tenant A's slug is invisible to tenant B · **after** T2.2.3, T1.1.9
 
