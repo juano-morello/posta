@@ -32,6 +32,29 @@ const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTI
 // and a 64-char slug (1 + 62 + 1) are both valid, 65 is not.
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
 
+/** The slug length ceiling SLUG_PATTERN's own shape already encodes. */
+export const SLUG_MAX_LENGTH = 64;
+
+/**
+ * T2.1.2 — the same slug rule zSlug enforces at creation time, exposed
+ * as a plain predicate for the redirect hot path.
+ *
+ * The hot path needs to reject a structurally impossible slug (a 4 KB
+ * path, an encoded traversal, an uppercase form) BEFORE spending a Redis
+ * GET and a Postgres query discovering it could never have existed. Doing
+ * that with a second copy of the pattern is exactly the drift this
+ * module's other comments warn about — it would show up as a link E5
+ * happily creates and the redirect path then refuses to serve. Sharing
+ * SLUG_PATTERN and SLUG_MAX_LENGTH between the two is what makes
+ * "creatable" and "reachable" the same predicate; slug-shape.test.ts
+ * asserts the two agree over a table rather than trusting that by eye.
+ */
+export function isValidSlug(slug: string): boolean {
+  if (slug.length < 1 || slug.length > SLUG_MAX_LENGTH) return false;
+  if (!SLUG_PATTERN.test(slug)) return false;
+  return !RESERVED_PATHS.includes(`/${slug}`);
+}
+
 // Reserved paths are checked by IMPORTING RESERVED_PATHS (T0.3.4), never
 // by inlining a second copy of the forbidden list — a second copy is
 // exactly the drift that lets a user claim a slug which then 404s
