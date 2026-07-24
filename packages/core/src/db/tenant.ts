@@ -151,3 +151,44 @@ export function forTenant(db: NodePgDatabase, tenantId: string) {
     domains: scopedDomains(db, tenantId),
   };
 }
+
+// T2.2.2 — resolveTenantByHandle is the ONE tenant-owned-table query in
+// this module that does NOT go through forTenant(), and deliberately so:
+// forTenant(tenantId) requires already KNOWING the tenant, and this is
+// how the redirect hot path (apps/api/src/redirect/resolve.ts)
+// discovers it in the first place, from a request's Host header. There
+// is no tenant to scope this query BY — "which tenant owns this handle"
+// is definitionally a lookup across every tenant's bio_pages rows, keyed
+// on the one column (`handle`) that is GLOBALLY unique (T1.1.6), unlike
+// `links.slug`, which is only unique per tenant. It is the
+// chicken-and-egg case tenant-scope.test.ts's own header comment
+// anticipates: "the ONE legitimate place a tenant-owned table is queried
+// directly" is forTenant() for every OTHER access pattern, and this
+// function for the one query that cannot possibly be tenant-scoped.
+// T1.1.10's static scanner excludes this file by path for exactly this
+// reason — everywhere else, `db.select().from(bioPages)` is a bypass;
+// here, it is the only shape this query could ever take.
+//
+// Deliberately thin: no caching, no memoization, no error translation.
+// apps/api/src/redirect/resolve.ts layers a process-local memo and a
+// Redis cache in FRONT of this — this function is the plain, uncached
+// Postgres tier at the bottom of that ladder, called only on a miss in
+// both of the faster tiers.
+/**
+ * Resolves the `tenant_id` that owns `handle`, or `null` if no
+ * `bio_pages` row has that exact handle. Exact match only — `handle` is
+ * compared as-is, with no case-folding — so a request for a handle that
+ * differs only by case from a real one correctly misses rather than
+ * silently resolving to the wrong tenant.
+ */
+export async function resolveTenantByHandle(
+  db: NodePgDatabase,
+  handle: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ tenantId: bioPages.tenantId })
+    .from(bioPages)
+    .where(eq(bioPages.handle, handle));
+
+  return row?.tenantId ?? null;
+}
