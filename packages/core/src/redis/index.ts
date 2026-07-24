@@ -5,4 +5,5 @@
 // E2 grows this seam (T2.2.x's slug cache, T2.3.6's salt manager, T2.4.2's
 // BullMQ producer) — same pattern as ../db/index.ts.
 export * from './client';
+export * from './invalidate';
 export * from './keys';

@@ -8,3 +8,4 @@
 // in E1-E4" to reuse — this subpath is what makes that true for OTHER
 // packages'/apps' test files, not just packages/core's own.
 export * from './pg-container';
+export * from './redis-container';
