@@ -48,11 +48,20 @@ const BIO_MAX_LENGTH = 500;
 const AVATAR_URL_MAX_LENGTH = 2048;
 const THEME_ID_MAX_LENGTH = 50;
 
+// [PR #3 review, security MEDIUM] Bare `z.url()` accepts `javascript:`,
+// `data:`, `file:` — anything the WHATWG URL parser calls valid. Bio
+// pages are public, CDN-served pages (invariant 11), so an avatarUrl
+// isn't just internal data — it's rendered on a page anyone can load.
+// Same protocol allowlist as links.ts's `zDestination` (T1.1.11), reused
+// rather than re-derived, so the two never quietly disagree about what
+// "a URL" is allowed to mean in this codebase.
+const AVATAR_URL_PROTOCOL_PATTERN = /^https?$/;
+
 export const createBioPageSchema = z.object({
   handle: zHandle,
   displayName: z.string().max(DISPLAY_NAME_MAX_LENGTH).optional(),
   bio: z.string().max(BIO_MAX_LENGTH).optional(),
-  avatarUrl: z.url().max(AVATAR_URL_MAX_LENGTH).optional(),
+  avatarUrl: z.url({ protocol: AVATAR_URL_PROTOCOL_PATTERN }).max(AVATAR_URL_MAX_LENGTH).optional(),
   themeId: z.string().max(THEME_ID_MAX_LENGTH).optional(),
 });
 

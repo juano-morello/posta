@@ -75,6 +75,29 @@ describe('createBioPageSchema optional fields', () => {
   });
 });
 
+describe('createBioPageSchema.avatarUrl (PR #3 review) [security]', () => {
+  // Bio pages are public, CDN-served pages (invariant 11) — avatarUrl is
+  // rendered on a page anyone can load, not just stored internally.
+  // Same protocol allowlist as createLinkSchema.destination (T1.1.11),
+  // and the same table-driven shape as that file's own test.
+  it.each([
+    ['javascript:alert(1)', false],
+    ['data:text/html,x', false],
+    ['//evil.com/avatar.png', false],
+    ['/relative-avatar.png', false],
+    ['ftp://x/avatar.png', false],
+    ['https://example.com/avatar.png', true],
+  ] as const)('avatarUrl=%s -> accepted=%s', (avatarUrl, expectedAccept) => {
+    const result = createBioPageSchema.safeParse({ handle: 'juano-dev', avatarUrl });
+    expect(result.success).toBe(expectedAccept);
+  });
+
+  it('accepts a bare http:// avatarUrl, not only https://', () => {
+    const result = createBioPageSchema.safeParse({ handle: 'juano-dev', avatarUrl: 'http://example.com/a.png' });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('updateBioPageSchema', () => {
   it('makes every field optional (a partial update)', () => {
     expect(updateBioPageSchema.safeParse({}).success).toBe(true);

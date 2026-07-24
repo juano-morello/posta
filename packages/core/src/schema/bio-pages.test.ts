@@ -60,6 +60,50 @@ describe('bio_pages schema (T1.1.6)', () => {
     expect(caughtCode).toBe('23505');
   });
 
+  it('[PR #3 review, security] raises SQLSTATE 23514 for a javascript: avatar_url', async () => {
+    const tenantId = await seedTenant(handle);
+
+    let caughtCode: string | undefined;
+    try {
+      await handle.db.insert(bioPages).values({
+        id: newId(),
+        tenantId,
+        handle: 'bad-avatar-url',
+        avatarUrl: 'javascript:alert(1)',
+      });
+    } catch (error) {
+      caughtCode = (error as DrizzleQueryError).cause?.code;
+    }
+
+    expect(caughtCode).toBe('23514');
+  });
+
+  it('[PR #3 review, security] accepts a null avatar_url and a genuine https:// one', async () => {
+    const tenantId = await seedTenant(handle);
+
+    await handle.db.insert(bioPages).values({
+      id: newId(),
+      tenantId,
+      handle: 'no-avatar-url',
+    });
+
+    const tenantWithAvatar = await seedTenant(handle);
+    await handle.db.insert(bioPages).values({
+      id: newId(),
+      tenantId: tenantWithAvatar,
+      handle: 'has-avatar-url',
+      avatarUrl: 'https://example.com/avatar.png',
+    });
+
+    const result = await handle.db.execute<{ handle: string; avatar_url: string | null }>(sql`
+      SELECT handle, avatar_url FROM bio_pages WHERE handle IN ('no-avatar-url', 'has-avatar-url') ORDER BY handle
+    `);
+    expect(result.rows).toEqual([
+      { handle: 'has-avatar-url', avatar_url: 'https://example.com/avatar.png' },
+      { handle: 'no-avatar-url', avatar_url: null },
+    ]);
+  });
+
   it('defaults theme_id to "default" and leaves optional fields null', async () => {
     const tenantId = await seedTenant(handle);
 

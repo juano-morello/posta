@@ -1,4 +1,5 @@
-import { integer, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { check, integer, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
 import { user } from './auth';
 import { links } from './links';
 
@@ -10,24 +11,39 @@ import { links } from './links';
 // `/promo`. `theme_id` stays a plain text key naming a React theme
 // component (spec §11 deleted the `contracts/themes` indirection) — no
 // FK, no themes table.
-export const bioPages = pgTable('bio_pages', {
-  id: text('id').primaryKey(),
-  // No explicit `onDelete` (defaults to NO ACTION) — same rationale as
-  // links.tenantId: users are never deleted in v1, so a future
-  // account-deletion flow (v1.5+) must explicitly cascade or
-  // archive/redact tenant data first, rather than this FK silently doing
-  // it.
-  tenantId: text('tenant_id')
-    .notNull()
-    .references(() => user.id),
-  handle: text('handle').notNull().unique(),
-  displayName: text('display_name'),
-  bio: text('bio'),
-  avatarUrl: text('avatar_url'),
-  themeId: text('theme_id').notNull().default('default'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const bioPages = pgTable(
+  'bio_pages',
+  {
+    id: text('id').primaryKey(),
+    // No explicit `onDelete` (defaults to NO ACTION) — same rationale as
+    // links.tenantId: users are never deleted in v1, so a future
+    // account-deletion flow (v1.5+) must explicitly cascade or
+    // archive/redact tenant data first, rather than this FK silently doing
+    // it.
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => user.id),
+    handle: text('handle').notNull().unique(),
+    displayName: text('display_name'),
+    bio: text('bio'),
+    avatarUrl: text('avatar_url'),
+    themeId: text('theme_id').notNull().default('default'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // [PR #3 review, security MEDIUM] Defense in depth BEHIND the
+    // contracts Zod validation (createBioPageSchema.avatarUrl), same
+    // relationship links.destination's CHECK has to T1.1.11's
+    // zDestination — the DB is the last line, not the only one. Nullable
+    // (unlike destination), so NULL must be explicitly allowed here or
+    // every row without an avatar would fail the constraint.
+    check(
+      'bio_pages_avatar_url_absolute_url_check',
+      sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~* '^https?://'`,
+    ),
+  ],
+);
 
 // T1.1.7 — `bio_links`: a pure join between a bio page and a link, in
 // ordered `position`. Deliberately NO `url`/`destination`/`href` column —
