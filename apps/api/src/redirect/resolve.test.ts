@@ -1,15 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { bioPages, handleKey, links, newId, user } from '@posta/core';
+import { bioPages, handleKey, linkKey, links, newId, user } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
-import type { CachedLink } from '@posta/contracts';
+import { parseCachedLink, type CachedLink } from '@posta/contracts';
 import {
   createResolveTenant,
   lookupCachedLink,
   MEMO_TTL_MS,
   rememberInMemo,
+  resolveLink,
   resolveLinkFromDb,
   type HandleCacheRedis,
   type LinkCacheRedis,
+  type LinkCacheWriteRedis,
   type MemoEntry,
   type ResolveLogger,
 } from './resolve';
@@ -361,7 +363,7 @@ describe('createResolveTenant (T2.2.2)', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
-  it('a Redis SETEX failure still returns the resolved tenant, logging a warning', async () => {
+  it('[R11] a Redis SETEX failure still returns the resolved tenant, logging a warning', async () => {
     const tenantId = newId();
     await seedBioPage(tenantId, 'setex-fails-handle');
 
@@ -376,9 +378,54 @@ describe('createResolveTenant (T2.2.2)', () => {
     });
 
     const result = await resolveTenant('setex-fails-handle');
+    expect(result).toBe(tenantId);
+
+    // R11 — the backfill SETEX is fire-and-forget: resolveTenant does not
+    // await it, so its rejection is handled on a LATER microtask than the
+    // one that resolves resolveTenant's own promise. Flush one macrotask
+    // (matches lookupCachedLink's own unhandledRejection test below)
+    // instead of gambling on exact microtask-hop ordering between the two.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('[R11] a wedged Redis SETEX backfill (never settles) does not block resolveTenant — the write is fire-and-forget, not awaited', async () => {
+    const tenantId = newId();
+    await seedBioPage(tenantId, 'wedged-setex-handle');
+
+    const getCalls: string[] = [];
+    // A half-open socket on the BACKFILL write, not the read: the lookup
+    // already succeeded (Postgres answered), so this exercises the
+    // fire-and-forget write path directly. Before R11 this was awaited
+    // inside withRedisTimeout and the timeout branch logged a warning;
+    // after R11 nothing awaits this write at all, so a wedge that NEVER
+    // settles must never surface here — there is nothing to observe,
+    // because observing it would require awaiting it, which is exactly
+    // the blocking shape R11 removes.
+    const wedgedRedis: HandleCacheRedis = {
+      async get(key) {
+        getCalls.push(key);
+        return null; // ordinary miss — falls through to Postgres, then to the wedged SETEX below
+      },
+      setex: () => new Promise(() => {}),
+    };
+    const logger = makeSpyLogger();
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis: wedgedRedis,
+      logger,
+      timeoutMs: 10,
+    });
+
+    const start = Date.now();
+    const result = await resolveTenant('wedged-setex-handle');
+    const elapsedMs = Date.now() - start;
 
     expect(result).toBe(tenantId);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(elapsedMs).toBeLessThan(50);
+    expect(getCalls).toEqual([handleKey('wedged-setex-handle')]);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('[T2.2.3] a wedged Redis GET (never settles) still resolves via Postgres in under 50ms, logging a warning', async () => {
@@ -419,41 +466,10 @@ describe('createResolveTenant (T2.2.2)', () => {
       { key: handleKey('wedged-redis-handle'), seconds: 3600, value: tenantId },
     ]);
   });
-
-  it('[T2.2.3] a wedged Redis SETEX backfill (never settles) still returns the resolved tenant in under 50ms, logging a warning', async () => {
-    const tenantId = newId();
-    await seedBioPage(tenantId, 'wedged-setex-handle');
-
-    const getCalls: string[] = [];
-    const wedgedRedis: HandleCacheRedis = {
-      async get(key) {
-        getCalls.push(key);
-        return null; // ordinary miss — falls through to Postgres, then to the wedged SETEX below
-      },
-      // A half-open socket on the BACKFILL write, not the read: the
-      // lookup already succeeded (Postgres answered), so this exercises
-      // the timeout branch on the SETEX side of withRedisTimeout, which
-      // the GET-wedge test above never reaches (that one never gets past
-      // the GET).
-      setex: () => new Promise(() => {}),
-    };
-    const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({
-      db: handle.db,
-      redis: wedgedRedis,
-      logger,
-      timeoutMs: 10,
-    });
-
-    const start = Date.now();
-    const result = await resolveTenant('wedged-setex-handle');
-    const elapsedMs = Date.now() - start;
-
-    expect(result).toBe(tenantId);
-    expect(elapsedMs).toBeLessThan(50);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(getCalls).toEqual([handleKey('wedged-setex-handle')]);
-  });
+  // The SETEX-side wedge case moved to '[R11] a wedged Redis SETEX
+  // backfill ... fire-and-forget, not awaited' above, once the backfill
+  // stopped being awaited inside withRedisTimeout (R11) — awaiting it (the
+  // old shape this comment used to sit under) is exactly what R11 removes.
 });
 
 describe('lookupCachedLink (T2.2.3)', () => {
@@ -666,5 +682,274 @@ describe('resolveLinkFromDb (T2.2.4)', () => {
     expect(resultB?.tenant_id).toBe(tenantB);
     // Stated the other way too: neither tenant's result is ever the other's.
     expect(resultA?.destination).not.toBe(resultB?.destination);
+  });
+});
+
+// T2.2.5 — resolveLink is the composition S2.2's own acceptance criteria
+// describe directly ("Miss -> Postgres -> SETEX backfill, TTL 1h" / "a
+// second request issues zero Postgres queries"): lookupCachedLink
+// (T2.2.3), then on a miss resolveLinkFromDb (T2.2.4), then on a Postgres
+// HIT a fire-and-forget SETEX backfill so the NEXT request for the same
+// slug is served straight out of Redis. Deliberately does NOT write a
+// tombstone on a Postgres miss — that negative-cache behavior is T2.2.6's
+// job, dispatched separately; a miss here is exactly resolveLinkFromDb's
+// own `null`, unchanged.
+describe('resolveLink (T2.2.5)', () => {
+  let handle: PgContainerHandle;
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  const LINK_REDIS_TIMEOUT_MS = 1_000;
+  // Mirrors LINK_CACHE_TTL_SECONDS's default (.env.example / apps/api/src/env.ts) —
+  // resolveLink takes it as a deps field rather than hardcoding it, same
+  // as REDIS_LOOKUP_TIMEOUT_MS above, so production wiring (main.ts,
+  // outside this task's scope) is the only place the env var is read.
+  const TEST_CACHE_TTL_SECONDS = 3600;
+
+  /** Mirrors resolveLinkFromDb (T2.2.4)'s own seedTenant() above. */
+  async function seedTenant(): Promise<string> {
+    const tenantId = newId();
+    await handle.db.insert(user).values({
+      id: tenantId,
+      name: 'Test Tenant',
+      email: `${tenantId.toLowerCase()}@example.test`,
+    });
+    return tenantId;
+  }
+
+  async function seedLink(tenantId: string, slug: string, destination: string): Promise<string> {
+    const linkId = newId();
+    await handle.db.insert(links).values({ id: linkId, tenantId, slug, destination });
+    return linkId;
+  }
+
+  /**
+   * A recording double for LinkCacheWriteRedis (get + setex), backed by an
+   * in-memory Map that setex actually writes into and get actually reads
+   * from — so a cold resolveLink() call's backfill is visible to a WARM
+   * second call, exactly like a real Redis instance, unlike
+   * makeRecordingRedis's handle-cache sibling this mirrors (T2.2.2) whose
+   * tests never depend on that read-your-own-write behavior.
+   *
+   * ⚠️ Real-Redis-TTL note (see this task's report for the full
+   * reasoning): this codebase has no Redis testcontainer helper yet — that
+   * lands in T2.6.1 — and this task's binding `files` line is
+   * resolve.ts/resolve.test.ts only, not any package.json, so adding
+   * @testcontainers/redis here isn't available without going outside that
+   * scope. This double therefore stands in for a real Redis: TTL
+   * assertions below check the EXACT `seconds` argument passed to
+   * `setex`, not a live, decrementing `TTL key` read against a real
+   * server. The brief's "TTL between 3590 and 3600" range assertion is
+   * exactly that live-decrement check, and lands in T2.6.6 once the real
+   * harness exists.
+   */
+  function makeRecordingLinkCacheRedis(): LinkCacheWriteRedis & {
+    readonly getCalls: string[];
+    readonly setexCalls: ReadonlyArray<{ key: string; seconds: number; value: string }>;
+    failNextSetex(): void;
+  } {
+    const store = new Map<string, string>();
+    const getCalls: string[] = [];
+    const setexCalls: Array<{ key: string; seconds: number; value: string }> = [];
+    let shouldFailNextSetex = false;
+
+    return {
+      getCalls,
+      setexCalls,
+      failNextSetex() {
+        shouldFailNextSetex = true;
+      },
+      async get(key: string): Promise<string | null> {
+        getCalls.push(key);
+        return store.get(key) ?? null;
+      },
+      async setex(key: string, seconds: number, value: string): Promise<unknown> {
+        setexCalls.push({ key, seconds, value });
+        if (shouldFailNextSetex) {
+          shouldFailNextSetex = false;
+          throw new Error('simulated Redis SETEX failure');
+        }
+        store.set(key, value);
+        return 'OK';
+      },
+    };
+  }
+
+  it('a resolution after a cache miss resolves from Postgres and backfills the cache with the configured TTL', async () => {
+    const tenantId = await seedTenant();
+    const linkId = await seedLink(tenantId, 'promo', 'https://example.test/promo');
+    const expectedLink: CachedLink = {
+      link_id: linkId,
+      tenant_id: tenantId,
+      destination: 'https://example.test/promo',
+    };
+
+    const redis = makeRecordingLinkCacheRedis();
+    const logger = makeSpyLogger();
+
+    const result = await resolveLink(tenantId, 'promo', {
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: LINK_REDIS_TIMEOUT_MS,
+      cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+    });
+
+    expect(result).toEqual(expectedLink);
+    expect(redis.setexCalls).toEqual([
+      {
+        key: linkKey(tenantId, 'promo'),
+        seconds: TEST_CACHE_TTL_SECONDS,
+        value: JSON.stringify(expectedLink),
+      },
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('the written cache value round-trips through parseCachedLink to an equal record (writer/reader anti-drift check)', async () => {
+    const tenantId = await seedTenant();
+    const linkId = await seedLink(tenantId, 'round-trip', 'https://example.test/round-trip');
+    const expectedLink: CachedLink = {
+      link_id: linkId,
+      tenant_id: tenantId,
+      destination: 'https://example.test/round-trip',
+    };
+
+    const redis = makeRecordingLinkCacheRedis();
+    const logger = makeSpyLogger();
+
+    await resolveLink(tenantId, 'round-trip', {
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: LINK_REDIS_TIMEOUT_MS,
+      cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+    });
+
+    const [written] = redis.setexCalls;
+    expect(written).toBeDefined();
+    // parseCachedLink is the SAME function lookupCachedLink uses to read
+    // this key back — round-tripping through it here (rather than just
+    // re-asserting JSON.stringify equality above) is what would catch the
+    // writer and the reader drifting apart from each other.
+    expect(parseCachedLink(written!.value)).toEqual(expectedLink);
+  });
+
+  it('a second request for the same slug is served from the cache and issues zero Postgres queries', async () => {
+    const tenantId = await seedTenant();
+    await seedLink(tenantId, 'warm-slug', 'https://example.test/warm');
+
+    const redis = makeRecordingLinkCacheRedis();
+    const logger = makeSpyLogger();
+    const deps = {
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: LINK_REDIS_TIMEOUT_MS,
+      cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+    };
+
+    const first = await resolveLink(tenantId, 'warm-slug', deps); // cold: backfills the cache
+
+    const querySpy = vi.spyOn(handle.pool, 'query');
+    const second = await resolveLink(tenantId, 'warm-slug', deps);
+
+    expect(second).toEqual(first);
+    expect(querySpy).not.toHaveBeenCalled();
+    // The cache-hit branch never re-backfills an already-cached value.
+    expect(redis.setexCalls).toHaveLength(1);
+
+    querySpy.mockRestore();
+  });
+
+  it('a slug missing from both the cache and Postgres resolves to null and writes no tombstone (T2.2.6 is a separate task)', async () => {
+    const tenantId = await seedTenant();
+
+    const redis = makeRecordingLinkCacheRedis();
+    const logger = makeSpyLogger();
+
+    const result = await resolveLink(tenantId, 'never-created', {
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: LINK_REDIS_TIMEOUT_MS,
+      cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+    });
+
+    expect(result).toBeNull();
+    expect(redis.setexCalls).toEqual([]);
+  });
+
+  it('a rejecting SETEX still returns the destination, logging exactly one warning', async () => {
+    const tenantId = await seedTenant();
+    const linkId = await seedLink(tenantId, 'setex-fails', 'https://example.test/setex-fails');
+    const expectedLink: CachedLink = {
+      link_id: linkId,
+      tenant_id: tenantId,
+      destination: 'https://example.test/setex-fails',
+    };
+
+    const redis = makeRecordingLinkCacheRedis();
+    redis.failNextSetex();
+    const logger = makeSpyLogger();
+
+    const result = await resolveLink(tenantId, 'setex-fails', {
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: LINK_REDIS_TIMEOUT_MS,
+      cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+    });
+
+    // Invariant: the destination resolved from Postgres is returned
+    // regardless of whether the backfill write succeeded.
+    expect(result).toEqual(expectedLink);
+
+    // The backfill is fire-and-forget: resolveLink never awaits it, so its
+    // rejection is caught on a LATER microtask than the one that resolves
+    // resolveLink's own promise. Flush one macrotask rather than depend on
+    // exact microtask-hop ordering (same pattern as the handle-tier R11
+    // test above and lookupCachedLink's own unhandledRejection test
+    // below).
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejecting SETEX does not produce an unhandled rejection', async () => {
+    const tenantId = await seedTenant();
+    await seedLink(tenantId, 'unhandled-check', 'https://example.test/unhandled-check');
+
+    const redis = makeRecordingLinkCacheRedis();
+    redis.failNextSetex();
+    const logger = makeSpyLogger();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    try {
+      await resolveLink(tenantId, 'unhandled-check', {
+        db: handle.db,
+        redis,
+        logger,
+        timeoutMs: LINK_REDIS_TIMEOUT_MS,
+        cacheTtlSeconds: TEST_CACHE_TTL_SECONDS,
+      });
+
+      // Give Node's rejection tracking a few turns of the event loop to
+      // surface an unhandledRejection, if backfillLinkCache failed to
+      // handle the rejected setex internally.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
   });
 });

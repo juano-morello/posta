@@ -1,6 +1,6 @@
 import type { DbClient } from '@posta/core';
 import { handleKey, linkKey, resolveLinkBySlug, resolveTenantByHandle } from '@posta/core';
-import { parseCachedLink, type CachedLink } from '@posta/contracts';
+import { CachedLinkSchema, parseCachedLink, type CachedLink } from '@posta/contracts';
 
 // T2.2.2 — resolveTenant(handle) bridges the request's Host-derived
 // handle to the tenant_id every downstream piece of the redirect hot
@@ -59,17 +59,31 @@ import { parseCachedLink, type CachedLink } from '@posta/contracts';
 // degraded (Postgres-only) fall-through; on its own it does NOT bound
 // latency.
 //
-// [T2.2.3] That gap is now CLOSED: every Redis call in this function —
-// the GET above and both SETEX branches below — runs through
+// [T2.2.3] That gap is now CLOSED for the GET: it runs through
 // withRedisTimeout, the same REDIS_LOOKUP_TIMEOUT_MS-bounded
 // Promise.race wrapper lookupCachedLink (this file) uses for the link
-// cache's own GET. One resilience shape for "Redis is unresponsive" in
-// this file, not two independently-invented ones: a wedged connection
-// now costs this function REDIS_LOOKUP_TIMEOUT_MS of latency and a
-// `warn` log — same outcome as a rejected call — never an unbounded
-// hang. See withRedisTimeout's own doc comment for how it also avoids
-// leaking the pending timer and avoids an unhandled rejection when the
-// loser settles after the race already decided.
+// cache's own GET. A wedged GET costs this function REDIS_LOOKUP_TIMEOUT_MS
+// of latency and a `warn` log — same outcome as a rejected call — never
+// an unbounded hang. See withRedisTimeout's own doc comment for how it
+// also avoids leaking the pending timer and avoids an unhandled
+// rejection when the loser settles after the race already decided.
+//
+// [R11 / T2.2.5] The paragraph above ORIGINALLY also routed both SETEX
+// branches (the backfill write) through withRedisTimeout, awaited. That
+// made the "costs REDIS_LOOKUP_TIMEOUT_MS" claim above false for the
+// function as a whole: a Redis wedged on BOTH the GET and the SETEX cost
+// a cold resolution up to 2x REDIS_LOOKUP_TIMEOUT_MS (the GET's timeout,
+// THEN the SETEX's), not the 1x the claim implied. The backfill's result
+// can never change what resolveTenant returns — tenantId is already
+// known from Postgres by the time the write runs — so awaiting it, even
+// bounded, bought nothing but that extra latency. backfillHandleCache
+// (below) is now fire-and-forget: called, never awaited, with its own
+// try/catch turning a rejection into one `warn` log instead of an
+// unhandled rejection. Not awaited also means not worth wrapping in
+// withRedisTimeout either — nothing waits on the result, so there is
+// nothing left to bound. That makes the ORIGINAL claim literally true
+// again: a wedge now costs this function exactly one
+// REDIS_LOOKUP_TIMEOUT_MS, from the GET alone.
 
 export const MEMO_TTL_MS = 60_000;
 // A generous cap: real tenants own a handful of handles at most — v1 is
@@ -140,10 +154,12 @@ export interface ResolveTenantDeps {
   /** Built once at boot — consoleWarnLogger in production, a spy in tests. */
   readonly logger: ResolveLogger;
   /**
-   * REDIS_LOOKUP_TIMEOUT_MS (env.ts) — bounds EVERY Redis call this
-   * function makes (the GET and both SETEX branches), via
-   * {@link withRedisTimeout}. See LookupCachedLinkDeps for the sibling
-   * use on the link cache's own GET.
+   * REDIS_LOOKUP_TIMEOUT_MS (env.ts) — bounds the memo-miss GET this
+   * function makes, via {@link withRedisTimeout}. Does NOT bound the
+   * SETEX backfill (see backfillHandleCache, R11): that write is
+   * fire-and-forget and never awaited, so there is nothing for a timeout
+   * to bound. See LookupCachedLinkDeps for the sibling use on the link
+   * cache's own GET.
    */
   readonly timeoutMs: number;
 }
@@ -198,12 +214,15 @@ type RedisTimeoutMarker = typeof REDIS_TIMEOUT_MARKER;
 
 /**
  * Races `operation` (an already-started Redis call) against `timeoutMs`,
- * returning {@link REDIS_TIMEOUT_MARKER} if the timer wins. Every Redis
- * call on the redirect hot path — the link cache's GET
- * (`lookupCachedLink`) and the handle cache's GET/SETEX
- * (`createResolveTenant`) — goes through this one helper, so "Redis is
- * unresponsive" has exactly one resilience shape in this file, not one
- * per call site.
+ * returning {@link REDIS_TIMEOUT_MARKER} if the timer wins. Every
+ * AWAITED Redis read on the redirect hot path — the link cache's GET
+ * (`lookupCachedLink`) and the handle cache's GET (`createResolveTenant`)
+ * — goes through this one helper, so "Redis is unresponsive" has exactly
+ * one resilience shape for the calls this request actually waits on, not
+ * one per call site. The SETEX backfill writes on both tiers
+ * (`backfillHandleCache`, `backfillLinkCache`) are fire-and-forget (R11 /
+ * T2.2.5) — never awaited, so they never go through this helper: nothing
+ * waits on them, so there is nothing to bound a timeout against.
  *
  * Two things a naive `Promise.race` gets wrong, both fixed here:
  *   - **Timer leak.** A `Promise.race` against a `setTimeout` leaves a
@@ -246,6 +265,47 @@ function withRedisTimeout<T>(
     // dropped promise.
     void operation.catch(() => {});
   });
+}
+
+/**
+ * Fire-and-forget SETEX for the handle cache (R11): writes either a
+ * positive hit (`tenantId`, 1h TTL) or the negative tombstone
+ * (`ABSENT_TENANT_TOMBSTONE`, 60s TTL). Called from createResolveTenant
+ * as `void backfillHandleCache(...)` — NEVER awaited. By the time this
+ * runs, resolveTenant already has its answer from Postgres, so a slow or
+ * failed write can only ever cost the NEXT request a Postgres query,
+ * never this one's result or its latency [invariant 1's spirit, applied
+ * to the whole hot path — not only the analytics enqueue it names].
+ *
+ * The try/catch is INSIDE this async function, not a `.catch()` chained
+ * at the call site: the two are equivalent for "never let this reject
+ * unhandled", but keeping it inside means `backfillHandleCache`'s own
+ * returned promise can never reject at all — `void`ing it at the call
+ * site is provably safe, not merely safe-by-convention. Logs at `warn`
+ * exactly once per failed write, via {@link describeError} — never the
+ * raw error object, which for a Redis error can embed REDIS_URL
+ * (password and all).
+ */
+async function backfillHandleCache(
+  key: string,
+  handle: string,
+  tenantId: string | null,
+  deps: Pick<ResolveTenantDeps, 'redis' | 'logger'>,
+): Promise<void> {
+  const { redis, logger } = deps;
+  const [ttlSeconds, value]: [number, string] =
+    tenantId !== null
+      ? [HANDLE_CACHE_TTL_SECONDS, tenantId]
+      : [NEGATIVE_CACHE_TTL_SECONDS, ABSENT_TENANT_TOMBSTONE];
+
+  try {
+    await redis.setex(key, ttlSeconds, value);
+  } catch (error) {
+    logger.warn('Redis SETEX failed while backfilling a resolved handle.', {
+      handle,
+      error: describeError(error),
+    });
+  }
 }
 
 /**
@@ -300,35 +360,11 @@ export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
 
     const tenantId = await resolveTenantByHandle(db, handle);
 
-    try {
-      const setexResult =
-        tenantId !== null
-          ? await withRedisTimeout(
-              redis.setex(key, HANDLE_CACHE_TTL_SECONDS, tenantId),
-              timeoutMs,
-            )
-          : await withRedisTimeout(
-              redis.setex(key, NEGATIVE_CACHE_TTL_SECONDS, ABSENT_TENANT_TOMBSTONE),
-              timeoutMs,
-            );
-
-      if (setexResult === REDIS_TIMEOUT_MARKER) {
-        // The lookup itself already succeeded — a hung backfill write
-        // costs only the NEXT request a Postgres query, never this
-        // one's result. Same outcome as the catch below.
-        logger.warn('Redis SETEX timed out while backfilling a resolved handle.', {
-          handle,
-          timeoutMs,
-        });
-      }
-    } catch (error) {
-      // The lookup itself already succeeded — a failed cache write costs
-      // only the NEXT request a Postgres query, never this one's result.
-      logger.warn('Redis SETEX failed while backfilling a resolved handle.', {
-        handle,
-        error: describeError(error),
-      });
-    }
+    // R11 — fire-and-forget, NOT awaited: the lookup above already
+    // succeeded, so this write's outcome (or how long it takes) cannot
+    // change what this call returns. See backfillHandleCache's own doc
+    // comment for why this is provably safe to `void`.
+    void backfillHandleCache(key, handle, tenantId, { redis, logger });
 
     rememberInMemo(memo, handle, tenantId);
     return tenantId;
@@ -343,11 +379,11 @@ export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
 
 /**
  * The minimal shape lookupCachedLink needs from a Redis client — `get`
- * only. Deliberately narrower than {@link HandleCacheRedis}: the SETEX
- * backfill for the link cache is T2.2.5's job, not this one's, so this
- * seam has no `setex` to avoid implying a write path exists here yet.
- * Structurally satisfied by a real ioredis `Redis` instance, same as
- * HandleCacheRedis.
+ * only. Deliberately narrower than {@link HandleCacheRedis}: the read
+ * path (this function) has no business writing, so this seam has no
+ * `setex` — that capability lives on {@link LinkCacheWriteRedis} (T2.2.5)
+ * instead, used only by resolveLink's backfill, below. Structurally
+ * satisfied by a real ioredis `Redis` instance, same as HandleCacheRedis.
  */
 export interface LinkCacheRedis {
   get(key: string): Promise<string | null>;
@@ -465,13 +501,17 @@ export async function lookupCachedLink(
 // to the caller unchanged, exactly like resolveTenantByHandle already
 // does for the handle tier.
 //
-// Scope, deliberately narrow — everything below is a later, separately
-// dispatched task, not this one's job:
-//   - No SETEX backfill into Redis on a hit (T2.2.5).
-//   - No negative-cache tombstone on a miss (T2.2.6).
-//   - No orchestration of "try the cache, then this" into one top-level
-//     resolveLink() — that composition is left for whichever task wires
-//     this and lookupCachedLink together behind the redirect middleware.
+// Scope, deliberately narrow at the time this function was written —
+// still true of resolveLinkFromDb ITSELF, which is unchanged below:
+//   - No SETEX backfill into Redis on a hit. [T2.2.5 CLOSED this — see
+//     resolveLink, further down, which composes lookupCachedLink + this
+//     function + the backfill into the single top-level entry point the
+//     redirect middleware will call. resolveLinkFromDb stays exactly
+//     what it was: the plain, uncached Postgres tier.]
+//   - No negative-cache tombstone on a miss (T2.2.6, still a later,
+//     separately dispatched task — resolveLink's own Postgres-miss
+//     branch returns resolveLinkFromDb's `null` unchanged, no tombstone
+//     write).
 
 export interface ResolveLinkFromDbDeps {
   /** Built once at boot — see main.ts. Never constructed per request. */
@@ -494,4 +534,133 @@ export async function resolveLinkFromDb(
   deps: ResolveLinkFromDbDeps,
 ): Promise<CachedLink | null> {
   return resolveLinkBySlug(deps.db, tenant, slug);
+}
+
+// T2.2.5 — closes the loop S2.2 describes: after a Postgres hit, the
+// resolved link is written back to Redis so the NEXT request for the
+// same slug is a cache hit, not a repeat Postgres query. Invariant 1
+// ("a redirect never blocks on analytics") is written about the enqueue
+// specifically, but its spirit covers the whole hot path — this write is
+// exactly as fire-and-forget as that one, for the identical reason: a
+// failed or slow backfill costs the NEXT request a Postgres query, and
+// blocking THIS one on it would trade a guarantee (this visitor gets
+// redirected) for an optimisation (the next one is faster).
+
+/**
+ * {@link LinkCacheRedis} plus `setex` — the shape resolveLink's backfill
+ * write needs, on top of the plain read lookupCachedLink already uses.
+ * A separate interface from LinkCacheRedis (rather than adding `setex`
+ * to it directly) so lookupCachedLink's own deps stay read-only in their
+ * type, not just by convention. Structurally satisfied by a real ioredis
+ * `Redis` instance, same as HandleCacheRedis and LinkCacheRedis.
+ */
+export interface LinkCacheWriteRedis extends LinkCacheRedis {
+  setex(key: string, seconds: number, value: string): Promise<unknown>;
+}
+
+export interface ResolveLinkDeps {
+  /** Built once at boot — see main.ts. Never constructed per request. */
+  readonly db: DbClient['db'];
+  /** Built once at boot — see main.ts. */
+  readonly redis: LinkCacheWriteRedis;
+  /** Built once at boot — consoleWarnLogger in production, a spy in tests. */
+  readonly logger: ResolveLogger;
+  /**
+   * REDIS_LOOKUP_TIMEOUT_MS (env.ts) — bounds the cache GET only, via
+   * lookupCachedLink's own use of {@link withRedisTimeout}. Does NOT
+   * bound the backfill SETEX below — see backfillLinkCache.
+   */
+  readonly timeoutMs: number;
+  /**
+   * LINK_CACHE_TTL_SECONDS (env.ts, default 3600) — the TTL the backfill
+   * SETEX writes. A deps field, not a module constant, mirroring how
+   * `timeoutMs` above is threaded through rather than reading env.ts
+   * directly from this file — apps/api's env schema is main.ts's concern,
+   * not the redirect hot path's.
+   */
+  readonly cacheTtlSeconds: number;
+}
+
+/**
+ * Fire-and-forget SETEX backfill of the link cache after a Postgres hit.
+ * Called from resolveLink as `void backfillLinkCache(...)` — NEVER
+ * awaited: the destination has already been resolved from Postgres by
+ * the time this runs, so this write's outcome (or how long it takes)
+ * cannot change what resolveLink returns. Mirrors backfillHandleCache
+ * (R11, above) in shape: the try/catch lives INSIDE this async function,
+ * not as a `.catch()` chained at the call site, so the promise this
+ * function returns can never reject — `void`ing it at the call site is
+ * provably safe, not merely safe-by-convention.
+ *
+ * The value written is built by round-tripping `link` through
+ * {@link CachedLinkSchema} — `JSON.stringify(CachedLinkSchema.parse(link))`
+ * — rather than `JSON.stringify(link)` directly. `link` is already typed
+ * as `CachedLink` at this call site, so in the common case this changes
+ * nothing about the bytes written; what it buys is that the WRITER and
+ * the READER ({@link parseCachedLink}, used by lookupCachedLink) are
+ * provably reading and writing the identical schema, so a future change
+ * to one can't silently drift from the other. `.parse()` (not
+ * `.safeParse()`) is intentional: a value that fails T2.2.1's own schema
+ * here would mean resolveLinkFromDb returned something that isn't a
+ * valid `CachedLink` at all — a bug worth surfacing as a caught, logged
+ * `warn` (this function's catch block below), not a value worth writing
+ * to the cache anyway.
+ */
+async function backfillLinkCache(
+  tenant: string,
+  slug: string,
+  link: CachedLink,
+  deps: Pick<ResolveLinkDeps, 'redis' | 'logger' | 'cacheTtlSeconds'>,
+): Promise<void> {
+  const { redis, logger, cacheTtlSeconds } = deps;
+
+  try {
+    const key = linkKey(tenant, slug);
+    const value = JSON.stringify(CachedLinkSchema.parse(link));
+    await redis.setex(key, cacheTtlSeconds, value);
+  } catch (error) {
+    logger.warn(
+      'Redis SETEX failed while backfilling the link cache; the next request will re-query Postgres.',
+      { tenant, slug, error: describeError(error) },
+    );
+  }
+}
+
+/**
+ * The redirect hot path's single entry point for slug resolution — the
+ * composition S2.2's acceptance criteria describe directly: cache lookup
+ * (T2.2.3's lookupCachedLink) first; on a miss, Postgres (T2.2.4's
+ * resolveLinkFromDb); on a POSTGRES hit, a fire-and-forget cache backfill
+ * (T2.2.5, above) so the next request for the same slug is a cache hit.
+ *
+ * A cache HIT returns immediately — no Postgres call, no re-backfill of a
+ * value that's already cached and still valid.
+ *
+ * A Postgres MISS (unknown or archived slug) returns `null`, exactly as
+ * resolveLinkFromDb already does, with no tombstone write: negative
+ * caching for unknown slugs is T2.2.6's job, dispatched separately, and
+ * writing one here would be scope this task's brief explicitly excludes.
+ */
+export async function resolveLink(
+  tenant: string,
+  slug: string,
+  deps: ResolveLinkDeps,
+): Promise<CachedLink | null> {
+  const { db, redis, logger, timeoutMs, cacheTtlSeconds } = deps;
+
+  const cached = await lookupCachedLink(tenant, slug, { redis, logger, timeoutMs });
+  if (cached.kind === 'hit') {
+    return cached.link;
+  }
+
+  const link = await resolveLinkFromDb(tenant, slug, { db });
+  if (link === null) {
+    return null;
+  }
+
+  // Fire-and-forget, NOT awaited — see backfillLinkCache's own doc
+  // comment for why this is provably safe to `void`.
+  void backfillLinkCache(tenant, slug, link, { redis, logger, cacheTtlSeconds });
+
+  return link;
 }
