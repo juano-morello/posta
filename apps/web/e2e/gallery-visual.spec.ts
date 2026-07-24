@@ -26,12 +26,28 @@ import { expect, test } from '@playwright/test';
 // session depends on. Playwright's own snapshot resolution picks the
 // right suffix for whichever OS is actually running the test, so both
 // sets coexist here without either side needing to know about the
-// other. Regenerate the `-linux.png` set the same way if this file's
-// assertions ever change: `docker run --rm -v <isolated-copy>:/work -w
-// /work mcr.microsoft.com/playwright:v1.61.1-noble bash -lc "corepack
-// enable && pnpm install --frozen-lockfile && pnpm --filter
-// @posta/contracts build && pnpm --filter @posta/web exec playwright
-// test gallery-visual.spec.ts gallery.spec.ts --update-snapshots"`.
+// other.
+//
+// `--platform linux/amd64` is NOT optional on an Apple Silicon host: the
+// first attempt at this omitted it, Docker/OrbStack silently pulled the
+// native arm64 image, and CI (real x86_64 hardware) still failed —
+// specifically on every LIGHT-theme snapshot (3 of 7), while dark ones
+// happened to render identically across architectures. Confirmed by
+// re-running --update-snapshots with the correct platform: exactly
+// those same 3 files, and no others, needed regenerating. "Same OS" is
+// not "same pixels" any more than "same image tag" was — CPU
+// architecture is a THIRD axis of the same problem.
+//
+// Regenerate the `-linux.png` set the same way if this file's assertions
+// ever change: `docker run --rm --platform linux/amd64 -v
+// <isolated-copy>:/work -w /work mcr.microsoft.com/playwright:v1.61.1-noble
+// bash -lc "corepack enable && pnpm install --frozen-lockfile && pnpm
+// --filter @posta/contracts build && pnpm --filter @posta/web exec
+// playwright test gallery-visual.spec.ts gallery.spec.ts
+// --update-snapshots"`. Use an isolated copy (e.g. `git archive HEAD`
+// into a scratch dir), never this repo's own `node_modules` directly —
+// the container's Linux-native installs would otherwise clobber whatever
+// native binaries (esbuild, sharp, next/swc) the host platform needs.
 const DESKTOP = { width: 1280, height: 800 };
 const MOBILE = { width: 390, height: 844 };
 
