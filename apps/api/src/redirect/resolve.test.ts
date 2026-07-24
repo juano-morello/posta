@@ -1,14 +1,26 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bioPages, handleKey, newId, user } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
+import type { CachedLink } from '@posta/contracts';
 import {
   createResolveTenant,
+  lookupCachedLink,
   MEMO_TTL_MS,
   rememberInMemo,
   type HandleCacheRedis,
+  type LinkCacheRedis,
   type MemoEntry,
   type ResolveLogger,
 } from './resolve';
+
+// T2.2.3 — createResolveTenant's deps now require `timeoutMs` (the
+// REDIS_LOOKUP_TIMEOUT_MS-sourced bound applied to every Redis call in
+// this file, including the handle tier's). The existing T2.2.2 tests
+// below don't exercise timeout behavior themselves, so they share one
+// generous constant — large enough to never fire against the in-memory
+// recording double's effectively-instant calls, so it can't change any
+// of those tests' outcomes.
+const HANDLE_REDIS_TIMEOUT_MS = 1_000;
 
 // T2.2.2 — resolveTenant(handle) is the root of every tenant scope
 // downstream of it, so these tests exercise it against a REAL Postgres
@@ -166,7 +178,12 @@ describe('createResolveTenant (T2.2.2)', () => {
 
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const querySpy = vi.spyOn(handle.pool, 'query');
     const result = await resolveTenant('cold-handle');
@@ -188,7 +205,12 @@ describe('createResolveTenant (T2.2.2)', () => {
 
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     await resolveTenant('warm-handle'); // cold call: warms the memo
 
@@ -209,7 +231,12 @@ describe('createResolveTenant (T2.2.2)', () => {
   it('an unknown handle resolves to null', async () => {
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const result = await resolveTenant('never-claimed-handle');
 
@@ -219,7 +246,12 @@ describe('createResolveTenant (T2.2.2)', () => {
   it('an unknown handle is memoised too: a repeat call queries Postgres zero times', async () => {
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     await resolveTenant('scanned-handle'); // cold: caches the negative result
 
@@ -240,7 +272,12 @@ describe('createResolveTenant (T2.2.2)', () => {
 
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const resultA = await resolveTenant('tenant-a-handle');
     const resultB = await resolveTenant('tenant-b-handle');
@@ -256,7 +293,12 @@ describe('createResolveTenant (T2.2.2)', () => {
 
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const result = await resolveTenant('Case-Sensitive-Handle');
 
@@ -269,7 +311,12 @@ describe('createResolveTenant (T2.2.2)', () => {
 
     const redis = makeRecordingRedis();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     // Cold call runs under REAL timers — it does real Postgres I/O, which
     // fake timers must not be active for.
@@ -300,7 +347,12 @@ describe('createResolveTenant (T2.2.2)', () => {
     const redis = makeRecordingRedis();
     redis.failNextGet();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const result = await resolveTenant('redis-down-handle');
 
@@ -315,11 +367,203 @@ describe('createResolveTenant (T2.2.2)', () => {
     const redis = makeRecordingRedis();
     redis.failNextSetex();
     const logger = makeSpyLogger();
-    const resolveTenant = createResolveTenant({ db: handle.db, redis, logger });
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis,
+      logger,
+      timeoutMs: HANDLE_REDIS_TIMEOUT_MS,
+    });
 
     const result = await resolveTenant('setex-fails-handle');
 
     expect(result).toBe(tenantId);
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('[T2.2.3] a wedged Redis GET (never settles) still resolves via Postgres in under 50ms, logging a warning', async () => {
+    const tenantId = newId();
+    await seedBioPage(tenantId, 'wedged-redis-handle');
+
+    const setexCalls: Array<{ key: string; seconds: number; value: string }> = [];
+    // A half-open socket: the GET neither resolves nor rejects, ever —
+    // ioredis still considers the client "ready" and never surfaces a
+    // rejection, which is exactly the failure mode a plain try/catch
+    // cannot touch (see this file's header comment).
+    const wedgedRedis: HandleCacheRedis = {
+      get: () => new Promise(() => {}),
+      async setex(key, seconds, value) {
+        setexCalls.push({ key, seconds, value });
+        return 'OK';
+      },
+    };
+    const logger = makeSpyLogger();
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis: wedgedRedis,
+      logger,
+      timeoutMs: 10,
+    });
+
+    const start = Date.now();
+    const result = await resolveTenant('wedged-redis-handle');
+    const elapsedMs = Date.now() - start;
+
+    expect(result).toBe(tenantId);
+    expect(elapsedMs).toBeLessThan(50);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    // The GET timeout falls through to Postgres exactly like a rejected
+    // GET already did before this task — including the backfill SETEX
+    // after a successful Postgres lookup.
+    expect(setexCalls).toEqual([
+      { key: handleKey('wedged-redis-handle'), seconds: 3600, value: tenantId },
+    ]);
+  });
+
+  it('[T2.2.3] a wedged Redis SETEX backfill (never settles) still returns the resolved tenant in under 50ms, logging a warning', async () => {
+    const tenantId = newId();
+    await seedBioPage(tenantId, 'wedged-setex-handle');
+
+    const getCalls: string[] = [];
+    const wedgedRedis: HandleCacheRedis = {
+      async get(key) {
+        getCalls.push(key);
+        return null; // ordinary miss — falls through to Postgres, then to the wedged SETEX below
+      },
+      // A half-open socket on the BACKFILL write, not the read: the
+      // lookup already succeeded (Postgres answered), so this exercises
+      // the timeout branch on the SETEX side of withRedisTimeout, which
+      // the GET-wedge test above never reaches (that one never gets past
+      // the GET).
+      setex: () => new Promise(() => {}),
+    };
+    const logger = makeSpyLogger();
+    const resolveTenant = createResolveTenant({
+      db: handle.db,
+      redis: wedgedRedis,
+      logger,
+      timeoutMs: 10,
+    });
+
+    const start = Date.now();
+    const result = await resolveTenant('wedged-setex-handle');
+    const elapsedMs = Date.now() - start;
+
+    expect(result).toBe(tenantId);
+    expect(elapsedMs).toBeLessThan(50);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(getCalls).toEqual([handleKey('wedged-setex-handle')]);
+  });
+});
+
+describe('lookupCachedLink (T2.2.3)', () => {
+  const wellFormedLink: CachedLink = {
+    link_id: '01HXYZ0000000000000000001',
+    tenant_id: '01HXYZ0000000000000000002',
+    destination: 'https://x.com/promo',
+  };
+
+  it('a valid cached payload returns the parsed record as a hit', async () => {
+    const redis: LinkCacheRedis = { get: async () => JSON.stringify(wellFormedLink) };
+    const logger = makeSpyLogger();
+
+    const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 1_000 });
+
+    expect(result).toEqual({ kind: 'hit', link: wellFormedLink });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary cache miss (no key) returns a miss without logging a warning', async () => {
+    const redis: LinkCacheRedis = { get: async () => null };
+    const logger = makeSpyLogger();
+
+    const result = await lookupCachedLink('tenant-1', 'unknown-slug', {
+      redis,
+      logger,
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({ kind: 'miss' });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('malformed JSON returns a miss and logs a warning, never throwing', async () => {
+    const redis: LinkCacheRedis = { get: async () => 'not json {{{' };
+    const logger = makeSpyLogger();
+
+    const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 1_000 });
+
+    expect(result).toEqual({ kind: 'miss' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('[security] a well-formed but schema-invalid payload (javascript: destination) returns a miss and logs a warning', async () => {
+    const raw = JSON.stringify({ ...wellFormedLink, destination: 'javascript:alert(1)' });
+    const redis: LinkCacheRedis = { get: async () => raw };
+    const logger = makeSpyLogger();
+
+    const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 1_000 });
+
+    expect(result).toEqual({ kind: 'miss' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a GET that rejects returns a miss and logs a warning exactly once', async () => {
+    const redis: LinkCacheRedis = {
+      get: async () => {
+        throw new Error('simulated Redis GET failure');
+      },
+    };
+    const logger = makeSpyLogger();
+
+    const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 1_000 });
+
+    expect(result).toEqual({ kind: 'miss' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a GET that never settles returns a miss in under 50ms — the timeout, not the connection, decides', async () => {
+    const redis: LinkCacheRedis = { get: () => new Promise(() => {}) };
+    const logger = makeSpyLogger();
+
+    const start = Date.now();
+    const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 10 });
+    const elapsedMs = Date.now() - start;
+
+    expect(result).toEqual({ kind: 'miss' });
+    expect(elapsedMs).toBeLessThan(50);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a timed-out GET that later rejects does not produce an unhandled rejection', async () => {
+    let rejectLate: (error: Error) => void = () => {};
+    const redis: LinkCacheRedis = {
+      get: () =>
+        new Promise((_resolve, reject) => {
+          rejectLate = reject;
+        }),
+    };
+    const logger = makeSpyLogger();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    try {
+      const result = await lookupCachedLink('tenant-1', 'promo', { redis, logger, timeoutMs: 5 });
+      expect(result).toEqual({ kind: 'miss' });
+
+      // The GET settles AFTER the race already resolved to a timeout —
+      // exactly the scenario the timeout wrapper's neutralising .catch()
+      // exists for.
+      rejectLate(new Error('late rejection, after the race already settled'));
+
+      // Give Node's rejection tracking a few turns of the event loop to
+      // surface an unhandledRejection, if the implementation failed to
+      // neutralise the loser.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
   });
 });

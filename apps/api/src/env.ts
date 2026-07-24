@@ -64,6 +64,19 @@ export const apiEnvSchema = z.object({
 
   // Redis TTL for resolved slug→destination lookups (S3.3-adjacent).
   LINK_CACHE_TTL_SECONDS: z.coerce.number().int().positive(),
+
+  // T2.2.3 — how long the redirect hot path waits on a single Redis
+  // command (GET or SETEX, link cache or handle cache) before treating
+  // it as a miss and falling through. A hung Redis must cost latency,
+  // not availability (invariant 1): this bounds that cost, so a wedged
+  // connection degrades one request's latency instead of stalling every
+  // request behind it. Milliseconds, not seconds, unlike the TTL vars
+  // above — this gates a single in-request round trip, not a cache
+  // lifetime. .env.example's default (30) is a worst-case ceiling, not
+  // the expected cost: a healthy Redis answers in well under a
+  // millisecond, so this only ever gets paid when Redis is already in
+  // trouble.
+  REDIS_LOOKUP_TIMEOUT_MS: z.coerce.number().int().positive(),
 });
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;

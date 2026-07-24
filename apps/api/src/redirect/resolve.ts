@@ -1,5 +1,6 @@
 import type { DbClient } from '@posta/core';
-import { handleKey, resolveTenantByHandle } from '@posta/core';
+import { handleKey, linkKey, resolveTenantByHandle } from '@posta/core';
+import { parseCachedLink, type CachedLink } from '@posta/contracts';
 
 // T2.2.2 — resolveTenant(handle) bridges the request's Host-derived
 // handle to the tenant_id every downstream piece of the redirect hot
@@ -55,15 +56,20 @@ import { handleKey, resolveTenantByHandle } from '@posta/core';
 // 1 exists to prevent.
 //
 // So, accurately: the try/catch here converts REJECTED Redis calls to a
-// degraded (Postgres-only) fall-through; it does NOT bound latency, and
-// this file does not yet bound it at all. T2.2.3 (which owns
-// REDIS_LOOKUP_TIMEOUT_MS and the Promise.race wrapper for the link
-// cache's GET) is planned to apply that same wrapper to this handle tier
-// too, so the codebase ends up with one resilience shape for "Redis is
-// unresponsive", not two independently-invented ones. Until that lands,
-// a truly hung Redis socket is a known, tracked gap in THIS function —
-// not a covered case, whatever the surrounding try/catch might suggest
-// at a glance.
+// degraded (Postgres-only) fall-through; on its own it does NOT bound
+// latency.
+//
+// [T2.2.3] That gap is now CLOSED: every Redis call in this function —
+// the GET above and both SETEX branches below — runs through
+// withRedisTimeout, the same REDIS_LOOKUP_TIMEOUT_MS-bounded
+// Promise.race wrapper lookupCachedLink (this file) uses for the link
+// cache's own GET. One resilience shape for "Redis is unresponsive" in
+// this file, not two independently-invented ones: a wedged connection
+// now costs this function REDIS_LOOKUP_TIMEOUT_MS of latency and a
+// `warn` log — same outcome as a rejected call — never an unbounded
+// hang. See withRedisTimeout's own doc comment for how it also avoids
+// leaking the pending timer and avoids an unhandled rejection when the
+// loser settles after the race already decided.
 
 export const MEMO_TTL_MS = 60_000;
 // A generous cap: real tenants own a handful of handles at most — v1 is
@@ -133,6 +139,13 @@ export interface ResolveTenantDeps {
   readonly redis: HandleCacheRedis;
   /** Built once at boot — consoleWarnLogger in production, a spy in tests. */
   readonly logger: ResolveLogger;
+  /**
+   * REDIS_LOOKUP_TIMEOUT_MS (env.ts) — bounds EVERY Redis call this
+   * function makes (the GET and both SETEX branches), via
+   * {@link withRedisTimeout}. See LookupCachedLinkDeps for the sibling
+   * use on the link cache's own GET.
+   */
+  readonly timeoutMs: number;
 }
 
 export type ResolveTenant = (handle: string) => Promise<string | null>;
@@ -172,6 +185,69 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// T2.2.3 — a hung Redis must cost latency, not availability (invariant
+// 1). A half-open socket (TCP still connected, the server unresponsive)
+// throws nothing, so a plain try/catch cannot bound it: the `await` on
+// that command can hang for the OS's own TCP timeout, commonly minutes.
+// REDIS_TIMEOUT_MARKER is what withRedisTimeout returns instead, once
+// REDIS_LOOKUP_TIMEOUT_MS elapses with no answer — a unique symbol, not
+// `null`, because `null` is `GET`'s own legitimate "key does not exist"
+// reply and must stay distinguishable from "we gave up waiting".
+const REDIS_TIMEOUT_MARKER = Symbol('redis-lookup-timeout');
+type RedisTimeoutMarker = typeof REDIS_TIMEOUT_MARKER;
+
+/**
+ * Races `operation` (an already-started Redis call) against `timeoutMs`,
+ * returning {@link REDIS_TIMEOUT_MARKER} if the timer wins. Every Redis
+ * call on the redirect hot path — the link cache's GET
+ * (`lookupCachedLink`) and the handle cache's GET/SETEX
+ * (`createResolveTenant`) — goes through this one helper, so "Redis is
+ * unresponsive" has exactly one resilience shape in this file, not one
+ * per call site.
+ *
+ * Two things a naive `Promise.race` gets wrong, both fixed here:
+ *   - **Timer leak.** A `Promise.race` against a `setTimeout` leaves a
+ *     pending timer running on the winning path unless it is cleared —
+ *     real garbage on a path that runs on every redirect, and in tests
+ *     it keeps the event loop alive. The `finally` clears it on every
+ *     outcome, win or lose.
+ *   - **A timed-out call still settles later.** When the timeout wins,
+ *     `operation` is still out there and will eventually resolve or
+ *     reject on its own. `Promise.race` already subscribes to every
+ *     promise it is given, which is enough on its own to keep a later
+ *     rejection from being reported as unhandled — but that reliance is
+ *     implicit and easy to break in a future refactor of this helper.
+ *     The explicit `operation.catch(() => {})` below makes "a late
+ *     rejection is deliberately ignored, not accidentally swallowed"
+ *     true by construction, not by an engine implementation detail this
+ *     file doesn't otherwise depend on.
+ *
+ * Does NOT swallow a rejection that wins the race (i.e., `operation`
+ * rejects before the timeout fires) — that still propagates, exactly as
+ * an un-raced `await operation` would. Callers already have a try/catch
+ * around this for that failure mode; this helper only adds the timeout
+ * failure mode alongside it, not a second, different way to hide errors.
+ */
+function withRedisTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T | RedisTimeoutMarker> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<RedisTimeoutMarker>((resolve) => {
+    timer = setTimeout(() => resolve(REDIS_TIMEOUT_MARKER), timeoutMs);
+  });
+
+  return Promise.race([operation, timeout]).finally(() => {
+    clearTimeout(timer);
+    // Neutralises a rejection that arrives on the loser after the race
+    // has already settled — see this function's doc comment. `void`
+    // marks this as deliberately fire-and-forget, not an accidentally
+    // dropped promise.
+    void operation.catch(() => {});
+  });
+}
+
 /**
  * Builds resolveTenant from dependencies resolved once at boot — the
  * returned function is what every request calls, closing over a fresh,
@@ -179,7 +255,7 @@ function describeError(error: unknown): string {
  * one memo entry a cold call writes.
  */
 export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
-  const { db, redis, logger } = deps;
+  const { db, redis, logger, timeoutMs } = deps;
   const memo = new Map<string, MemoEntry>();
 
   return async function resolveTenant(handle: string): Promise<string | null> {
@@ -191,7 +267,19 @@ export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
     const key = handleKey(handle);
     let cached: string | null = null;
     try {
-      cached = await redis.get(key);
+      const result = await withRedisTimeout(redis.get(key), timeoutMs);
+      if (result === REDIS_TIMEOUT_MARKER) {
+        // A hung GET — no connection error was ever thrown, the
+        // command simply never answered in time. Same outcome as the
+        // catch below: fall through to Postgres as if this were a
+        // plain miss.
+        logger.warn('Redis GET timed out while resolving a handle; falling through to Postgres.', {
+          handle,
+          timeoutMs,
+        });
+      } else {
+        cached = result;
+      }
     } catch (error) {
       // A dead/unreachable Redis must cost latency, not availability —
       // fall through to Postgres exactly as if this were a plain miss.
@@ -213,10 +301,25 @@ export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
     const tenantId = await resolveTenantByHandle(db, handle);
 
     try {
-      if (tenantId !== null) {
-        await redis.setex(key, HANDLE_CACHE_TTL_SECONDS, tenantId);
-      } else {
-        await redis.setex(key, NEGATIVE_CACHE_TTL_SECONDS, ABSENT_TENANT_TOMBSTONE);
+      const setexResult =
+        tenantId !== null
+          ? await withRedisTimeout(
+              redis.setex(key, HANDLE_CACHE_TTL_SECONDS, tenantId),
+              timeoutMs,
+            )
+          : await withRedisTimeout(
+              redis.setex(key, NEGATIVE_CACHE_TTL_SECONDS, ABSENT_TENANT_TOMBSTONE),
+              timeoutMs,
+            );
+
+      if (setexResult === REDIS_TIMEOUT_MARKER) {
+        // The lookup itself already succeeded — a hung backfill write
+        // costs only the NEXT request a Postgres query, never this
+        // one's result. Same outcome as the catch below.
+        logger.warn('Redis SETEX timed out while backfilling a resolved handle.', {
+          handle,
+          timeoutMs,
+        });
       }
     } catch (error) {
       // The lookup itself already succeeded — a failed cache write costs
@@ -230,4 +333,117 @@ export function createResolveTenant(deps: ResolveTenantDeps): ResolveTenant {
     rememberInMemo(memo, handle, tenantId);
     return tenantId;
   };
+}
+
+// T2.2.3 — the link cache lookup (S2.2): `GET link:{tenant}:{slug}`,
+// bounded by the same withRedisTimeout this file's handle tier now
+// shares. No Postgres fallback, no SETEX backfill, no tombstone — those
+// are T2.2.4/T2.2.5/T2.2.6, dispatched separately; this function's job
+// ends at "cache hit, or miss".
+
+/**
+ * The minimal shape lookupCachedLink needs from a Redis client — `get`
+ * only. Deliberately narrower than {@link HandleCacheRedis}: the SETEX
+ * backfill for the link cache is T2.2.5's job, not this one's, so this
+ * seam has no `setex` to avoid implying a write path exists here yet.
+ * Structurally satisfied by a real ioredis `Redis` instance, same as
+ * HandleCacheRedis.
+ */
+export interface LinkCacheRedis {
+  get(key: string): Promise<string | null>;
+}
+
+/**
+ * The result of a link cache lookup. A discriminated union rather than
+ * `CachedLink | null`, on purpose: T2.2.6 adds a negative-cache
+ * tombstone for slugs confirmed absent in both Redis and Postgres, and
+ * needs to tell that apart from an ORDINARY miss (never looked up, or
+ * looked up and merely not cached yet) so a tombstone never falls
+ * through to Postgres the way a plain miss must. This shape leaves room
+ * for that as a third `kind` (e.g. `'known-absent'`) later without
+ * changing what `'hit'` or `'miss'` mean or breaking existing callers —
+ * this task does NOT add that variant or any tombstone read/write logic,
+ * only the room for it.
+ */
+export type LinkLookupResult =
+  | { readonly kind: 'hit'; readonly link: CachedLink }
+  | { readonly kind: 'miss' };
+
+/** Singleton "miss" result — immutable and identical across every miss,
+ * so returning it allocates nothing on the hot path's common case. */
+const LINK_LOOKUP_MISS: LinkLookupResult = { kind: 'miss' };
+
+export interface LookupCachedLinkDeps {
+  /** Built once at boot — see main.ts. Never constructed per request. */
+  readonly redis: LinkCacheRedis;
+  /** Built once at boot — consoleWarnLogger in production, a spy in tests. */
+  readonly logger: ResolveLogger;
+  /**
+   * REDIS_LOOKUP_TIMEOUT_MS (env.ts) — bounds this GET via
+   * {@link withRedisTimeout}. See ResolveTenantDeps for the sibling use
+   * on the handle tier.
+   */
+  readonly timeoutMs: number;
+}
+
+/**
+ * `GET link:{tenant}:{slug}`, parsed and bounded. Three distinct failure
+ * modes — a timeout, a rejected GET (a dead/unreachable connection), and
+ * a payload that fails to parse or fails {@link CachedLinkSchema} (T2.2.1's
+ * `parseCachedLink`, e.g. a non-`http(s)` `destination` — an unparsed
+ * cache value handed to a redirect is an open redirect with a TTL) — all
+ * collapse to the SAME outcome here: `{ kind: 'miss' }`, logged at `warn`.
+ * Never throws: a hung or broken cache must cost this request latency,
+ * not availability [invariant 1].
+ *
+ * An ordinary cache miss (`GET` returns `null` — nothing has ever cached
+ * this slug) is NOT warned about: it is the expected steady-state result
+ * for a slug the cache hasn't seen yet, and warning on every one of
+ * those would be pure noise on a path that runs on every redirect. Only
+ * a value that WAS present and still failed to yield a usable
+ * {@link CachedLink} — corrupt JSON, a schema violation, a timeout, or a
+ * connection error — is worth a `warn`.
+ */
+export async function lookupCachedLink(
+  tenant: string,
+  slug: string,
+  deps: LookupCachedLinkDeps,
+): Promise<LinkLookupResult> {
+  const { redis, logger, timeoutMs } = deps;
+  const key = linkKey(tenant, slug);
+
+  let raw: string | null;
+  try {
+    const result = await withRedisTimeout(redis.get(key), timeoutMs);
+    if (result === REDIS_TIMEOUT_MARKER) {
+      logger.warn('Redis GET timed out while looking up a cached link; treating as a miss.', {
+        tenant,
+        slug,
+        timeoutMs,
+      });
+      return LINK_LOOKUP_MISS;
+    }
+    raw = result;
+  } catch (error) {
+    logger.warn('Redis GET failed while looking up a cached link; treating as a miss.', {
+      tenant,
+      slug,
+      error: describeError(error),
+    });
+    return LINK_LOOKUP_MISS;
+  }
+
+  const link = parseCachedLink(raw);
+  if (link === null) {
+    if (raw !== null) {
+      // There WAS a cached value and it did not survive parsing — either
+      // malformed JSON or a schema violation (T2.2.1's parseCachedLink
+      // folds both into this same null). Worth a warn: an ordinary miss
+      // (raw === null) is not.
+      logger.warn('Cached link payload failed to parse; treating as a miss.', { tenant, slug });
+    }
+    return LINK_LOOKUP_MISS;
+  }
+
+  return { kind: 'hit', link };
 }

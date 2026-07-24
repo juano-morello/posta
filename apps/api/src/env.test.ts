@@ -9,8 +9,9 @@ import { apiEnvSchema } from './env';
 //
 // Variable set per CLAUDE.md's api role (redirects, CRUD, auth, analytics,
 // geo lookup at capture): domains, DATABASE_URL, REDIS_URL, all R2, GEOIP,
-// all AUTH, API_PORT, NODE_ENV, LOG_LEVEL, LINK_CACHE_TTL_SECONDS. NOT the
-// worker's batch vars, NOT WEB_PORT — those belong to other apps' schemas.
+// all AUTH, API_PORT, NODE_ENV, LOG_LEVEL, LINK_CACHE_TTL_SECONDS,
+// REDIS_LOOKUP_TIMEOUT_MS. NOT the worker's batch vars, NOT WEB_PORT —
+// those belong to other apps' schemas.
 
 const VALID_API_ENV: Record<string, string> = {
   POSTA_LINK_DOMAIN: 'example.test',
@@ -36,6 +37,7 @@ const VALID_API_ENV: Record<string, string> = {
   LOG_LEVEL: 'info',
   API_PORT: '3001',
   LINK_CACHE_TTL_SECONDS: '3600',
+  REDIS_LOOKUP_TIMEOUT_MS: '30',
 };
 
 describe('apiEnvSchema', () => {
