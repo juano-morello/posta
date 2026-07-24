@@ -23,7 +23,15 @@ const DESTINATION_PROTOCOL_PATTERN = /^https?$/;
 const DESTINATION_MAX_LENGTH = 2048;
 const TITLE_MAX_LENGTH = 200;
 
-const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTINATION_MAX_LENGTH);
+// Exported (T2.2.1) so packages/contracts/src/cache.ts's CachedLinkSchema
+// can validate a Redis-sourced `destination` against this EXACT schema
+// object, not a second hand-copied rule. A Redis value is untrusted the
+// moment anything else can write to that instance — a cache-read copy of
+// this validator that drifted from the write-time one (e.g. missing the
+// length bound, or a looser protocol pattern) would mean the write path
+// rejects `javascript:` while the cache-read path serves it, which is an
+// open redirect with a TTL.
+export const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTINATION_MAX_LENGTH);
 
 // Lowercase alnum + dash only ([a-z0-9-], no underscore — must match S5.3
 // exactly), 1-64 chars, no leading or trailing hyphen. The optional
