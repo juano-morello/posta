@@ -137,6 +137,7 @@ describe('Recibos why-string hardening (T6.4.13) [security]', () => {
   // representative code point exercised here.
   it.each([
     ['a C1 control character (NEL, U+0085)', 0x85],
+    ['the Arabic Letter Mark (U+061C)', 0x61c],
     ['zero-width non-joiner (U+200C)', 0x200c],
     ['left-to-right mark (U+200E)', 0x200e],
     ['RLO — the "Trojan Source" reorder character (U+202E)', 0x202e],

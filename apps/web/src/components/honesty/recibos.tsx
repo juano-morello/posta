@@ -64,6 +64,10 @@ function capReceipts(receipts: Recibo[]): Recibo[] {
 const CONTROL_AND_INVISIBLE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x00, 0x1f], // C0 controls (includes BEL, NUL, etc.)
   [0x7f, 0x9f], // DEL + C1 controls
+  [0x061c, 0x061c], // Arabic Letter Mark (ALM) — a bidi-class control
+  // character in the same "Trojan Source" family as the embedding/
+  // override/isolate blocks below, missed in the first cut alongside
+  // them (S6.5 PR review).
   [0x200b, 0x200f], // zero-width space/non-joiner/joiner, LRM, RLM
   [0x202a, 0x202e], // bidi embedding/override: LRE, RLE, PDF, LRO, RLO — the
   // "Trojan Source" reorder characters (CVE-2021-42574's class): an
