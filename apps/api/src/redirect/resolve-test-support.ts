@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { ResolveLogger } from './resolve';
+import type { ResolveLogger } from './resolve-redis';
 
 // Shared between resolve-tenant.test.ts (the handle→tenant ladder,
 // createResolveTenant) and resolve-link.test.ts (the link lookup and
@@ -8,6 +8,12 @@ import type { ResolveLogger } from './resolve';
 // epic's 800-line hard cap (T2.2.5's fix round 1). Kept here, imported
 // by both, rather than copy-pasted into each: duplicated test setup
 // drifts exactly like duplicated production logic.
+//
+// ResolveLogger itself now lives in resolve-redis.ts (T2.2.6's fix
+// round, once resolve.ts ITSELF crossed the same 800-line cap and split
+// into resolve-redis.ts / resolve-tenant.ts / resolve-link.ts) rather
+// than either tier-specific production file, since both tiers' deps
+// shapes reference it.
 
 /**
  * apps/api's tests run under the ROOT vitest config's 'default' project,

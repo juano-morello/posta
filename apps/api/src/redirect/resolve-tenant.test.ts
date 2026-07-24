@@ -7,7 +7,7 @@ import {
   rememberInMemo,
   type HandleCacheRedis,
   type MemoEntry,
-} from './resolve';
+} from './resolve-tenant';
 import { CONTAINER_TEST_TIMEOUT_MS, makeSpyLogger } from './resolve-test-support';
 
 // The handle→tenant ladder half of what was one file (resolve.test.ts)
