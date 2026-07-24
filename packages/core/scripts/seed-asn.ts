@@ -8,6 +8,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Pool } from 'pg';
+// [PR #3 review, MEDIUM] main() used to build a bare `new Pool({
+// connectionString })`, bypassing createDbClient() entirely and
+// silently getting the pg driver's default pool size instead of the
+// explicit, env-supplied DB_POOL_MAX every other entrypoint requires
+// (packages/core/src/db/client.ts's resolvePoolMax(), T1.1.1 — "never
+// left to the driver default"). Imported from the compiled barrel via a
+// relative path, same reasoning as seed.ts's identical import (this
+// script runs directly under Node, outside packages/core's own tsc
+// build, which only covers src/).
+import { createDbClient } from '../dist/index.js';
 
 export interface AsnEntry {
   readonly asn: number;
@@ -80,14 +90,13 @@ export async function seedAsnDatacenter(
 }
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('seed-asn: DATABASE_URL is not set');
-    process.exit(1);
-  }
-
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: databaseUrl });
+  // createDbClient() (packages/core/src/db/client.ts) is the one
+  // chokepoint every other entrypoint (migrate.ts, migrate-status.ts,
+  // migrate-down.ts, seed.ts) already goes through — it requires both
+  // DATABASE_URL and DB_POOL_MAX explicitly, throwing a clear error
+  // naming whichever is missing, rather than silently falling back to
+  // the pg driver's own default pool size.
+  const client = createDbClient();
 
   // [S1.4 review, silent-failure-hunter CRITICAL] A plain `finally { await
   // pool.end(); }` would let a pool.end() failure REPLACE seedAsnDatacenter's
@@ -99,14 +108,14 @@ async function main(): Promise<void> {
   let seedError: unknown;
   let rowCount: number | undefined;
   try {
-    ({ rowCount } = await seedAsnDatacenter(pool));
+    ({ rowCount } = await seedAsnDatacenter(client.pool));
   } catch (error) {
     seedError = error;
   }
 
   let closeError: unknown;
   try {
-    await pool.end();
+    await client.closeDb();
   } catch (error) {
     closeError = error;
   }

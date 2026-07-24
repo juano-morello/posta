@@ -13,6 +13,7 @@
     "migrate:status": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate:status",
     "migrate:down": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate:down",
     "seed": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run seed",
+    "seed:asn": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run seed:asn",
     "lint": "eslint .",
     "depcruise": "depcruise --config .dependency-cruiser.js --output-type err-long apps packages",
     "test": "vitest run",
