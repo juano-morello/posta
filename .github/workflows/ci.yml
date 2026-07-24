@@ -146,8 +146,8 @@ jobs:
       # -- --coverage` produces no coverage/ directory at all; `pnpm test
       # --project default --coverage` does.
       #
-      # --project default: vitest.config.ts's `projects` split (batch 9
-      # review) put tests/containers/** (image-smoke.test.ts,
+      # --project default --project core: vitest.config.ts's `projects`
+      # split (batch 9 review) put tests/containers/** (image-smoke.test.ts,
       # image-size.test.ts) in their own "containers" project — those
       # tests' beforeAll shells out to `docker compose build/run` against
       # services declaring `env_file: .env`, which THIS workflow never
@@ -156,13 +156,18 @@ jobs:
       # failure, since images.yml already owns them, run targeted
       # (`pnpm test tests/containers/image-smoke.test.ts` /
       # `image-size.test.ts`) right after it builds the images they need.
-      # `--project default` runs every OTHER test (including
+      # `default` runs every other test (including
       # tests/infra/redis-policy.test.ts, against the Redis service +
-      # CONFIG SET step above) and coverage still computes/gates at 80%
-      # over that same set — the container tests never contributed
-      # application-source coverage in the first place.
+      # CONFIG SET step above); `core` (T1.1.2, E1) is packages/core's own
+      # project (packages/core/vitest.config.ts, 120s hookTimeout) —
+      # its testcontainers-based integration tests boot a REAL Postgres
+      # via the runner's own Docker daemon (already available on
+      # ubuntu-latest, no service container needed) rather than the
+      # postgres:// service above. Both projects' coverage still
+      # computes/gates at 80% together — the container-build tests never
+      # contributed application-source coverage in the first place.
       - name: Test (with coverage)
-        run: pnpm test --project default --coverage
+        run: pnpm test --project default --project core --coverage
 
       - name: Upload coverage summary
         if: always()
@@ -198,3 +203,75 @@ jobs:
       # fixture) fails the build too.
       - name: Dependency boundaries (S0.2)
         run: pnpm depcruise
+
+  # T1.5.4 — "As a developer I want one command for both migration
+  # flavors so that hand-written SQL is not second-class" (S1.5). This is
+  # what actually catches drift: a schema change committed without
+  # regenerating the drizzle migration, or a migrations/sql/*.sql file
+  # renamed or edited after being applied (sql-migrate.ts's checksum
+  # check throws on exactly that). A separate job, not a step tacked onto
+  # `ci` above — GitHub Actions jobs get their own fresh runner and their
+  # own fresh service containers by default, which is genuinely "from
+  # empty" with no explicit teardown needed, and keeps this fast,
+  # narrowly-scoped check from being coupled to the main job's lint/test/
+  # build timing.
+  migrate-from-empty:
+    name: Migrate from empty
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL: postgresql://posta:posta@localhost:5432/posta
+      # createDbClient()'s resolvePoolMax() (packages/core/src/db/client.ts,
+      # T1.1.1) requires DB_POOL_MAX explicitly — pool max is never left to
+      # the pg driver default on purpose (CLAUDE.md). Without this, `pnpm
+      # migrate` in this job fails immediately with "DB_POOL_MAX must be
+      # set" before it ever reaches Postgres — confirmed live on PR #3.
+      DB_POOL_MAX: '5'
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: posta
+          POSTGRES_PASSWORD: posta
+          POSTGRES_DB: posta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U posta -d posta"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Drizzle's migrations, then the hand-written SQL ones, in the
+      # fixed order T1.5.1 asserts — against a genuinely empty database
+      # (a brand-new service container for this job), so this either
+      # produces every table/function/partition or fails loudly.
+      - name: pnpm migrate
+        run: pnpm migrate
+
+      # The real gate: exits non-zero if anything drizzle-kit or the sql
+      # runner tracks as unapplied is still pending after the migrate
+      # step above — which is exactly the "drift" this job exists to
+      # catch (an edited already-applied file fails migrate itself, via
+      # the checksum check; a genuinely NEW, un-migrated file would show
+      # up here as PENDING instead).
+      - name: pnpm migrate:status
+        run: pnpm migrate:status

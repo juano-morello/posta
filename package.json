@@ -6,8 +6,14 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck && pnpm typecheck:tests",
+    "typecheck": "tsc -b packages/contracts packages/core apps/api apps/worker && pnpm --filter @posta/web typecheck && pnpm typecheck:tests && pnpm typecheck:scripts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "typecheck:scripts": "tsc --noEmit -p packages/core/scripts/tsconfig.json",
+    "migrate": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate",
+    "migrate:status": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate:status",
+    "migrate:down": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run migrate:down",
+    "seed": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run seed",
+    "seed:asn": "pnpm --filter @posta/core run build && pnpm --filter @posta/core run seed:asn",
     "lint": "eslint .",
     "depcruise": "depcruise --config .dependency-cruiser.js --output-type err-long apps packages",
     "test": "vitest run",

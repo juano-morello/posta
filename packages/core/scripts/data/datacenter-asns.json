@@ -1,0 +1,3665 @@
+{
+  "provenance": {
+    "upstreamSource": "https://raw.githubusercontent.com/brianhama/bad-asn-list/master/bad-asn-list.csv (MIT license)",
+    "pulledAt": "2026-07-23",
+    "supplementedWith": "public ASN registration records (bgp.he.net / PeeringDB) for major providers the upstream hosting/colo list omits or names ambiguously — see SUPPLEMENTAL_ENTRIES in vendor-asn.ts",
+    "refresh": "packages/core/scripts/vendor-asn.sh (see packages/core/scripts/data/README.md)"
+  },
+  "entries": [
+    {
+      "asn": 1442,
+      "name": "Surehosting Internet Solutions, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 3223,
+      "name": "Voxility, Ro",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 3561,
+      "name": "Savvis, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 3722,
+      "name": "Tranquil Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 3842,
+      "name": "Ramnode Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 4250,
+      "name": "Alentus Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 4323,
+      "name": "Tw Telecom Holdings, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 4694,
+      "name": "Idc Yahoo Japan Corporation, Jp",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 4851,
+      "name": "Host Networks",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 5577,
+      "name": "Root, Lu",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 6188,
+      "name": "Vps Datacenter, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 6724,
+      "name": "Strato Strato Ag, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 6870,
+      "name": "H1Asn, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 6939,
+      "name": "Hurricane Electric, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7203,
+      "name": "Leaseweb Usa, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7349,
+      "name": "Windstream Hosted Solutions, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7489,
+      "name": "Hostus-Global-As Hostus, Hk",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7506,
+      "name": "Interq Gmo Internet,Inc, Jp",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7595,
+      "name": "Readyspace Network Pte Ltd, Hosted Solutions Provider,Singapore",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7598,
+      "name": "Asiapac Region",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7850,
+      "name": "Ihighway.Net, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 7979,
+      "name": "Servers.Com, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8068,
+      "name": "Microsoft Corporation",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 8075,
+      "name": "Microsoft Corporation (Azure/MSN)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 8100,
+      "name": "Quadranet, Inc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8455,
+      "name": "Atom86-As Atom86, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8477,
+      "name": "Zts Echostar Studio Poznan Poland",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8556,
+      "name": "Levantis Hosting Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8560,
+      "name": "Oneandone-As Brauerstrasse 48, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8972,
+      "name": "Plusserver-As, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 8987,
+      "name": "Amazon.com, Inc. (AWS Europe)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 9009,
+      "name": "M247, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9166,
+      "name": "Hostit Nv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9290,
+      "name": "Gohosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9370,
+      "name": "Sakura-B Sakura Internet Inc., Jp",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9412,
+      "name": "Hostworks Content Delivery System",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9667,
+      "name": "Hostworks Pty Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9823,
+      "name": "Education Web Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 9925,
+      "name": "Powerbase Datacenter Services (Hk) Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10200,
+      "name": "Web Hosting Provider And Isp Connectivity.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10207,
+      "name": "Interhost Pacific Pty Ltd T/A Intervolve.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10297,
+      "name": "Enet Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10439,
+      "name": "Carinet, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10532,
+      "name": "Rackspace Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 10929,
+      "name": "Netelligent Hosting Services Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11230,
+      "name": "Managed Hosting Services, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11235,
+      "name": "Itron-Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11274,
+      "name": "Adhost Internet Advertising, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11588,
+      "name": "Highwinds Network Group, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11831,
+      "name": "Esecuredata, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 11878,
+      "name": "Tzulo, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 12076,
+      "name": "Microsoft Corporation",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 12586,
+      "name": "Ghostnet Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 12617,
+      "name": "Solido Hosting A/S",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 12876,
+      "name": "Scaleway (Online S.A.S.)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 12989,
+      "name": "Hwng, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13209,
+      "name": "Atom Hosting Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13213,
+      "name": "Uk2Net-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13335,
+      "name": "Cloudflare, Inc.",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 13647,
+      "name": "Tranquil Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13739,
+      "name": "Datacenter Ip, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13909,
+      "name": "Techie Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13926,
+      "name": "Reliablehosting.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 13955,
+      "name": "Echostar Broadcasting Corporation",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14061,
+      "name": "DigitalOcean, LLC",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 14120,
+      "name": "It Hosting Services, Llc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14127,
+      "name": "Iland Internet Solutions Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14160,
+      "name": "Premium Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14244,
+      "name": "Nsi Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14384,
+      "name": "Host Designs, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14415,
+      "name": "Host Collective, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14442,
+      "name": "Media-Hosts Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14567,
+      "name": "Springs Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14576,
+      "name": "Hosting Solution Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14618,
+      "name": "Amazon.com, Inc. (AWS EC2)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 14708,
+      "name": "Webhost Chile S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14986,
+      "name": "Ultra Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14987,
+      "name": "Rethem Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 14992,
+      "name": "Crystaltech Web Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15003,
+      "name": "Nobis Technology Group, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15083,
+      "name": "Infolink Global Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15169,
+      "name": "Google LLC",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 15189,
+      "name": "Hostventures.Com, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15395,
+      "name": "Rackspace-Lon, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15497,
+      "name": "Colocall Internet Data Center \"Colocall\", Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15510,
+      "name": "Cwcs-Ps, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15626,
+      "name": "Itlas, Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15734,
+      "name": "Idh, Es",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 15919,
+      "name": "Servicios De Hosting En Internet S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16125,
+      "name": "Cherryservers1-As, Lt",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16262,
+      "name": "Delta-Ltd-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16276,
+      "name": "OVH SAS",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 16284,
+      "name": "Unspecified, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16397,
+      "name": "Equinix Brasil Sp, Br",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16509,
+      "name": "Amazon.com, Inc. (AWS)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 16535,
+      "name": "Echostar Holding Purchasing Corporation",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16628,
+      "name": "Dedfiberco, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16862,
+      "name": "Kansas Hosting, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 16973,
+      "name": "Corporacion Hostarica S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17019,
+      "name": "Jchost Internet Services, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17216,
+      "name": "Dc74 Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17439,
+      "name": "Netmagic Datacenter Mumbai",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17669,
+      "name": "Infoplex Hosting And Managed Service Provider Asia Pacific",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17881,
+      "name": "Inet Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17918,
+      "name": "Infoplex Hosting And Managed Service Provider Asia Pacific",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17920,
+      "name": "Transit As - Hosting Provider",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 17971,
+      "name": "Tm-Vads Dc Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 18120,
+      "name": "Gemini Software Solutions (P) Ltd. Hosting Services, India",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 18450,
+      "name": "Webnx, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 18570,
+      "name": "Echostar Broadcasting Corperation",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 18779,
+      "name": "Egihosting, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 18978,
+      "name": "Enzu Inc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19084,
+      "name": "Coloup, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19133,
+      "name": "Bird Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19234,
+      "name": "Canada Web Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19318,
+      "name": "New Jersey International Internet Exchange Llc,",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19437,
+      "name": "Secured Servers Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19531,
+      "name": "Nodes Direct, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19624,
+      "name": "Data Room, Inc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19844,
+      "name": "Gorack Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19871,
+      "name": "Network Solutions, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 19969,
+      "name": "Joe'S Datacenter, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20021,
+      "name": "Hostmysite, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20068,
+      "name": "Hawk Host Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20248,
+      "name": "Take 2 Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20264,
+      "name": "Webair Internet Development Company Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20401,
+      "name": "Hostway Corporation",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20448,
+      "name": "Vpntranet, Llc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20450,
+      "name": "Trojan Hosting, Llc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20454,
+      "name": "Secured Servers Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20473,
+      "name": "The Constant Company, LLC (Vultr)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 20598,
+      "name": "Cyberspace-As Autonomous System Number For Cyber Space, Il",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20692,
+      "name": "Netgate Datacenter Asn",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20738,
+      "name": "As20738, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20773,
+      "name": "Host Europe Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20836,
+      "name": "Cdlan-As Milano, It",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20860,
+      "name": "Iomart-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 20940,
+      "name": "Akamai International B.V.",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 21100,
+      "name": "Itldc-Nl, Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 21159,
+      "name": "Novoserve-Gmbh-As Frankfurt, Germany, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 21217,
+      "name": "Safe Host Sa",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 21321,
+      "name": "Areti-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 21859,
+      "name": "Zenlayer Inc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22152,
+      "name": "Oc Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22363,
+      "name": "Powerhouse Management, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22552,
+      "name": "Esited Solutions, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22611,
+      "name": "Inmotion Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22720,
+      "name": "Rackspace Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22781,
+      "name": "Strong Technology, Llc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 22903,
+      "name": "Edgewebhosting.Net",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23033,
+      "name": "Wowrack.Com, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23052,
+      "name": "Ihost Solutions, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23108,
+      "name": "Quantact Hosting Solutions, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23273,
+      "name": "Santa Barbara Web Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23342,
+      "name": "Unitedlayer, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23352,
+      "name": "Server Central Network, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23535,
+      "name": "Hostrocket.Com, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 23881,
+      "name": "Udomain Web Hosting Company Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24220,
+      "name": "Hostcentral",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24381,
+      "name": "Web Hosting And Colocation Services",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24482,
+      "name": "Sggs-As-Ap Sg.Gs, Sg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24549,
+      "name": "Pacificnet Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24558,
+      "name": "Internet Hosting Service Provider To The Aditya",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24611,
+      "name": "Datacenter Luxembourg S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24679,
+      "name": "Hostway Deutschland Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24725,
+      "name": "Hostmaster Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24768,
+      "name": "Almouroltec, Pt",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24875,
+      "name": "Novoserve-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24931,
+      "name": "Dedipower Managed Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24940,
+      "name": "Hetzner Online GmbH",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 24958,
+      "name": "The Bunker Secure Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24961,
+      "name": "Myloc-As, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24971,
+      "name": "Master-As Czech Republic / Www.Master.Cz, Cz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 24997,
+      "name": "As For Cdn",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25048,
+      "name": "Dsnet Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25128,
+      "name": "Hostway Deutschland Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25163,
+      "name": "Ng-Nigeria-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25260,
+      "name": "Qualityhosting Ag",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25369,
+      "name": "Bandwidth-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25379,
+      "name": "Pekitel-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25532,
+      "name": ".Masterhost Autonomous System",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25642,
+      "name": "Spiderhost Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25780,
+      "name": "Hugeserver Networks, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25820,
+      "name": "It7 Networks Inc, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 25926,
+      "name": "Hostus",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 26277,
+      "name": "Las Vegas Nv Datacenter",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 26481,
+      "name": "Rebel Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 26484,
+      "name": "Hostspace Networks Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 26978,
+      "name": "Carpathia Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27175,
+      "name": "Atnethost Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27223,
+      "name": "Bare Metal Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27229,
+      "name": "Webhosting.Net, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27257,
+      "name": "Webair Internet Development Company Inc.,",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27357,
+      "name": "Rackspace Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27589,
+      "name": "Mojohost",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27597,
+      "name": "Siteserver Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 27640,
+      "name": "Gigas Hosting Usa, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28099,
+      "name": "Ihosting Servicios Internet Ltda.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28216,
+      "name": "Host Revenda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28333,
+      "name": "Local Datacenter SoluçõEs Em ComunicaçãO Ltda.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28747,
+      "name": "Easyhost Bvba",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28753,
+      "name": "Leaseweb-, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28855,
+      "name": "Galacsys Is An Hosting And Managed Services Provider",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 28997,
+      "name": "Nedcomp Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29066,
+      "name": "Velianet-As Velia.Net Internetdienste Gmbh, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29067,
+      "name": "Hostmaster Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29073,
+      "name": "Quasinetworks, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29097,
+      "name": "Hostpoint Ag, Switzerland",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29119,
+      "name": "Servihosting Networks S.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29140,
+      "name": "Autonomous System Hostserver Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29182,
+      "name": "Ispsystem-As, Lu",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29302,
+      "name": "Hosting Services Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29311,
+      "name": "Asp4All Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29331,
+      "name": "Forsikringens Datacenter A/S",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29354,
+      "name": "Pce-Net Gmbh, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29452,
+      "name": "Secura Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29465,
+      "name": "Vcg-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29550,
+      "name": "Simplytransit, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29691,
+      "name": "Nine, Ch",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29713,
+      "name": "Reliable Hosting Services",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29748,
+      "name": "Carpathia Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29802,
+      "name": "Hivelocity Ventures Corp, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29838,
+      "name": "Atlantic Metro Communications, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29854,
+      "name": "Westhost, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29869,
+      "name": "Hostrocket.Com, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 29883,
+      "name": "Internet Hosting Servers",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30083,
+      "name": "Server4You Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30152,
+      "name": "Beyond Hosting, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30176,
+      "name": "Priority Colo Inc, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30235,
+      "name": "Twinservers Hosting Solutions Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30475,
+      "name": "Wehostwebsites.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30633,
+      "name": "Leaseweb Usa, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30693,
+      "name": "Eonix Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30849,
+      "name": "Research-And-Production Company Host Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30900,
+      "name": "Webworld-As T/A Web World Ireland, Ie",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 30998,
+      "name": "Nal-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31103,
+      "name": "Keyweb-As, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31240,
+      "name": "Jsc Hosting Telesystems Autonomous System",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31472,
+      "name": "Voicehost Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31590,
+      "name": "Rackhosting.Com Aps",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31659,
+      "name": "Below Zero Hosting Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31698,
+      "name": "As Number For Webhost.Ie Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 31898,
+      "name": "Oracle Corporation (Oracle Cloud Infrastructure)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 31981,
+      "name": "Bluetower Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32097,
+      "name": "Wholesale Internet, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32181,
+      "name": "Gigenet, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32244,
+      "name": "Liquid Web, L.L.C, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32275,
+      "name": "Unified Webhosting, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32306,
+      "name": "Host Nit Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32338,
+      "name": "Hostiserver Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32400,
+      "name": "Hostway Services, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32475,
+      "name": "Singlehop, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32489,
+      "name": "Amanah Tech Inc., Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32613,
+      "name": "Iweb Technologies Inc., Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32647,
+      "name": "Crucial Web Hosting, Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32740,
+      "name": "Sliqua Enterprise Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32780,
+      "name": "Hosting Services, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 32911,
+      "name": "Dedipower Managed Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33070,
+      "name": "Rackspace Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33083,
+      "name": "Axcelx Technologies Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33182,
+      "name": "Hostdime.Com, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33251,
+      "name": "Windstream Hosted Solutions, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33260,
+      "name": "Hostasaurus, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33302,
+      "name": "Data 102, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33322,
+      "name": "Network Data Center Host, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33330,
+      "name": "Cloudradium L.L.C, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33387,
+      "name": "Datashack, Lc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33438,
+      "name": "Highwinds Network Group, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33480,
+      "name": "Web Werks, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33552,
+      "name": "Fluid Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33569,
+      "name": "Allhostshop.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33724,
+      "name": "Volico, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33785,
+      "name": "Citynet, Eg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 33891,
+      "name": "Core-Backbone, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34305,
+      "name": "Baseip, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34432,
+      "name": "Profihost Ag",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34541,
+      "name": "Online Solutions Hosting Services",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34649,
+      "name": "Host365 Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34745,
+      "name": "Teleware Hosted Services Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34971,
+      "name": "Pdda-As, Cz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 34989,
+      "name": "Servetheworld-As, No",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35017,
+      "name": "Swiftway-As Netherlands, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35278,
+      "name": "Sprinthost.Ru Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35295,
+      "name": "Peterhost.Ru Hosting Provider At Spb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35366,
+      "name": "Isppro-As Euserv / Kos-Online / Keepfree, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35415,
+      "name": "Webzilla, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35467,
+      "name": "Datacenter Fryslan As",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35470,
+      "name": "Xl-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35662,
+      "name": "Redstation European Network, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35908,
+      "name": "Krypt Technologies, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35914,
+      "name": "Firehost, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35916,
+      "name": "Multacom Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 35974,
+      "name": "Carpathia Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36024,
+      "name": "Colo4, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36114,
+      "name": "Versaweb, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36236,
+      "name": "Host Virtual, Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36290,
+      "name": "The Cable Of St. Kitts, Kn",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36351,
+      "name": "Softlayer Technologies Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36352,
+      "name": "Colocrossing, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36408,
+      "name": "Cdnetworks Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36536,
+      "name": "Enterhost",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36666,
+      "name": "Globotech Communications, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36791,
+      "name": "Portland Internet Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36873,
+      "name": "Vnl1-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36887,
+      "name": "Dopc-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36920,
+      "name": "Kkon, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 36970,
+      "name": "Interswitch, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37018,
+      "name": "Galaxybb-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37088,
+      "name": "Vdt-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37153,
+      "name": "Hetzner, Za",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37170,
+      "name": "Unilag, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37209,
+      "name": "Hyperia, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37230,
+      "name": "Swifttalk, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37248,
+      "name": "Phase3Tel, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37269,
+      "name": "Icsl, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37280,
+      "name": "Bcl, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37308,
+      "name": "Coollink, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37347,
+      "name": "Ngcom, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37377,
+      "name": "Futurecom, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37472,
+      "name": "Nigcomsat, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37506,
+      "name": "Zinox, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37521,
+      "name": "Internet-Solutions-, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37540,
+      "name": "Winrock-, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37643,
+      "name": "Ambion-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37661,
+      "name": "Nrae1-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37692,
+      "name": "Netstack-As, Za",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 37714,
+      "name": "Bitflux, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 38001,
+      "name": "Newmedia Express Pte Ltd. Singapore Web Hosting Service Provider",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 38107,
+      "name": "Cdnetworks",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 38279,
+      "name": "Iomnet-As Isp/Hosting Service Provider Manila",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 38894,
+      "name": "Managenet Pty Ltd Hosting Services",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39020,
+      "name": "Spain, Es",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39326,
+      "name": "Hso-Group, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39351,
+      "name": "Esab-As, Se",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39392,
+      "name": "Supernetwork-As Bilejova 407, Cz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39451,
+      "name": "Melbourne Server Hosting Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39458,
+      "name": "Real Hosts Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39572,
+      "name": "Advancedhosters-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39704,
+      "name": "Cj2 Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39756,
+      "name": "Hostway Romania Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 39839,
+      "name": "Dk Hostmaster A/S",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40156,
+      "name": "The Optimal Link Corporation, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40244,
+      "name": "Turnkey Internet Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40281,
+      "name": "Qwk.Net Hosting, L.L.C.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40374,
+      "name": "High Density Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40438,
+      "name": "Canhost Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40539,
+      "name": "Hosting Consulting, Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40676,
+      "name": "Psychz Networks, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40715,
+      "name": "Datacenter.Bz, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40728,
+      "name": "Gearhost, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40819,
+      "name": "Vps Datacenter, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40824,
+      "name": "Wz Communications Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 40861,
+      "name": "Paradise Networks Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41062,
+      "name": "Prostohosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41079,
+      "name": "Superhost.Pl Sp. Z O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41369,
+      "name": "Datacenter Finland Oy",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41427,
+      "name": "Datacenter D.O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41562,
+      "name": "Host4All Sarl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41653,
+      "name": "Aquaray, Fr",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 41665,
+      "name": "Hosting-As Http://Hosting.Ua, Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42120,
+      "name": "Modit Datacenter Informatikai Es Szolgaltato Kft",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42160,
+      "name": "Lcpdco Lcp As Dc Oostkamp, Be",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42210,
+      "name": "Host Virtual, Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42244,
+      "name": "Hosting Operator Eserver.Ru Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42311,
+      "name": "Pghosting-Dresden-Backbone",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42331,
+      "name": "Pe Freehost",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42399,
+      "name": "Hosting Center Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42400,
+      "name": "Multihost It As",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42418,
+      "name": "Hostnordic A/S",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42442,
+      "name": "Adacor Hosting Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42465,
+      "name": "Anycast Network",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42473,
+      "name": "Anexia-As A-9020 Klagenfurt, At",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42612,
+      "name": "Asn De Dinahosting Sl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42622,
+      "name": "Teknik I Media Datacenter Stockholm Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42695,
+      "name": "City Network Hosting Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42699,
+      "name": "As Managedhosting.De Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42705,
+      "name": "Talia Provides Vsat Network And Hosting Services Worldwide.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42708,
+      "name": "Portlane Www.Portlane.Com, Se",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42730,
+      "name": "Evanzoas, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42776,
+      "name": "Hostel Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 42831,
+      "name": "Ukservers-As Uk Dedicated Servers, Hosting And Co-Location,",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43021,
+      "name": "Certit Hosting Handelsbolag",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43146,
+      "name": "Agava Ltd, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43198,
+      "name": "Outsourcery Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43289,
+      "name": "Trabia Trabia Network, Md",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43317,
+      "name": "Fishnet-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43350,
+      "name": "Nforce, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43472,
+      "name": "Hostingmax Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43541,
+      "name": "Vshosting S.R.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 43620,
+      "name": "Syan Limited Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 44050,
+      "name": "Pin-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 44066,
+      "name": "De-Firstcolo Www.First-Colo.Net, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 44398,
+      "name": "Tdc Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 44901,
+      "name": "Belcloud Hosting Corporation",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45102,
+      "name": "Cnnic-Alibaba-Cn-Net-Ap Alibaba (China) Technology Co., Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45152,
+      "name": "Zone Networks Pty Ltd, Managed Hosting Solutions",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45179,
+      "name": "Sitehost New Zealand",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45187,
+      "name": "Rackspace It Hosting As It Hosting Provider Hong Kong",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45201,
+      "name": "Bluecentral Pty Ltd Hosting Solutions.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45470,
+      "name": "Sg-8-To-Sg 8 To Infinity Pte Ltd, Sg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45481,
+      "name": "Digital Sense Data Centre Hosting Brisbane",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45486,
+      "name": "Hostcorp Internet",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45577,
+      "name": "Interhost Pacific Pty Ltd T/A Intervolve.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45671,
+      "name": "As45671-Net-Au Wholesale Services Provider, Au",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45693,
+      "name": "Indiagames Transit As Content Hosting Serivce India",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45815,
+      "name": "Hostcoin-As-In-Ap Esds Software Solution Pvt. Ltd., In",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 45887,
+      "name": "Gplhost Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46177,
+      "name": "Simplecdn Technologies, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46260,
+      "name": "Medhost, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46261,
+      "name": "Quickpacket, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46430,
+      "name": "Victon, Inc., Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46433,
+      "name": "Eboundhost.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46475,
+      "name": "Limestone Networks, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46562,
+      "name": "Total Server Solutions L.L.C., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46664,
+      "name": "Volumedrive, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46805,
+      "name": "Cachednet Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46816,
+      "name": "Directspace Networks, Llc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46844,
+      "name": "Sharktech, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46873,
+      "name": "Host Color",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 46945,
+      "name": "Elite Hosts, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47143,
+      "name": "Todayhost Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47161,
+      "name": "Kosmohost It Technologies Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47172,
+      "name": "Mart Jaco Van Santen Trading As Greenhost Vof",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47205,
+      "name": "Uab Hostex",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47328,
+      "name": "Tri-As, Es",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47385,
+      "name": "Hosting Center Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47447,
+      "name": "Ttm, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47549,
+      "name": "Hosting Systems Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47577,
+      "name": "Righthosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47583,
+      "name": "Hostinger International Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47588,
+      "name": "Telenetronics-As, Rs",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 47625,
+      "name": "Paul David Hughes Trading As Hosting Systems",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48031,
+      "name": "Xserver.Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48093,
+      "name": "Webland Hosting Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48446,
+      "name": "Hostersi Sp. Z O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48812,
+      "name": "Datacenter Noord Bv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48825,
+      "name": "Fast2Host Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 48896,
+      "name": "Dhosting.Pl Sp. Z O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49313,
+      "name": "Seva-Host Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49349,
+      "name": "Dotsi, Pt",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49453,
+      "name": "Globallayer, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49485,
+      "name": "High Availability Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49505,
+      "name": "Selectel, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49532,
+      "name": "Serverhub-, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49544,
+      "name": "I3Dnet, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49693,
+      "name": "Best-Hoster Group Co. Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49815,
+      "name": "Host2 Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49834,
+      "name": "Best Hosting Company Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49949,
+      "name": "24 Solutions Hosting Services Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 49981,
+      "name": "Worldstream, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50297,
+      "name": "Infium, Ua",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50465,
+      "name": "Iqhost Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50608,
+      "name": "Ventelo Hosting As",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50613,
+      "name": "Thordc-As, Is",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50655,
+      "name": "Its Hosted",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50673,
+      "name": "Serverius-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50872,
+      "name": "Localhost D.O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50915,
+      "name": "S.C. Everhost S.R.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50926,
+      "name": "Infortelecom Hosting, S.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50968,
+      "name": "Hostmaster, Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 50986,
+      "name": "Excellent Hosting Sweden Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51050,
+      "name": "H4Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51109,
+      "name": "Camelhost Sia",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51159,
+      "name": "Thinksystemsuk-Asn, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51167,
+      "name": "Contabo GmbH",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 51191,
+      "name": "Xirra, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51241,
+      "name": "Iran Post Company-Tehran Datacenter",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51248,
+      "name": "Host-Telecom.Com S.R.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51290,
+      "name": "Hosteam S.C. Tomasz Groszewski Bartosz Waszak Lukasz Groszewski",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51294,
+      "name": "Hubara Hosting Solutions S.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51395,
+      "name": "As-Softplus, Ch",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51430,
+      "name": "Altushost-Net, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51447,
+      "name": "Rootlayer Web Services Ltd, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51698,
+      "name": "Activehost Ru Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51731,
+      "name": "Gtt-As, Cz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51765,
+      "name": "Aseuhost, Fi",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 51852,
+      "name": "Pli-As, Ch",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52048,
+      "name": "Dataclub, Lv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52173,
+      "name": "Makonix, Lv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52219,
+      "name": "Routernetworks, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52236,
+      "name": "G2Khosting S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52270,
+      "name": "X-Host Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52321,
+      "name": "Fideicomiso De AdministracióN Datacenter Capitalinas",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52335,
+      "name": "Colombia Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52347,
+      "name": "Hostclick, De Duca Graciela Mirta",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52465,
+      "name": "Wnet Internet Y Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52674,
+      "name": "Datacenter Ltda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 52925,
+      "name": "Ascenty Datacenters Locacao E Servicos Ltda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53013,
+      "name": "Wix Net Do Brasil Ltda, Br",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53055,
+      "name": "Hostdime.Com.Br Data Center",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53057,
+      "name": "Redehost Internet Ltda.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53101,
+      "name": "Datacenter E Provedores Ltda-Me",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53221,
+      "name": "Internet Datacenter",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53225,
+      "name": "Datacenter",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53281,
+      "name": "Clearpath Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53332,
+      "name": "C2Hosting, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53340,
+      "name": "Vegasnap, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53342,
+      "name": "All Nine Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53370,
+      "name": "Dotcom Host",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53559,
+      "name": "Anonymizer Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53589,
+      "name": "Planethoster",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53597,
+      "name": "Hoyos Consulting Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53667,
+      "name": "Frantech Solutions, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53755,
+      "name": "Input Output Flood Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53850,
+      "name": "Gorillaservers, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53889,
+      "name": "Micfo, Llc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53914,
+      "name": "Genesis Hosting Solutions, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 53918,
+      "name": "Host Hotels And Resorts, L.P.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54104,
+      "name": "Netdna, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54203,
+      "name": "Reliablehosting.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54290,
+      "name": "Hostwinds Llc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54334,
+      "name": "Roya Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54455,
+      "name": "Madeit Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54489,
+      "name": "Corespace, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54500,
+      "name": "Egihosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54527,
+      "name": "Astute Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54540,
+      "name": "Incero Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54555,
+      "name": "Host Duplex, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54641,
+      "name": "Inmotion Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54817,
+      "name": "Alden Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54825,
+      "name": "Packet Host, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 54839,
+      "name": "Lowest Host/Empire Technology Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55051,
+      "name": "Eboundhost.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55225,
+      "name": "Velia.Net (Usa) Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55229,
+      "name": "White Sands Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55286,
+      "name": "B2 Net Solutions Inc., Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55293,
+      "name": "A2 Hosting, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55536,
+      "name": "Pswitch-Hk Pacswitch Ip Network, Hk",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55720,
+      "name": "Gigabit Hosting Sdn Bhd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55761,
+      "name": "Colocation Hosting Sdn Bhd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55799,
+      "name": "Hostemo Technology Sdn Bhd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55933,
+      "name": "Cloudie-As-Ap Cloudie Limited, Hk",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 55967,
+      "name": "Cnnic-Baidu-Ap Beijing Baidu Netcom Science And Technology C",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56106,
+      "name": "Hosting Provider Australia",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56110,
+      "name": "Hostrightnow Technologies India Pvt Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56322,
+      "name": "Serverastra-As, Hu",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56617,
+      "name": "Sia Vps Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56630,
+      "name": "Melbicom-Eu-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56732,
+      "name": "Hostinet As",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56784,
+      "name": "Limited Liability Company Multihost Msk",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56799,
+      "name": "Jordens Datacenter Nv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 56934,
+      "name": "Sologigabit-As, Es",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57043,
+      "name": "Hostkey-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57169,
+      "name": "Edis-As-Eu, At",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57230,
+      "name": "Ariawebco-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57286,
+      "name": "Gigas Hosting S.A.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57345,
+      "name": "Adm-Host Di Ratti Alessandro",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57363,
+      "name": "Cdnvideo Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57669,
+      "name": "Dedipower Managed Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57682,
+      "name": "Tov Host Vds",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57752,
+      "name": "Normhost Sarl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57773,
+      "name": "Hostingbit Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57858,
+      "name": "As57858, Ee",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 57879,
+      "name": "Sfip84 Hosting Und Mehr Ug Haftungsbeschraenkt",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58073,
+      "name": "Yisp-As, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58113,
+      "name": "Lir Datacenter Telecom Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58305,
+      "name": "Syn, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58667,
+      "name": "Smartnet Hosting And Connectivity",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58797,
+      "name": "Carpathia Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58922,
+      "name": "Microchannel Hosting Pty Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 58936,
+      "name": "Managed Hosted Applications Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59135,
+      "name": "Pt Dapur Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59253,
+      "name": "Lsw-Sg Leaseweb Asia Pacific Pte. Ltd., Sg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59349,
+      "name": "Gmo-Z-Com Gmo-Z.Com Pte. Ltd., Sg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59432,
+      "name": "Ginernet, Es",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59504,
+      "name": "Cybertech-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59554,
+      "name": "Datacenter Groningen B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59615,
+      "name": "Cloud Hosting Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59632,
+      "name": "Sc Pidgin Host Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59677,
+      "name": "Llc Kras-Host",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59705,
+      "name": "Pobox Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59729,
+      "name": "Itl-, Bg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59764,
+      "name": "Atlantic-Net, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59791,
+      "name": "Linqhost B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59795,
+      "name": "Securitylayer Hosting Solutions Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59816,
+      "name": "Safe Hosts Internet Llp",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 59854,
+      "name": "Top Level Hosting Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60011,
+      "name": "Bhost, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60068,
+      "name": "Cdn77, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60117,
+      "name": "Host Sailor Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60118,
+      "name": "Alistar-As, Ro",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60404,
+      "name": "Liteserver, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60476,
+      "name": "Mrg Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60485,
+      "name": "As-60485, Ee",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60505,
+      "name": "Telenet-Sljudjanka-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60558,
+      "name": "Securedservers-, Eu",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60567,
+      "name": "Dataclub-, Se",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60739,
+      "name": "Server Centre Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60781,
+      "name": "Leaseweb-Nl Netherlands, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 60800,
+      "name": "Netwise Hosting Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61102,
+      "name": "Interhost Communication Solutions Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61107,
+      "name": "Universal Cdn (Cyprus) Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61147,
+      "name": "Callhosted B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61157,
+      "name": "Plusserver-Asn1, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61280,
+      "name": "By Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61317,
+      "name": "Asdetuk Http://Www.Host1Plus.Com, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61412,
+      "name": "Bunkerinfra Datacenters Bv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 61440,
+      "name": "Digital Energy Technologies Chile Spa, Cl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62026,
+      "name": "Skyparkcdn Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62049,
+      "name": "Penta Corporate Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62071,
+      "name": "Datahost Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62082,
+      "name": "Hostland Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62088,
+      "name": "Sinarohost Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62217,
+      "name": "Vooservers, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62240,
+      "name": "Clouvider London, United Kingdom, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62282,
+      "name": "Rackray Uab Rakrejus, Lt",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62310,
+      "name": "Managedhosting.De Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62370,
+      "name": "Snel, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62471,
+      "name": "Supremebytes, Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62540,
+      "name": "Drake Holdings Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62563,
+      "name": "Globaltelehost Corp.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62567,
+      "name": "Digital Ocean, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62605,
+      "name": "Brain Host, Llc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62651,
+      "name": "Reliablehosting.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62756,
+      "name": "Hostrocket.Com, Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62838,
+      "name": "Reprise Hosting",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 62899,
+      "name": "Clarity Web Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63008,
+      "name": "Contina, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63018,
+      "name": "Us Dedicated, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63119,
+      "name": "Netirons, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63128,
+      "name": "Reliablehosting.Com",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63129,
+      "name": "Dl Host",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63199,
+      "name": "Capitalonline Data Service Co.,Ltd, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63213,
+      "name": "Astute Hosting Inc.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63473,
+      "name": "Hosthatch, Inc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63916,
+      "name": "Rsh Hosting Network",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 63949,
+      "name": "Linode, LLC (Akamai Technologies)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 64245,
+      "name": "Digitalfyre Internet Solutions, Llc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 64484,
+      "name": "Asdmzhost, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132070,
+      "name": "Interhost Pacific Pty Ltd T/A Intervolve.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132071,
+      "name": "Interhost Pacific Pty Ltd T/A Intervolve",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132225,
+      "name": "Hosted Continuity Pty Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132425,
+      "name": "Apc Hosting Pte Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132509,
+      "name": "Digiweb Advanced Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132717,
+      "name": "Nxtgen Datacenter & Cloud Technologies Pvt. Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132779,
+      "name": "Rackbank Datacenters Private Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132816,
+      "name": "Simplercloud-As-Ap Simplercloud Pte Ltd, Sg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 132869,
+      "name": "Dedicated-Hosting Solutions",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133120,
+      "name": "Hosted Network Pty. Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133143,
+      "name": "Medihost Solutions Pty Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133229,
+      "name": "Host Palace Internet Services",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133296,
+      "name": "Webwerks-As-In Web Werks India Pvt. Ltd., In",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133393,
+      "name": "Naki Host Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133480,
+      "name": "Intergrid-As-Ap Intergrid Group Pty Ltd, Au",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 133752,
+      "name": "Lsw-Hk Leaseweb Asia Pacific Pte. Ltd., Hk",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 134451,
+      "name": "Nme-Indonesia-As-Ap Newmedia Express Pte Ltd, Id",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 135822,
+      "name": "Ovi Hosting Pvt Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 136258,
+      "name": "Oneprovider-As Brainstorm Network, Inc, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 196645,
+      "name": "Hostpro Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 196678,
+      "name": "Ooo Hosterov",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 196745,
+      "name": "Datacenta Hosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 196827,
+      "name": "Credocom Hosting Aps",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197155,
+      "name": "Artnet, Pl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197328,
+      "name": "Inetltd, Tr",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197372,
+      "name": "Nma Hosting Solutions Bv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197395,
+      "name": "Ark B Hosting Bv",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197439,
+      "name": "Sylon Hosting Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197648,
+      "name": "Mega Host Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197902,
+      "name": "Hostnet B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 197914,
+      "name": "Stockho Hosting Sarl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198047,
+      "name": "Uk Webhosting Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198153,
+      "name": "As Seidor Datacenter Santander",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198171,
+      "name": "Hosting90 Systems S.R.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198310,
+      "name": "Pallada-As, Ru",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198313,
+      "name": "Systemhost Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198347,
+      "name": "Game-Hosting Gh Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198375,
+      "name": "Inulogic Sarl, Fr",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198414,
+      "name": "Biznes-Host.Pl Sp. Z O.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198432,
+      "name": "Ipcore Datacenters S.L",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198651,
+      "name": "Hostline, Uab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 198968,
+      "name": "Cyberneticos Hosting Sl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199129,
+      "name": "Next Point Host Eood.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199213,
+      "name": "Venzo Hosting A/S",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199481,
+      "name": "K3 Hosting Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199653,
+      "name": "Arubafr-As, Fr",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199733,
+      "name": "Extrahost Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199847,
+      "name": "Sorta-Hosting-Smllc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199883,
+      "name": "Arubacloudltd-Asn, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199990,
+      "name": "Localhost As",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 199997,
+      "name": "Ippon Hosting Sarl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200000,
+      "name": "Hosting Ukraine Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200019,
+      "name": "Alexhost Srl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200039,
+      "name": "Hydracom-As, Gb",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200147,
+      "name": "Hosting Techniques Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200532,
+      "name": "Llp Kompaniya Hoster.Kz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 200904,
+      "name": "Foxcloud Llp",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201011,
+      "name": "Netzbetrieb-Gmbh, De",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201200,
+      "name": "Superhosting.Bg Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201449,
+      "name": "Servidor, Virtualizacao, Cluster, Datacenters E Telecomunicacoes",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201525,
+      "name": "Hz-Ca-As, Bg",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201553,
+      "name": "Excom Cloud S.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201597,
+      "name": "Ne-It Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201630,
+      "name": "Qhoster Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201634,
+      "name": "Ingram Micro Hosting B.V.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201670,
+      "name": "Novahosting Ltd.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201702,
+      "name": "Skhosting.Eu S.R.O.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201709,
+      "name": "Hands Hanse Datacenter Services Gmbh",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201862,
+      "name": "Vmhosts Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 201983,
+      "name": "Ansluten Hosting I Sverige Ab",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 202023,
+      "name": "Llhost Inc",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 202053,
+      "name": "Upcloud, Fi",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 202118,
+      "name": "Go Hosting S.P.R.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 202836,
+      "name": "-Reserved As-, Zz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 203523,
+      "name": "Virtono-Networks, Ro",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 203629,
+      "name": "Terrahost_As, No",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 204196,
+      "name": "Abelohost, Nl",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 206898,
+      "name": "Server Hosting Pty Ltd",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 209242,
+      "name": "Cloudflare London, LLC",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 212238,
+      "name": "Datacamp Limited",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 262170,
+      "name": "Visualhosting.Net",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 262287,
+      "name": "Maxihost Hospedagem De Sites Ltda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 262603,
+      "name": "Internet E Web Hosting Serv De Informatica Ltda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 262978,
+      "name": "Centro De Tecnologia Armazem Datacenter Ltda.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 262990,
+      "name": "Center Hosting Tecnologia Eireli",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 263032,
+      "name": "Empire Host",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 263093,
+      "name": "Hostgator Brasil Hospedagem E Suporte Tecnico Ltda",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 263237,
+      "name": "Host E.I.R.L.",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 327705,
+      "name": "Futa, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 327784,
+      "name": "Fidelity-Bank, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 327813,
+      "name": "Web4Africa, Za",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 327942,
+      "name": "Landmark-University, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 328035,
+      "name": "Zeta-Web-Nigeria-As, Ng",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 393326,
+      "name": "Hosting4Biz",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 394256,
+      "name": "Tech Futures Interactive Inc., Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 394330,
+      "name": "Ltd Broadband Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 394380,
+      "name": "Leaseweb Usa, Inc., Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 395089,
+      "name": "Hextet Systems, Ca",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 395111,
+      "name": "Kvchosting.Com Llc, Us",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 395978,
+      "name": "Unknown",
+      "source": "brianhama/bad-asn-list"
+    },
+    {
+      "asn": 396982,
+      "name": "Google LLC (Google Cloud)",
+      "source": "public ASN registration (bgp.he.net / PeeringDB)"
+    },
+    {
+      "asn": 398779,
+      "name": "Acehost",
+      "source": "brianhama/bad-asn-list"
+    }
+  ]
+}
