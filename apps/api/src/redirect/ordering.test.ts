@@ -319,12 +319,15 @@ describe('redirect -> enqueue ordering (T2.4.3) [INV-1]', () => {
     expect(server.addCalls).toBe(0);
   });
 
-  it('an unencodable destination 404s via sendLinkRedirect itself and enqueues nothing', async () => {
+  it('an unencodable destination 404s via handleLinkTarget and enqueues nothing', async () => {
     const BAD_SLUG = 'bad-destination';
     // A lone, unpaired UTF-16 surrogate — encodeDestinationForHeader's own
-    // `null` case (middleware.ts, T2.4.1 fix round 2): there is no valid
-    // Location for this destination, so sendLinkRedirect itself 404s
-    // instead of returning a 307.
+    // `null` case (redirect-response.ts). There is no valid Location for
+    // this destination: sendLinkRedirect (T2.5.3 fix round 1) reports that
+    // by returning `false` rather than answering the request itself, and
+    // handleLinkTarget (middleware.ts) is what actually 404s here — this
+    // test only cares about status/enqueue, not the response body, which
+    // not-found-routing.test.ts covers.
     const unencodableDestination = `https://example.test/x${String.fromCharCode(0xd800)}x`;
     const server = await buildServer(() => Promise.resolve('job-1'), {
       resolveLink: async (tenantId, slug) =>

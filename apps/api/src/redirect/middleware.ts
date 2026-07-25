@@ -35,13 +35,18 @@ import type { ResolveTenant } from './resolve-tenant';
 // composition (`handleLinkTarget`, below). Everything else here is still
 // a LATER task, not a bug:
 //   - T2.5.3 wires renderNotFound (T2.5.2) into every terminal 404 this
-//     file decides (`not-ours` excepted, which never 404s at all) —
-//     `sendNotFound`, below, is the one call site. The single exception:
-//     an unencodable destination still gets a bare, bodyless 404, because
-//     that response is sent entirely inside sendLinkRedirect
-//     (./redirect-response.ts) before handleLinkTarget regains control —
-//     see sendNotFound's own doc comment for why that file stays
-//     untouched.
+//     file decides (`not-ours` excepted, which never 404s at all) — no
+//     exceptions. `sendNotFound`, below, is the ONLY call site that ever
+//     finalizes a response on this path. [fix round 1] The first pass of
+//     this task left one outcome unwired — an unencodable destination,
+//     answered entirely inside sendLinkRedirect (./redirect-response.ts)
+//     before this file regained control to attach a body — flagged in
+//     review against S2.5's own "dark island styling in ALL cases"
+//     criterion. Closed by changing sendLinkRedirect's OWN contract: it
+//     now returns a boolean instead of finalizing the response itself on
+//     failure, so `handleLinkTarget` (below) can route that outcome
+//     through `sendNotFound` too. See that function's call site for the
+//     detail.
 //   - T2.4.4 replaced the former `logEnqueueFailurePlaceholder` with
 //     enqueue.ts's real, redacting `createLogEnqueueFailure` — see
 //     `handleLinkTarget`'s own comment for the wiring.
@@ -224,23 +229,26 @@ export interface RedirectMiddlewareDeps {
 }
 
 /**
- * Terminal 404 shape for every branch the redirect middleware itself
- * decides (i.e. everything except a real 'link' hit's own 307). T2.5.3's
- * single call site: replaces the bare `res.status(404).end()` every one
- * of these branches used to send with S2.5's branded document (T2.5.2) —
- * status and `Cache-Control` are unchanged from before this task; the
- * body and `Content-Type` are new. `slug` is whatever the CALLER decided
- * this branch should reflect (see this function's call sites, and the
- * file header's own note on `handleLinkTarget`'s branches) — always the
- * RAW, unescaped value: renderNotFound (not-found.ts) runs it through
+ * Terminal 404 shape for EVERY branch the redirect path ever answers with
+ * a 404 (i.e. everything except a real 'link' hit's own 307) — the ONLY
+ * call site that finalizes a non-307 response anywhere in this file.
+ * Replaces the bare `res.status(404).end()` every one of these branches
+ * used to send with S2.5's branded document (T2.5.2) — status and
+ * `Cache-Control` are unchanged from before T2.5.3; the body and
+ * `Content-Type` are new. `slug` is whatever the CALLER decided this
+ * branch should reflect (see this function's call sites, and the file
+ * header's own note on `handleLinkTarget`'s branches) — always the RAW,
+ * unescaped value: renderNotFound (not-found.ts) runs it through
  * escapeHtml internally, and running it through a second escaper here
  * would double-escape it.
  *
- * Does NOT cover the unencodable-destination outcome inside
- * sendLinkRedirect (./redirect-response.ts): that function already calls
- * `res.status(404).end()` with no body of its own before handleLinkTarget
- * regains control, and this task's file list does not include that
- * module — see the file header's own note on this gap.
+ * [fix round 1] Now covers the unencodable-destination outcome too:
+ * sendLinkRedirect (./redirect-response.ts) used to finalize that
+ * response itself, leaving this function with nothing left to attach a
+ * body to by the time handleLinkTarget regained control. It now returns
+ * `false` on that failure instead of touching `res` at all, so
+ * handleLinkTarget's own call site (below) can reach this same function —
+ * see that call site for the detail.
  */
 function sendNotFound(res: Response, renderNotFound: RenderNotFound, slug: string): void {
   res.set('Cache-Control', 'no-store');
@@ -621,25 +629,24 @@ async function handleLinkTarget(
   // a guarantee this guard makes. Using the validated string is what
   // makes "validated" and "served" provably the same value, independent
   // of that incidental behavior.
-  sendLinkRedirect(res, destinationCheck.data);
-  if (res.statusCode !== 307) {
-    // sendLinkRedirect itself 404'd: an unencodable destination
-    // (encodeDestinationForHeader's own `null` case, ./redirect-response.ts).
-    // No successful redirect happened, so — same reasoning as the
-    // link-miss branch above — there is nothing honest to enqueue.
+  const redirected = sendLinkRedirect(res, destinationCheck.data);
+  if (!redirected) {
+    // An unencodable destination (encodeDestinationForHeader's own `null`
+    // case, ./redirect-response.ts) — no successful redirect happened, so
+    // — same reasoning as the link-miss branch above — there is nothing
+    // honest to enqueue.
     //
-    // [T2.5.3, reported gap] This is the ONE terminal 404 on the redirect
-    // path that does NOT get S2.5's branded body: by the time control
-    // returns here, sendLinkRedirect has already called
-    // `res.status(404).end()` with no body of its own — the response is
-    // closed, and there is nothing left to attach a body to. Giving this
-    // outcome the branded document would mean changing sendLinkRedirect's
-    // own contract (e.g. exporting its encode check so this function
-    // could decide the 404 itself, ahead of calling it), which touches
-    // ./redirect-response.ts — a file outside this task's own `files`
-    // line, and one the epic's review culture has already gone several
-    // rounds on (see that file's own header). Left as a named, tested gap
-    // (not-found-routing.test.ts) rather than silently worked around.
+    // [T2.5.3 fix round 1] Routed through the SAME sendNotFound every
+    // other terminal branch in this function already uses — this used to
+    // be the one outcome that fell through to a bare, bodyless 404
+    // because sendLinkRedirect finalized the response itself before this
+    // line ever ran (see this task's own T2.5.3-report.md, "known gap",
+    // and redirect-response.ts's own header for the fix). `res` is
+    // guaranteed untouched here when `redirected` is `false` — that is
+    // sendLinkRedirect's own contract now — so sendNotFound is free to
+    // set every header and write the body exactly as it does for every
+    // sibling branch.
+    sendNotFound(res, renderNotFound, slug);
     return;
   }
 

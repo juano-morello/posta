@@ -51,18 +51,19 @@ import type { ResolveTenant } from './resolve-tenant';
 //     interesting fact about this branch is the HOST, and the path that
 //     happened to follow it says nothing about that.
 //
-// [gap, reported rather than silently folded in] A SEVENTH terminal
-// outcome exists and is NOT wired by this task: an unencodable
+// [T2.5.3 fix round 1] A SEVENTH terminal outcome — an unencodable
 // destination (a lone UTF-16 surrogate embedded in an otherwise-valid
-// destination) is answered entirely inside sendLinkRedirect
-// (./redirect-response.ts) with a bare `res.status(404).end()` — no body,
-// no Content-Type — before handleLinkTarget (middleware.ts) ever regains
-// control to attach one. Fixing that would mean changing
-// sendLinkRedirect's own contract (exporting its encode check, or having
-// it report failure instead of ending the response itself), which is a
-// file outside this task's `files` line and outside the "keep the change
-// minimal" instruction — this suite tests and documents that gap instead
-// of quietly leaving it untested.
+// destination) — used to be answered entirely inside sendLinkRedirect
+// (./redirect-response.ts) with a bare `res.status(404).end()`, before
+// handleLinkTarget (middleware.ts) ever regained control to attach a
+// body. The review round that followed this task's first pass flagged
+// that as an "in all cases" gap against S2.5's own acceptance criterion
+// (dark-island styling in ALL cases) and asked for it closed: sendLinkRedirect
+// now returns a boolean instead of finalizing the response itself on
+// failure, so handleLinkTarget can route this outcome through the SAME
+// sendNotFound every other terminal branch uses. The describe block below
+// (previously "known gap") now asserts the branded body IS served here,
+// so the gap cannot silently reopen.
 
 const DOMAIN = 'example.test';
 const HANDLE = 'juano';
@@ -292,22 +293,18 @@ describe('additional terminal branches this task also wires (not named by the br
   });
 });
 
-describe('known gap — deliberately NOT wired by this task (see file header)', () => {
-  it('an unencodable destination still gets a bare 404 with no body, because sendLinkRedirect ends the response itself', async () => {
+describe('the formerly-unwired seventh branch (T2.5.3 fix round 1) — no case is unbranded anymore', () => {
+  it('an unencodable destination now gets the SAME branded body every other branch uses', async () => {
     const server = await buildServer();
     openServers.push(server);
 
-    const response = await requestPath(server.port, `${HANDLE}.${DOMAIN}`, `/${UNENCODABLE_SLUG}`);
-
-    expect(response.status).toBe(404);
-    expect(response.headers['cache-control']).toBe('no-store');
-    // NOT the branded document: sendLinkRedirect (./redirect-response.ts)
-    // already called res.status(404).end() with no body and no
-    // Content-Type by the time handleLinkTarget could attach either.
-    expect(response.body).toBe('');
-    expect(response.headers['content-type']).toBeUndefined();
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(server.addCalls).toBe(0);
+    // sendLinkRedirect (./redirect-response.ts) now returns `false` for
+    // this destination instead of ending the response itself, so
+    // handleLinkTarget's own sendNotFound call produces the identical
+    // document, headers and status every other terminal branch in this
+    // file already gets — asserted with the SAME shared helper, not a
+    // one-off inline check, specifically so this case cannot drift from
+    // the others again.
+    await expectBrandedNotFound(server, `${HANDLE}.${DOMAIN}`, `/${UNENCODABLE_SLUG}`, UNENCODABLE_SLUG);
   });
 });

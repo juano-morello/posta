@@ -5,12 +5,27 @@ import type { Response } from 'express';
 // middleware.ts's handleLinkTarget with the resolved link's `destination`
 // the instant resolveLink returns a hit; enqueueing happens strictly
 // AFTER, never before — see handleLinkTarget's own header comment for the
-// full composition and why. [T2.4.1 fix round 2] This function does not
-// GUARANTEE a 307 — a destination that cannot be turned into a valid
-// Location header (see the `null` case below) ends in a 404 instead.
-// handleLinkTarget checks `res.statusCode` after calling this function to
-// tell the two outcomes apart, since this function's own return type
-// carries no signal of which one happened.
+// full composition and why. This function does not GUARANTEE a 307 — a
+// destination that cannot be turned into a valid Location header (see the
+// `null` case below) has nothing to redirect to.
+//
+// [T2.5.3 fix round 1] Earlier (T2.4.1 fix round 2 through T2.5.3's first
+// pass), this function answered that failure itself with a bare
+// `res.status(404).end()`, and handleLinkTarget told the two outcomes
+// apart by checking `res.statusCode` afterward. That made this the ONE
+// terminal 404 on the redirect path that never got S2.5's branded
+// document (T2.5.2): by the time handleLinkTarget regained control, this
+// function had already closed the response, with nothing left to attach
+// a body to — a real gap against S2.5's own acceptance criterion ("dark
+// island styling in ALL cases"), caught in review. Fixed by moving the
+// decision to the caller: this function now returns `true` when it sent a
+// 307 and `false` when it sent NOTHING AT ALL (no status, no headers, no
+// `end()`), leaving handleLinkTarget free to call the exact same
+// `sendNotFound(res, renderNotFound, slug)` every other terminal branch on
+// this path already uses. This also completes a pattern rather than
+// introducing one: handleLinkTarget was already the sole writer of every
+// OTHER terminal response on this path; now it is the sole writer of all
+// of them, with no carve-out.
 //
 // [S2.4 fan-out fix round] Split out of middleware.ts once that file
 // crossed this epic's 800-line hard cap (T2.4.5's own story-level
@@ -25,7 +40,10 @@ import type { Response } from 'express';
 // `isHeaderSafeCodePoint`'s own comment), and they must stay together in
 // THIS module: splitting them across a file boundary is exactly how the
 // two could drift out of agreement with each other without either half
-// noticing.
+// noticing. [T2.5.3 fix round 1] Neither constant, nor the encode logic
+// that uses them, changes at all in this fix — only what happens to the
+// RESULT of that check (a return value instead of a self-written 404)
+// changes.
 //
 // `res.redirect(307, destination)` is deliberately NOT used here.
 // Express's res.redirect() — and res.location(), which it calls
@@ -49,25 +67,27 @@ import type { Response } from 'express';
 // own header setter, NOT res.location() — writes the header value
 // untouched, which is what redirect-response.test.ts's byte-identity
 // cases depend on.
-// [T2.4.1 fix round 2] A destination can fail to produce a valid Location
-// header at all (see encodeDestinationForHeader's `null` case, below) —
-// there is nothing to redirect TO in that case, so this ends in the same
-// bare 404 the middleware's own terminal branch uses (Cache-Control:
-// no-store, no body), rather than let an encoding failure surface as an
-// uncaught exception. `Cache-Control` is set once, up front, so it is
-// present on EITHER outcome — both are terminal responses that must
-// never be cached by an intermediary.
-export function sendLinkRedirect(res: Response, destination: string): void {
-  res.set('Cache-Control', 'no-store');
-
+/**
+ * Sends the 307, or reports that it could not. A destination that fails
+ * to produce a valid Location header (see encodeDestinationForHeader's
+ * `null` case, below) has nothing to redirect to — `false` is returned
+ * with `res` left COMPLETELY untouched (no status, no headers, no
+ * `end()`), so the caller (handleLinkTarget, middleware.ts) can decide
+ * the terminal response on its own, the same way it already decides
+ * every other 404 on this path. `true` means the 307 (Cache-Control,
+ * Location, status) has already been sent in full — the caller does
+ * nothing further.
+ */
+export function sendLinkRedirect(res: Response, destination: string): boolean {
   const encoded = encodeDestinationForHeader(destination);
   if (encoded === null) {
-    res.status(404).end();
-    return;
+    return false;
   }
 
+  res.set('Cache-Control', 'no-store');
   res.set('Location', encoded);
   res.status(307).end();
+  return true;
 }
 
 // [T2.4.1 fix round 1, CRITICAL] `zDestination` (packages/contracts/src/links.ts)
@@ -133,10 +153,12 @@ const HEADER_SAFE_DESTINATION_PATTERN = /^[\t\x20-\x7e\x80-\xff]*$/;
  * path: `zDestination` (`z.url()`) accepts
  * `String.fromCharCode(0xd800)` embedded in an otherwise-valid URL,
  * confirmed by hand. `sendLinkRedirect` treats `null` as "no valid
- * Location exists for this destination" and 404s rather than let the
- * exception escape and crash the request — this is a narrower, purely
- * mechanical fact ("this string cannot become a valid HTTP header
- * value"), not the malicious-URL-scheme concern T2.4.5's guard exists
+ * Location exists for this destination" and reports failure to ITS OWN
+ * caller (returns `false` — see that function's own doc comment, T2.5.3
+ * fix round 1) rather than let the exception escape and crash the
+ * request — this is a narrower, purely mechanical fact ("this string
+ * cannot become a valid HTTP header value"), not the malicious-URL-scheme
+ * concern T2.4.5's guard exists
  * for.
  *
  * The fast-path regex above doubles as the detector for this case with

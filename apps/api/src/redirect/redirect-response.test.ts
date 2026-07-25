@@ -146,6 +146,43 @@ describe('sendLinkRedirect', () => {
     expect(res.calls).toContain('set:Cache-Control');
     expect(res.calls).toContain('set:Location');
   });
+
+  // [T2.5.3 fix round 1] The return-value contract this file's whole
+  // "destinations outside the Latin-1 range" describe block (below)
+  // depends on, isolated here as its own direct assertion rather than
+  // only implied by that block's real-server behavior: `true` on a
+  // destination that DID produce a Location, `false` on one that didn't.
+  it('returns true once it has sent the 307', () => {
+    const res = makeRes();
+
+    const redirected = sendLinkRedirect(res as never, DESTINATION_WITH_QUERY_AND_FRAGMENT);
+
+    expect(redirected).toBe(true);
+  });
+
+  // The other half of the same contract, and the one this fix round was
+  // actually about: on a destination with no valid Location
+  // (encodeDestinationForHeader's own `null` case — a lone unpaired
+  // surrogate, the same payload the real-server describe block below
+  // uses), sendLinkRedirect must leave `res` COMPLETELY untouched — no
+  // status, no header, no end() — so its caller (handleLinkTarget,
+  // middleware.ts) is free to decide the entire terminal response itself.
+  // `res.calls` being empty is the load-bearing assertion: this makeRes()
+  // double throws if set()/status() is called after end() (see its own
+  // doc comment), but an implementation that called set() or status()
+  // WITHOUT ever calling end() would not trip that guard — only an empty
+  // calls array proves nothing was written at all.
+  it('returns false and touches res not at all when the destination cannot be encoded', () => {
+    const unencodableDestination = `https://example.test/x${String.fromCharCode(0xd800)}x`;
+    const res = makeRes();
+
+    const redirected = sendLinkRedirect(res as never, unencodableDestination);
+
+    expect(redirected).toBe(false);
+    expect(res.calls).toEqual([]);
+    expect(res.statusCode).toBeUndefined();
+    expect(res.ended).toBe(false);
+  });
 });
 
 // [T2.4.1 fix round 1, CRITICAL] `zDestination` (packages/contracts/src/links.ts)
@@ -174,8 +211,19 @@ describe('sendLinkRedirect — destinations outside the Latin-1 range, against a
 
   beforeAll(async () => {
     const app = express();
+    // [T2.5.3 fix round 1] sendLinkRedirect no longer finalizes the
+    // response on a failed encode — it returns `false` and leaves `res`
+    // completely untouched, so its CALLER decides the terminal response
+    // (middleware.ts's handleLinkTarget calls the branded sendNotFound;
+    // this test harness, which has no reason to know about the 404 page,
+    // sends a plain one). The two ASSERTIONS this describe block makes
+    // for the surrogate case below — 404, no Location — are unchanged;
+    // only which line actually ends the response changed.
     app.get('/redirect', (_req, res) => {
-      sendLinkRedirect(res, destination);
+      const redirected = sendLinkRedirect(res, destination);
+      if (!redirected) {
+        res.status(404).end();
+      }
     });
     server = app.listen(0);
     await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -250,9 +298,11 @@ describe('sendLinkRedirect — destinations outside the Latin-1 range, against a
   // shape as the CJK/emoji case above, just arriving through a different
   // exception type that a try/catch around `res.setHeader` alone would
   // not have caught. There is no valid Location this destination can
-  // ever produce, so sendLinkRedirect must 404 — the same terminal
-  // branch an unresolvable link already takes — rather than let the
-  // exception escape and crash the request.
+  // ever produce, so sendLinkRedirect must report failure rather than let
+  // the exception escape and crash the request — [T2.5.3 fix round 1]
+  // this describe block's own route handler (above) is what turns that
+  // into the 404 this test observes; sendLinkRedirect itself only
+  // returns `false` now (see the dedicated contract test below).
   it('responds 404, not a crash, when the destination contains a lone unpaired surrogate that cannot be encoded', async () => {
     destination = `https://example.test/x${String.fromCharCode(0xd800)}x?a=1&b=2#frag`;
 
