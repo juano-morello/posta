@@ -12,6 +12,7 @@ import { makeRequestTargetParser } from './host';
 import {
   consoleErrorLogger,
   createHandleRootHitsCounter,
+  createOpenRedirectRejectedCounter,
   createRedirectMiddleware,
   type RedirectMiddlewareLogger,
 } from './middleware';
@@ -132,6 +133,7 @@ function buildServer(
       parseRequestTarget,
       logger: overrides.logger ?? consoleErrorLogger,
       handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
       resolveTenant: resolveTenantStub,
       resolveLink: overrides.resolveLink ?? resolveLinkStub,
       lookupNetwork: overrides.lookupNetwork ?? (() => ({ asn: null, country: null })),

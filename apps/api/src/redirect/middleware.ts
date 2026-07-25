@@ -1,6 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { Counter, type Registry } from 'prom-client';
-import type { CachedLink } from '@posta/contracts';
+import { zDestination, type CachedLink } from '@posta/contracts';
 import type { GetDailySalt, LookupNetwork } from '@posta/core';
 import { buildCapturePayload, computeVisitorHash, readClientIp, readSignals } from './capture';
 import { createLogEnqueueFailure, type EnqueueCapture, type LogEnqueueFailure } from './enqueue';
@@ -38,8 +38,9 @@ import type { ResolveTenant } from './resolve-tenant';
 //   - T2.4.4 replaced the former `logEnqueueFailurePlaceholder` with
 //     enqueue.ts's real, redacting `createLogEnqueueFailure` — see
 //     `handleLinkTarget`'s own comment for the wiring.
-//   - T2.4.5 adds a read-time open-redirect guard on the resolved
-//     destination, ahead of `sendLinkRedirect`.
+//   - T2.4.5 added the read-time open-redirect guard, ahead of
+//     `sendLinkRedirect` — see `handleLinkTarget`'s own comment for why it
+//     sits there and not one level down in resolve-link.ts.
 //   - T2.6.5 is where "reserved paths cost zero Redis GETs" becomes an
 //     assertion against a real client.
 // `reserved-path`, `reserved-handle`, `invalid-path` and `handle-root`
@@ -90,6 +91,42 @@ export function createHandleRootHitsCounter(registry?: Registry): Counter<string
       'always be zero: the Cloudflare Origin Rule (path == "/" -> Next) is supposed to ' +
       'route bio-page traffic to Next before it ever reaches here. Any non-zero value ' +
       'means that rule is misconfigured and real bio-page visitors are getting a 404.',
+    ...(registry ? { registers: [registry] } : {}),
+  });
+}
+
+export const OPEN_REDIRECT_REJECTED_COUNTER_NAME = 'posta_open_redirect_rejected_total';
+
+/**
+ * Builds the posta_open_redirect_rejected_total counter (T2.4.5
+ * [security]). Pass a dedicated `registry` in tests to avoid colliding
+ * with prom-client's shared global default registry — mirrors
+ * createHandleRootHitsCounter (above) and createEnqueueDroppedCounter's
+ * (enqueue.ts) identical shape.
+ *
+ * Every increment means the open-redirect guard in `handleLinkTarget`
+ * (below) refused to redirect a RESOLVED destination that failed
+ * `zDestination` — the exact same absolute-http(s) check T1.1.11 already
+ * enforces at write time. A destination that never passed that check
+ * reaching this guard means either the Redis cache or the Postgres
+ * `links` row was written to directly, bypassing every application-level
+ * validation this codebase has: a poisoned cache entry or a corrupt row,
+ * either one worth paging someone for. Unlike
+ * posta_enqueue_dropped_total (which trends up under ordinary
+ * backpressure and is expected to move), this number should be zero,
+ * always — any non-zero value is a genuine incident, not routine traffic.
+ */
+export function createOpenRedirectRejectedCounter(registry?: Registry): Counter<string> {
+  // `exactOptionalPropertyTypes` forbids passing `registers: undefined`
+  // explicitly — see createHandleRootHitsCounter's identical comment.
+  return new Counter({
+    name: OPEN_REDIRECT_REJECTED_COUNTER_NAME,
+    help:
+      'Count of resolved link destinations rejected by the read-time open-redirect guard ' +
+      '(T2.4.5) because they failed zDestination, the same absolute-http(s) check write-time ' +
+      'validation already enforces. Should always be zero — any non-zero value means a Redis ' +
+      'or Postgres value was written directly, bypassing every application-level check, and ' +
+      'is worth investigating immediately.',
     ...(registry ? { registers: [registry] } : {}),
   });
 }
@@ -145,6 +182,13 @@ export interface RedirectMiddlewareDeps {
    * in the same synchronous tick — see `handleLinkTarget`.
    */
   readonly enqueueCapture: EnqueueCapture;
+  /**
+   * T2.4.5 [security] — built once at boot via
+   * createOpenRedirectRejectedCounter — see main.ts. Incremented every
+   * time the read-time open-redirect guard (`handleLinkTarget`, below)
+   * refuses to redirect a resolved destination that fails `zDestination`.
+   */
+  readonly openRedirectRejectedCounter: Counter<string>;
 }
 
 /**
@@ -306,7 +350,13 @@ async function handleLinkTarget(
   res: Response,
   deps: Pick<
     RedirectMiddlewareDeps,
-    'resolveTenant' | 'resolveLink' | 'lookupNetwork' | 'getDailySalt' | 'enqueueCapture' | 'logger'
+    | 'resolveTenant'
+    | 'resolveLink'
+    | 'lookupNetwork'
+    | 'getDailySalt'
+    | 'enqueueCapture'
+    | 'logger'
+    | 'openRedirectRejectedCounter'
   > & {
     /** T2.4.4 — built once at boot by `createRedirectMiddleware` above,
      * via enqueue.ts's `createLogEnqueueFailure(logger)`. Not a
@@ -315,8 +365,16 @@ async function handleLinkTarget(
     readonly logEnqueueFailure: LogEnqueueFailure;
   },
 ): Promise<void> {
-  const { resolveTenant, resolveLink, lookupNetwork, getDailySalt, enqueueCapture, logger, logEnqueueFailure } =
-    deps;
+  const {
+    resolveTenant,
+    resolveLink,
+    lookupNetwork,
+    getDailySalt,
+    enqueueCapture,
+    logger,
+    logEnqueueFailure,
+    openRedirectRejectedCounter,
+  } = deps;
 
   let tenantId: string | null;
   let link: CachedLink | null;
@@ -357,6 +415,80 @@ async function handleLinkTarget(
       handle,
       slug,
     });
+    res.set('Cache-Control', 'no-store');
+    res.status(404).end();
+    return;
+  }
+
+  // T2.4.5 [security] — the read-time open-redirect guard. `link` here is
+  // the RESOLVED record handleLinkTarget is about to redirect to,
+  // regardless of which tier answered it: resolveLink (resolve-link.ts)
+  // composes a Redis cache hit and a Postgres fallback behind the exact
+  // same `CachedLink | null` return type, and by design this function
+  // never learns which one it got (see resolve-link.ts's own header for
+  // why that composition is the hot path's single entry point). Validation
+  // on WRITE (T1.1.11's `createLinkSchema`, apps/api's link-creation
+  // endpoint) is not enough on its own: it only constrains what THIS
+  // application ever writes, and both stores have a second writer —
+  // anyone with `redis-cli`, a compromised worker, or direct SQL access
+  // can place a row or cache entry this check never saw.
+  //
+  // The two stores are NOT equally exposed here, though, and this guard's
+  // placement reflects that rather than pretending otherwise:
+  //   - Redis IS already covered. Every `link:{tenant}:{slug}` read goes
+  //     through packages/contracts/src/cache.ts's `parseCachedLink`
+  //     (T2.2.1), which runs the exact same `zDestination` check below and
+  //     folds a failure into an ordinary cache MISS before it ever
+  //     reaches resolveLink's return value — resolve-link.test.ts's own
+  //     "[security] a well-formed but schema-invalid payload" case proves
+  //     this. A destination poisoned directly in Redis therefore never
+  //     reaches this line as part of a non-null `link`.
+  //   - Postgres is NOT covered anywhere else. resolveLinkFromDb
+  //     (resolve-link.ts, T2.2.4) returns `resolveLinkBySlug`'s row by
+  //     STRUCTURAL CAST — a `SELECT` result assigned straight into
+  //     `CachedLink`'s shape, never run through `CachedLinkSchema` or
+  //     `zDestination`. The DB's own CHECK constraint (T1.1.5) only
+  //     enforces `^https?://`, which a `zDestination`-max-length-exceeding
+  //     destination or an `http`-prefixed-but-unparseable one both still
+  //     satisfy. This is the gap a prior security review flagged and this
+  //     task exists to close.
+  //
+  // Given that asymmetry, this check runs unconditionally on every 'link'
+  // request rather than living inside resolve-link.ts gated to the
+  // Postgres tier only: `handleLinkTarget` has no way to tell which tier
+  // answered without resolveLink's return type growing a source tag
+  // purely for this guard's benefit, which would ripple into every other
+  // caller of that composition for no behavioural gain. Running one
+  // `zDestination.safeParse` on an already-valid, Redis-sourced
+  // destination costs a single regex/URL-parse on a short string — not
+  // the "twice" this comment's own task brief warns against, which meant
+  // re-running `CachedLinkSchema`'s full object shape (link_id/tenant_id
+  // included) a second time, not this narrower, cheaper check. What this
+  // buys: ONE guard, unconditional, that stays correct even if
+  // `parseCachedLink`'s own protection is ever weakened — this is
+  // deliberately not "trust the Redis tier already checked it".
+  const destinationCheck = zDestination.safeParse(link.destination);
+  if (!destinationCheck.success) {
+    // [security] Never the destination itself — it is attacker-controlled
+    // content the instant it reached here by an unvalidated path, and may
+    // itself embed credentials or log-injection payloads. `link_id` is
+    // how an operator finds the offending row; the SCHEME (extracted
+    // without ever invoking `new URL()` on the untrusted string a second
+    // time — see describeRejectedScheme's own comment) is the diagnostic
+    // signal for what kind of attack this is.
+    logger.error(
+      'Resolved destination failed the read-time open-redirect guard; refusing to redirect. ' +
+        'A destination this deployment itself validates at write time should never reach ' +
+        'here — this means a Redis or Postgres value was written to directly, bypassing ' +
+        'every application-level check.',
+      { linkId: link.link_id, rejectedScheme: describeRejectedScheme(link.destination) },
+    );
+    openRedirectRejectedCounter.inc();
+    // Same terminal shape every other 404 on this path uses: no Location
+    // header is ever set (it never reaches sendLinkRedirect, below), and
+    // — same reasoning as the link-miss branch above — there is no
+    // meaningful click to record for a destination that cannot be served,
+    // so nothing is enqueued either.
     res.set('Cache-Control', 'no-store');
     res.status(404).end();
     return;
@@ -427,6 +559,46 @@ async function handleLinkTarget(
       slug,
     });
   }
+}
+
+// T2.4.5 [security] — a single capturing-group regex, matched against the
+// SCHEME grammar RFC 3986 §3.1 defines (a letter, then any run of
+// letters/digits/`+`/`-`/`.`, terminated by `:`), never against the
+// destination's own semantics. Deliberately NOT `new URL(destination)`:
+// that is exactly the WHATWG parse the guard above already ran (via
+// `zDestination`) and already knows failed — re-parsing an untrusted
+// string a second time to describe why it failed would be pointless work
+// on a path already producing a 404, and a `new URL()` failure carries no
+// extra diagnostic value `.protocol` wouldn't have given anyway. A plain
+// regex also has no failure mode of its own to guard against: unlike
+// `new URL()`, it cannot throw.
+const SCHEME_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+/**
+ * Describes ONLY the scheme of a rejected destination — never the
+ * destination itself — for the open-redirect guard's error log, above.
+ * Three shapes, each named distinctly so an operator reading the log
+ * doesn't have to guess:
+ *   - `javascript:alert(1)` / `data:text/html,x` -> `"javascript"` /
+ *     `"data"`: a real, dangerous scheme. This is the case the guard
+ *     exists for.
+ *   - `//evil.com` -> `"(protocol-relative)"`: no scheme at all, but the
+ *     `//` prefix is its own recognizable attack shape (inherits whatever
+ *     scheme the CURRENT page is loaded under), worth naming specifically
+ *     rather than folding into the generic "no scheme" case below.
+ *   - `/relative` (or anything else with no leading scheme and no `//`
+ *     prefix) -> `"(no scheme)"`.
+ * A destination that merely exceeds `zDestination`'s length bound, or is
+ * `http(s)`-prefixed but fails full URL parsing (both pass the DB's own
+ * loose `^https?://` CHECK constraint) still reports its real scheme
+ * (`"https"`, say) — accurate, and exactly what "the rejected scheme" the
+ * task brief asks for means for a destination whose scheme was never the
+ * problem.
+ */
+function describeRejectedScheme(destination: string): string {
+  if (destination.startsWith('//')) return '(protocol-relative)';
+  const match = SCHEME_PATTERN.exec(destination);
+  return match ? match[1] ?? '(no scheme)' : '(no scheme)';
 }
 
 // T2.4.1 [INV-3] — the response half of S2.4: given an already-resolved

@@ -13,6 +13,7 @@ import { makeRequestTargetParser } from './host';
 import {
   consoleErrorLogger,
   createHandleRootHitsCounter,
+  createOpenRedirectRejectedCounter,
   createRedirectMiddleware,
   HANDLE_ROOT_HITS_COUNTER_NAME,
 } from './middleware';
@@ -214,6 +215,7 @@ describe('createRedirectMiddleware — mounted ahead of the Nest router', () => 
         parseRequestTarget,
         logger: consoleErrorLogger,
         handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+        openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
         ...UNUSED_LINK_DEPS,
       }),
     );
@@ -306,6 +308,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     parseRequestTarget,
     logger: consoleErrorLogger,
     handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+    openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
     ...UNUSED_LINK_DEPS,
   });
 
@@ -350,6 +353,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
       parseRequestTarget,
       logger: consoleErrorLogger,
       handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
       ...UNUSED_LINK_DEPS,
       resolveTenant: async () => null, // unknown handle — no Postgres/Redis needed
     });
@@ -386,6 +390,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
       parseRequestTarget,
       logger,
       handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
       ...UNUSED_LINK_DEPS,
       resolveTenant: async () => {
         throw new Error('connect ECONNREFUSED postgresql://posta:s3cret@db:5432/posta');
@@ -461,17 +466,20 @@ describe('createRedirectMiddleware — handle-root alarm (T2.1.5)', () => {
 
   let registry: Registry;
   let handleRootHitsCounter: Counter<string>;
+  let openRedirectRejectedCounter: Counter<string>;
   let logger: { error: ReturnType<typeof vi.fn<LoggerErrorFn>> };
   let middleware: ReturnType<typeof createRedirectMiddleware>;
 
   beforeEach(() => {
     registry = new Registry();
     handleRootHitsCounter = createHandleRootHitsCounter(registry);
+    openRedirectRejectedCounter = createOpenRedirectRejectedCounter(registry);
     logger = { error: vi.fn<LoggerErrorFn>() };
     middleware = createRedirectMiddleware({
       parseRequestTarget,
       logger,
       handleRootHitsCounter,
+      openRedirectRejectedCounter,
       ...UNUSED_LINK_DEPS,
     });
   });
@@ -549,17 +557,20 @@ describe('createRedirectMiddleware — reserved paths short-circuit, no alarm (T
 
   let registry: Registry;
   let handleRootHitsCounter: Counter<string>;
+  let openRedirectRejectedCounter: Counter<string>;
   let logger: { error: ReturnType<typeof vi.fn<LoggerErrorFn>> };
   let middleware: ReturnType<typeof createRedirectMiddleware>;
 
   beforeEach(() => {
     registry = new Registry();
     handleRootHitsCounter = createHandleRootHitsCounter(registry);
+    openRedirectRejectedCounter = createOpenRedirectRejectedCounter(registry);
     logger = { error: vi.fn<LoggerErrorFn>() };
     middleware = createRedirectMiddleware({
       parseRequestTarget,
       logger,
       handleRootHitsCounter,
+      openRedirectRejectedCounter,
       ...UNUSED_LINK_DEPS,
     });
   });

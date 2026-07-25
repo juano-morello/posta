@@ -19,6 +19,7 @@ import { makeRequestTargetParser } from './redirect/host';
 import {
   consoleErrorLogger,
   createHandleRootHitsCounter,
+  createOpenRedirectRejectedCounter,
   createRedirectMiddleware,
 } from './redirect/middleware';
 import { consoleWarnLogger } from './redirect/resolve-redis';
@@ -72,6 +73,10 @@ async function bootstrap(): Promise<void> {
     reservedHandles: resolveReservedHandles(env.POSTA_RESERVED_HANDLES),
   });
   const handleRootHitsCounter = createHandleRootHitsCounter();
+  // T2.4.5 [security] — same "no registry override, prom-client's own
+  // shared default" treatment as handleRootHitsCounter above. Called
+  // exactly once, here, at boot.
+  const openRedirectRejectedCounter = createOpenRedirectRejectedCounter();
 
   // T2.4.3 [INV-1][INV-2] — the redirect hot path's remaining boot-time
   // dependencies: Postgres, the shared cache Redis client, the GeoIP
@@ -133,6 +138,7 @@ async function bootstrap(): Promise<void> {
       lookupNetwork,
       getDailySalt,
       enqueueCapture,
+      openRedirectRejectedCounter,
     }),
   );
 
