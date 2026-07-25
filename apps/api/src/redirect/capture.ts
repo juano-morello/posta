@@ -288,6 +288,41 @@ const VISITOR_HASH_LENGTH = 32;
 // asked, rather than silently reordering or altering the formula.
 const VISITOR_HASH_DELIMITER = '\u0000';
 
+type VisitorHashField = 'ip' | 'userAgent' | 'salt';
+
+/**
+ * [security review, fix round 1] The delimiter's collision-avoidance
+ * property (this file's header, above) rests on an assumption EXTERNAL
+ * to this file: that Node's HTTP parser never hands a header value
+ * containing a NUL byte through to application code. A raw-socket probe
+ * against this app's own server primitive confirmed that assumption
+ * holds today — Node returns `400 Bad Request` before any handler runs
+ * — but nothing in this file enforces it. If the HTTP layer is ever
+ * swapped, `--insecure-http-parser` is enabled for a legacy-client
+ * workaround, or this function is reused on a string that never passed
+ * through header parsing, the exact collision this file's header
+ * describes reopens with nothing local to catch it.
+ *
+ * This assertion is that local backstop: it REJECTS (throws), rather
+ * than silently stripping, any input that already contains the
+ * delimiter — silently stripping would change the hash for an input
+ * that should have been refused instead, which is worse than refusing
+ * outright. The thrown message names only which FIELD was poisoned
+ * (`'ip' | 'userAgent' | 'salt'`), never the value itself: one of these
+ * three inputs is the client IP and another is the daily salt, and
+ * invariant 6 (plus ordinary salt hygiene) means neither belongs in a
+ * thrown message any more than in a log line.
+ */
+function assertNoHashDelimiter(value: string, field: VisitorHashField): void {
+  if (!value.includes(VISITOR_HASH_DELIMITER)) return;
+
+  throw new Error(
+    `computeVisitorHash: ${field} contains the hash delimiter byte; refusing to hash rather ` +
+      'than silently colliding at a field boundary. (The offending value is deliberately not ' +
+      'included in this message — see capture.ts for why.)',
+  );
+}
+
 /**
  * `sha256(ip + delimiter + user_agent + delimiter + salt)`, hex-encoded
  * and sliced to 32 characters (spec §9's `visitor_hash`, with the
@@ -297,12 +332,27 @@ const VISITOR_HASH_DELIMITER = '\u0000';
  * cannot occur, since `getDailySalt()` (packages/core/src/redis/salt.ts)
  * never resolves to `null` or `''`, even during a Redis outage.
  *
+ * Throws (via `assertNoHashDelimiter`) if any input already contains the
+ * delimiter byte, rather than silently producing a hash whose collision-
+ * freedom property no longer holds — see that function's own comment.
+ * A caller assembling the redirect hot path (T2.4.x, out of this task's
+ * scope) MUST NOT let that throw cost a redirect [INV-1]: analytics
+ * capture failing is not a reason to fail the redirect itself, so that
+ * call site needs its own try/catch around capture — this function is
+ * not the place to swallow the error itself, since swallowing it here
+ * would silently hide a genuinely poisoned input instead of surfacing it.
+ *
  * This is the ONLY function in this file that reads `ip`'s value: it is
  * consumed here, never stored, never returned, and never logged — the
  * function has no branch that could put it anywhere else.
  */
 export function computeVisitorHash(ip: ClientIp, userAgent: string | null, salt: string): VisitorHash {
-  const material = [ip, userAgent ?? '', salt].join(VISITOR_HASH_DELIMITER);
+  const effectiveUserAgent = userAgent ?? '';
+  assertNoHashDelimiter(ip, 'ip');
+  assertNoHashDelimiter(effectiveUserAgent, 'userAgent');
+  assertNoHashDelimiter(salt, 'salt');
+
+  const material = [ip, effectiveUserAgent, salt].join(VISITOR_HASH_DELIMITER);
   const digest = createHash('sha256').update(material).digest('hex');
 
   return digest.slice(0, VISITOR_HASH_LENGTH) as VisitorHash;

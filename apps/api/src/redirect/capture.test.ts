@@ -288,6 +288,17 @@ describe('readClientIp — CF-Connecting-IP first, else the leftmost X-Forwarded
   it('returns null rather than an empty string when X-Forwarded-For is present but blank', () => {
     expect(readClientIp({ 'x-forwarded-for': '   ' })).toBeNull();
   });
+
+  // [fix round 1, task review] The whitespace-only case above cannot tell
+  // "leftmost is blank -> null" apart from "skip blank entries and use the
+  // next one": both implementations return null for '   ', since there is
+  // nothing to skip TO. A blank LEADING entry with a real IP after it is
+  // the only case that discriminates: this implementation returns null
+  // (leftmost really does mean leftmost); a skip-blanks implementation
+  // would return '10.0.0.1'. See this file's proof below.
+  it('returns null — not the next entry — when the LEFTMOST X-Forwarded-For entry is blank but a later one is a real IP', () => {
+    expect(readClientIp({ 'x-forwarded-for': ', 10.0.0.1' })).toBeNull();
+  });
 });
 
 describe('computeVisitorHash — the S2.3 mandatory cases', () => {
@@ -328,6 +339,69 @@ describe('computeVisitorHash — the S2.3 mandatory cases', () => {
     const forIpB = computeVisitorHash(ipB, 'UA/1.0', 'salt-a');
 
     expect(forIpA).not.toBe(forIpB);
+  });
+});
+
+/** Calls `fn`, expects it to throw, and returns the thrown Error's own
+ * `message` — never the whole error object — so tests below can assert
+ * on the message's CONTENT (which field it names, which values it must
+ * NOT contain) without repeating a try/catch in every case. Throws
+ * itself (failing the test loudly) if `fn` does not throw. */
+function messageFrom(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error('expected the function under test to throw, but it did not');
+}
+
+describe('computeVisitorHash — rejects a delimiter byte in any input [security review, fix round 1]', () => {
+  // computeVisitorHash's own collision-avoidance delimiter (see capture.ts)
+  // is a NUL byte. This file cannot import the private constant directly,
+  // so String.fromCharCode(0) constructs the identical character locally —
+  // deliberately NOT a '\u0000' string literal in this file's own source,
+  // which risks being written as a raw control byte rather than the
+  // 6-character escape sequence by some editing paths.
+  const NUL = String.fromCharCode(0);
+  const ip = readClientIp({ 'cf-connecting-ip': DISTINCTIVE_IP }) as ClientIp;
+
+  it('throws when ip contains the delimiter; the message names the field, not the ip value or the delimiter itself', () => {
+    const poisonedIp = (DISTINCTIVE_IP + NUL + '10.0.0.1') as ClientIp;
+
+    const message = messageFrom(() => computeVisitorHash(poisonedIp, 'UA/1.0', 'salt-a'));
+
+    expect(message).toContain('ip');
+    expect(message).not.toContain(DISTINCTIVE_IP);
+    expect(message).not.toContain('10.0.0.1');
+    expect(message).not.toContain(NUL);
+  });
+
+  it("throws when userAgent contains the delimiter; the message names the field, not the user agent's value", () => {
+    const poisonedUa = `evil${NUL}ua`;
+
+    const message = messageFrom(() => computeVisitorHash(ip, poisonedUa, 'salt-a'));
+
+    expect(message).toContain('userAgent');
+    expect(message).not.toContain(poisonedUa);
+    expect(message).not.toContain('evilua');
+    expect(message).not.toContain(NUL);
+  });
+
+  it('throws when salt contains the delimiter; the message names the field, never the salt value or anything salt-shaped', () => {
+    const poisonedSalt = `deadbeefcafebabe${NUL}0011223344556677`;
+
+    const message = messageFrom(() => computeVisitorHash(ip, 'UA/1.0', poisonedSalt));
+
+    expect(message).toContain('salt');
+    expect(message).not.toContain(poisonedSalt);
+    expect(message).not.toContain('deadbeefcafebabe');
+    expect(message).not.toContain('0011223344556677');
+    expect(message).not.toContain(NUL);
+  });
+
+  it('does NOT throw for ordinary, delimiter-free inputs — the check is specific to the delimiter, not a general failure', () => {
+    expect(() => computeVisitorHash(ip, 'UA/1.0', 'salt-a')).not.toThrow();
   });
 });
 
@@ -383,6 +457,13 @@ describe('buildCapturePayload — assembly, INV-8 identity assignment, and no re
     });
 
     expect(JSON.stringify(payload)).not.toContain(DISTINCTIVE_IP);
+  });
+
+  it('accepts visitorHash: null — no IP was found at all is a real, expected state, not an edge case to special-case away — and still round-trips through CaptureEventSchema', () => {
+    const payload = buildCapturePayload({ ...baseInput, visitorHash: null });
+
+    expect(payload.visitor_hash).toBeNull();
+    expect(() => CaptureEventSchema.parse(payload)).not.toThrow();
   });
 });
 
