@@ -13,6 +13,7 @@ import {
   OPEN_REDIRECT_REJECTED_COUNTER_NAME,
   type RedirectMiddlewareLogger,
 } from './middleware';
+import { makeNotFoundRenderer } from './not-found';
 import { resolveLink } from './resolve-link';
 import type { ResolveLogger } from './resolve-redis';
 import { seedLink, seedTenant, CONTAINER_TEST_TIMEOUT_MS } from './resolve-test-support';
@@ -229,6 +230,7 @@ describe('open-redirect guard (T2.4.5) [security]', () => {
       urls,
       reservedHandles: resolveReservedHandles(),
     });
+    const renderNotFound = makeNotFoundRenderer({ urls });
     const resolveTenantStub: ResolveTenant = async (handle) => (handle === HANDLE ? tenantId : null);
 
     registry = new Registry();
@@ -259,6 +261,7 @@ describe('open-redirect guard (T2.4.5) [security]', () => {
       lookupNetwork: () => ({ asn: null, country: null }),
       getDailySalt: async () => 'open-redirect-test-salt-not-a-real-secret',
       enqueueCapture,
+      renderNotFound,
     });
   }, CONTAINER_TEST_TIMEOUT_MS);
 

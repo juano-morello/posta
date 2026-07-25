@@ -16,6 +16,7 @@ import {
   createRedirectMiddleware,
   type RedirectMiddlewareLogger,
 } from './middleware';
+import { makeNotFoundRenderer } from './not-found';
 import type { ResolveTenant } from './resolve-tenant';
 
 // T2.4.3 [INV-1] — this file is the ONE place that proves the story's
@@ -117,6 +118,7 @@ function buildServer(
     urls,
     reservedHandles: resolveReservedHandles(),
   });
+  const renderNotFound = makeNotFoundRenderer({ urls });
 
   const queue: EnqueueQueue = {
     add: (name, data) => {
@@ -139,6 +141,7 @@ function buildServer(
       lookupNetwork: overrides.lookupNetwork ?? (() => ({ asn: null, country: null })),
       getDailySalt: overrides.getDailySalt ?? (async () => 'ordering-test-salt-not-a-real-secret'),
       enqueueCapture,
+      renderNotFound,
     }),
   );
 

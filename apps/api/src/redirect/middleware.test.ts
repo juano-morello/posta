@@ -17,6 +17,7 @@ import {
   createRedirectMiddleware,
   HANDLE_ROOT_HITS_COUNTER_NAME,
 } from './middleware';
+import { makeNotFoundRenderer } from './not-found';
 
 // T2.4.3 — none of the tests in this file exercise the 'link' kind (that
 // is ordering.test.ts's own job, against a real server); every one of
@@ -205,6 +206,7 @@ describe('createRedirectMiddleware — mounted ahead of the Nest router', () => 
       urls,
       reservedHandles: resolveReservedHandles(),
     });
+    const renderNotFound = makeNotFoundRenderer({ urls });
 
     // Mirrors the ordering main.ts must use: mount on `server` BEFORE
     // NestFactory.create ever sees it. A dedicated Registry avoids
@@ -216,6 +218,7 @@ describe('createRedirectMiddleware — mounted ahead of the Nest router', () => 
         logger: consoleErrorLogger,
         handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
         openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
+        renderNotFound,
         ...UNUSED_LINK_DEPS,
       }),
     );
@@ -304,11 +307,13 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     urls,
     reservedHandles: resolveReservedHandles(),
   });
+  const renderNotFound = makeNotFoundRenderer({ urls });
   const middleware = createRedirectMiddleware({
     parseRequestTarget,
     logger: consoleErrorLogger,
     handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
     openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
+    renderNotFound,
     ...UNUSED_LINK_DEPS,
   });
 
@@ -354,6 +359,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
       logger: consoleErrorLogger,
       handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
       openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
+      renderNotFound,
       ...UNUSED_LINK_DEPS,
       resolveTenant: async () => null, // unknown handle — no Postgres/Redis needed
     });
@@ -391,6 +397,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
       logger,
       handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
       openRedirectRejectedCounter: createOpenRedirectRejectedCounter(new Registry()),
+      renderNotFound,
       ...UNUSED_LINK_DEPS,
       resolveTenant: async () => {
         throw new Error('connect ECONNREFUSED postgresql://posta:s3cret@db:5432/posta');
@@ -463,6 +470,7 @@ describe('createRedirectMiddleware — handle-root alarm (T2.1.5)', () => {
     urls,
     reservedHandles: resolveReservedHandles(),
   });
+  const renderNotFound = makeNotFoundRenderer({ urls });
 
   let registry: Registry;
   let handleRootHitsCounter: Counter<string>;
@@ -480,6 +488,7 @@ describe('createRedirectMiddleware — handle-root alarm (T2.1.5)', () => {
       logger,
       handleRootHitsCounter,
       openRedirectRejectedCounter,
+      renderNotFound,
       ...UNUSED_LINK_DEPS,
     });
   });
@@ -554,6 +563,7 @@ describe('createRedirectMiddleware — reserved paths short-circuit, no alarm (T
     urls,
     reservedHandles: resolveReservedHandles(),
   });
+  const renderNotFound = makeNotFoundRenderer({ urls });
 
   let registry: Registry;
   let handleRootHitsCounter: Counter<string>;
@@ -571,6 +581,7 @@ describe('createRedirectMiddleware — reserved paths short-circuit, no alarm (T
       logger,
       handleRootHitsCounter,
       openRedirectRejectedCounter,
+      renderNotFound,
       ...UNUSED_LINK_DEPS,
     });
   });

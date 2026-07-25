@@ -22,6 +22,7 @@ import {
   createOpenRedirectRejectedCounter,
   createRedirectMiddleware,
 } from './redirect/middleware';
+import { makeNotFoundRenderer } from './redirect/not-found';
 import { consoleWarnLogger } from './redirect/resolve-redis';
 import { resolveLink } from './redirect/resolve-link';
 import { createResolveTenant } from './redirect/resolve-tenant';
@@ -77,6 +78,10 @@ async function bootstrap(): Promise<void> {
   // shared default" treatment as handleRootHitsCounter above. Called
   // exactly once, here, at boot.
   const openRedirectRejectedCounter = createOpenRedirectRejectedCounter();
+  // T2.5.3 — the branded 404 (not-found.ts), built once here over the
+  // SAME `urls` every other boot-time dependency above shares — never
+  // reconstructed per request.
+  const renderNotFound = makeNotFoundRenderer({ urls });
 
   // T2.4.3 [INV-1][INV-2] — the redirect hot path's remaining boot-time
   // dependencies: Postgres, the shared cache Redis client, the GeoIP
@@ -139,6 +144,7 @@ async function bootstrap(): Promise<void> {
       getDailySalt,
       enqueueCapture,
       openRedirectRejectedCounter,
+      renderNotFound,
     }),
   );
 

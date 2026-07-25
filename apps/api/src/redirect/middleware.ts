@@ -5,6 +5,7 @@ import type { GetDailySalt, LookupNetwork } from '@posta/core';
 import { buildCapturePayload, computeVisitorHash, readClientIp, readSignals } from './capture';
 import { createLogEnqueueFailure, type EnqueueCapture, type LogEnqueueFailure } from './enqueue';
 import type { ParseRequestTarget } from './host';
+import type { RenderNotFound } from './not-found';
 import { sendLinkRedirect } from './redirect-response';
 import type { ResolveTenant } from './resolve-tenant';
 
@@ -33,9 +34,14 @@ import type { ResolveTenant } from './resolve-tenant';
 // short-circuit behavior explicit; T2.4.3 adds the 'link' kind's real
 // composition (`handleLinkTarget`, below). Everything else here is still
 // a LATER task, not a bug:
-//   - T2.5.2/T2.5.3 give the 404 a branded HTML body; a bare empty 404 is
-//     correct here, for every 404 this file produces (`not-ours`
-//     excepted, which never 404s at all).
+//   - T2.5.3 wires renderNotFound (T2.5.2) into every terminal 404 this
+//     file decides (`not-ours` excepted, which never 404s at all) —
+//     `sendNotFound`, below, is the one call site. The single exception:
+//     an unencodable destination still gets a bare, bodyless 404, because
+//     that response is sent entirely inside sendLinkRedirect
+//     (./redirect-response.ts) before handleLinkTarget regains control —
+//     see sendNotFound's own doc comment for why that file stays
+//     untouched.
 //   - T2.4.4 replaced the former `logEnqueueFailurePlaceholder` with
 //     enqueue.ts's real, redacting `createLogEnqueueFailure` — see
 //     `handleLinkTarget`'s own comment for the wiring.
@@ -45,8 +51,10 @@ import type { ResolveTenant } from './resolve-tenant';
 //   - T2.6.5 is where "reserved paths cost zero Redis GETs" becomes an
 //     assertion against a real client.
 // `reserved-path`, `reserved-handle`, `invalid-path` and `handle-root`
-// still get the exact same bare 404 with no side effect beyond it (plus
-// the alarm, for handle-root) — only `link` does real work now.
+// still get no side effect beyond the 404 itself (plus the alarm, for
+// handle-root) and none of them ever enqueue — only `link` does real work
+// now. T2.5.3 gave each of the four its own rendered body: see
+// `sendNotFound`'s call sites below for exactly what each one reflects.
 //
 // [S2.4 fan-out fix round] `sendLinkRedirect`, `encodeDestinationForHeader`,
 // `isHeaderSafeCodePoint` and `HEADER_SAFE_DESTINATION_PATTERN` used to
@@ -205,6 +213,54 @@ export interface RedirectMiddlewareDeps {
    * refuses to redirect a resolved destination that fails `zDestination`.
    */
   readonly openRedirectRejectedCounter: Counter<string>;
+  /**
+   * T2.5.3 — the branded 404 document (not-found.ts's makeNotFoundRenderer),
+   * built once at boot over env-derived UrlBuilders — see main.ts. Wired
+   * in exactly like openRedirectRejectedCounter above: a closure resolved
+   * once, handed in unchanged, called per request only by `sendNotFound`
+   * (below) to produce the body a terminal 404 writes.
+   */
+  readonly renderNotFound: RenderNotFound;
+}
+
+/**
+ * Terminal 404 shape for every branch the redirect middleware itself
+ * decides (i.e. everything except a real 'link' hit's own 307). T2.5.3's
+ * single call site: replaces the bare `res.status(404).end()` every one
+ * of these branches used to send with S2.5's branded document (T2.5.2) —
+ * status and `Cache-Control` are unchanged from before this task; the
+ * body and `Content-Type` are new. `slug` is whatever the CALLER decided
+ * this branch should reflect (see this function's call sites, and the
+ * file header's own note on `handleLinkTarget`'s branches) — always the
+ * RAW, unescaped value: renderNotFound (not-found.ts) runs it through
+ * escapeHtml internally, and running it through a second escaper here
+ * would double-escape it.
+ *
+ * Does NOT cover the unencodable-destination outcome inside
+ * sendLinkRedirect (./redirect-response.ts): that function already calls
+ * `res.status(404).end()` with no body of its own before handleLinkTarget
+ * regains control, and this task's file list does not include that
+ * module — see the file header's own note on this gap.
+ */
+function sendNotFound(res: Response, renderNotFound: RenderNotFound, slug: string): void {
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.status(404).end(renderNotFound(slug));
+}
+
+// [T2.5.3] The value reflected in the 404 template's "cd /<value>" line
+// for 'reserved-path' and 'invalid-path' — the only two terminal kinds
+// with a real request PATH but no validated `slug` of their own (see
+// host.ts's own RequestTarget union: neither variant carries a field at
+// all, so the path has to come from `req` directly). The one leading
+// slash is stripped so the template's own hardcoded "/" prefix does not
+// double up; nothing else is decoded or normalized, so what a visitor
+// sees is exactly the path they requested. 'invalid-path' is not named by
+// the brief's own six-item list — it gets this same treatment because
+// it is structurally identical to 'reserved-path' in host.ts's union: a
+// path that could not become a slug lookup, just for a different reason.
+function describeRequestedPath(path: string): string {
+  return path.startsWith('/') ? path.slice(1) : path;
 }
 
 /**
@@ -212,14 +268,14 @@ export interface RedirectMiddlewareDeps {
  * `not-ours` (a host this deployment did not construct, or the app./api.
  * hosts Nest itself owns) calls `next()` and falls through to Nest's
  * router. Every other kind — this deployment addressed the request, one
- * way or another — terminates here with a bare 404 and
- * `Cache-Control: no-store`, so nothing downstream ever caches a wrong
- * answer. `handle-root` additionally logs at error level and increments
- * the alarm counter before answering (T2.1.5) — see the file header for
- * why.
+ * way or another — terminates here with S2.5's branded 404 (`sendNotFound`,
+ * above) and `Cache-Control: no-store`, so nothing downstream ever caches
+ * a wrong answer. `handle-root` additionally logs at error level and
+ * increments the alarm counter before answering (T2.1.5) — see the file
+ * header for why.
  */
 export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestHandler {
-  const { parseRequestTarget, logger, handleRootHitsCounter } = deps;
+  const { parseRequestTarget, logger, handleRootHitsCounter, renderNotFound } = deps;
   // T2.4.4 — built once here, via enqueue.ts's createLogEnqueueFailure(logger):
   // the same "closure resolved once at boot" treatment every other
   // dependency in this function gets (see the file header).
@@ -244,12 +300,12 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
     // Exclude<RequestTarget, { kind: 'not-ours' }> — TS narrows past the
     // early return above. A `switch` over the remaining kinds, with an
     // exhaustiveness check in `default`, is a compile-time guard, NOT a
-    // behavior change: every kind still falls through to the identical
-    // 404 below. What changes is that a SEVENTH RequestTarget kind added
+    // behavior change: every kind still terminates in a 404 one way or
+    // another. What changes is that a SEVENTH RequestTarget kind added
     // later (host.ts) without a matching case here fails `tsc` instead
-    // of silently landing in `default` and getting a bare 404 with no
-    // per-kind decision ever made about it — exactly the kind of gap
-    // this discriminated union exists to make impossible.
+    // of silently landing in `default` with no per-kind decision ever
+    // made about it — exactly the kind of gap this discriminated union
+    // exists to make impossible.
     switch (target.kind) {
       case 'handle-root':
         // T2.1.5 — the alarm. This branch runs exactly once per matching
@@ -264,13 +320,15 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
           { handle: target.handle },
         );
         handleRootHitsCounter.inc();
-        break;
+        // [T2.5.3, decision 2] '' — there is no slug at all for "/" on a
+        // handle host, matching the brief's own framing exactly.
+        sendNotFound(res, renderNotFound, '');
+        return;
 
       case 'link':
         // T2.4.3 — the only kind that does real work. handleLinkTarget
         // owns its ENTIRE response (307 on a hit, 404 on a miss), so this
-        // returns immediately rather than falling through to the shared
-        // 404 below.
+        // returns immediately.
         //
         // [fix round 1] `void`d with a defensive `.catch()` attached in
         // the same synchronous tick, not a bare `void`. handleLinkTarget's
@@ -297,26 +355,34 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
         return;
 
       case 'reserved-path':
-      case 'reserved-handle':
       case 'invalid-path':
-        // No alarm, no side effect beyond the shared 404 below — see the
-        // file header for why each of these stays a bare 404 for now.
-        break;
+        // [T2.5.3, decision 2] Neither variant carries a slug or a path
+        // field of its own (host.ts) — describeRequestedPath reads
+        // req.path directly. No alarm, no side effect beyond the 404.
+        sendNotFound(res, renderNotFound, describeRequestedPath(req.path));
+        return;
+
+      case 'reserved-handle':
+        // [T2.5.3, decision 2] '' — deliberately, even though req.path is
+        // technically available here too: the interesting fact about
+        // this branch is the HOST (a segment nobody can ever claim), and
+        // the path that happened to follow it says nothing about that.
+        // No alarm, no side effect beyond the 404.
+        sendNotFound(res, renderNotFound, '');
+        return;
 
       default: {
-        // Deliberately does NOT throw: an unrecognized kind still falls
-        // through to the exact same 404 every other terminal kind gets
-        // below, preserving this commit's runtime behavior byte-for-
-        // byte. `tsc` — not a runtime branch — is the enforcement
-        // mechanism: if this line stops compiling, a case is missing
-        // above.
+        // Deliberately does NOT throw: an unrecognized kind still gets
+        // the exact same terminal 404 every other kind gets, preserving
+        // this commit's runtime behavior. `tsc` — not a runtime branch —
+        // is the enforcement mechanism: if this line stops compiling, a
+        // case is missing above.
         const _exhaustive: never = target;
         void _exhaustive;
+        sendNotFound(res, renderNotFound, '');
+        return;
       }
     }
-
-    res.set('Cache-Control', 'no-store');
-    res.status(404).end();
   };
 }
 
@@ -373,6 +439,7 @@ async function handleLinkTarget(
     | 'enqueueCapture'
     | 'logger'
     | 'openRedirectRejectedCounter'
+    | 'renderNotFound'
   > & {
     /** T2.4.4 — built once at boot by `createRedirectMiddleware` above,
      * via enqueue.ts's `createLogEnqueueFailure(logger)`. Not a
@@ -390,6 +457,7 @@ async function handleLinkTarget(
     logger,
     logEnqueueFailure,
     openRedirectRejectedCounter,
+    renderNotFound,
   } = deps;
 
   let tenantId: string | null;
@@ -397,8 +465,11 @@ async function handleLinkTarget(
   try {
     tenantId = await resolveTenant(handle);
     if (tenantId === null) {
-      res.set('Cache-Control', 'no-store');
-      res.status(404).end();
+      // [T2.5.3, decision 2] `slug` — the "unknown handle" outcome: the
+      // handle itself didn't resolve, but the requested slug is still the
+      // one piece of per-request identity worth reflecting, same as every
+      // other 404 this function produces.
+      sendNotFound(res, renderNotFound, slug);
       return;
     }
 
@@ -406,9 +477,11 @@ async function handleLinkTarget(
     if (link === null) {
       // No link_id to attach an event to — events.link_id is NOT NULL by
       // design. Enqueueing nothing here is not an oversight; it is the
-      // only honest option for a slug that does not resolve.
-      res.set('Cache-Control', 'no-store');
-      res.status(404).end();
+      // only honest option for a slug that does not resolve. Covers BOTH
+      // "unknown slug" and "archived link" — resolveLinkFromDb
+      // (resolve-link.ts) returns null for both by design, and this
+      // function has no way (and no need) to tell them apart.
+      sendNotFound(res, renderNotFound, slug);
       return;
     }
   } catch (error) {
@@ -424,15 +497,17 @@ async function handleLinkTarget(
     // terminal 404 every other undecidable outcome on this path already
     // gets is the answer here too, logged the same SAFE way as the
     // capture-pipeline catch below: only the error's constructor name,
-    // never the request.
+    // never the request. Not named by the brief's own six-item list — a
+    // genuine infrastructure failure mid-resolution, reported here per
+    // this task's own dispatch instruction to surface (not silently fold
+    // in) every terminal 404 the brief didn't name.
     const errorType = error instanceof Error ? error.constructor.name : typeof error;
     logger.error('Link resolution failed; answering 404 rather than leaving the request hanging', {
       errorType,
       handle,
       slug,
     });
-    res.set('Cache-Control', 'no-store');
-    res.status(404).end();
+    sendNotFound(res, renderNotFound, slug);
     return;
   }
 
@@ -515,9 +590,11 @@ async function handleLinkTarget(
     // header is ever set (it never reaches sendLinkRedirect, below), and
     // — same reasoning as the link-miss branch above — there is no
     // meaningful click to record for a destination that cannot be served,
-    // so nothing is enqueued either.
-    res.set('Cache-Control', 'no-store');
-    res.status(404).end();
+    // so nothing is enqueued either. [T2.5.3, decision 2] `slug`, same as
+    // every other branch in this function — never `link.destination`,
+    // which is exactly the attacker-controlled value this log line above
+    // already refuses to echo.
+    sendNotFound(res, renderNotFound, slug);
     return;
   }
 
@@ -550,6 +627,19 @@ async function handleLinkTarget(
     // (encodeDestinationForHeader's own `null` case, ./redirect-response.ts).
     // No successful redirect happened, so — same reasoning as the
     // link-miss branch above — there is nothing honest to enqueue.
+    //
+    // [T2.5.3, reported gap] This is the ONE terminal 404 on the redirect
+    // path that does NOT get S2.5's branded body: by the time control
+    // returns here, sendLinkRedirect has already called
+    // `res.status(404).end()` with no body of its own — the response is
+    // closed, and there is nothing left to attach a body to. Giving this
+    // outcome the branded document would mean changing sendLinkRedirect's
+    // own contract (e.g. exporting its encode check so this function
+    // could decide the 404 itself, ahead of calling it), which touches
+    // ./redirect-response.ts — a file outside this task's own `files`
+    // line, and one the epic's review culture has already gone several
+    // rounds on (see that file's own header). Left as a named, tested gap
+    // (not-found-routing.test.ts) rather than silently worked around.
     return;
   }
 
