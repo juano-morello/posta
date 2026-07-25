@@ -5,3 +5,4 @@ export * from './classification';
 export * from './links';
 export * from './bio';
 export * from './cache';
+export * from './redact';

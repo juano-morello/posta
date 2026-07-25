@@ -205,8 +205,11 @@ export function rememberInMemo(
  * returned promise can never reject at all — `void`ing it at the call
  * site is provably safe, not merely safe-by-convention. Logs at `warn`
  * exactly once per failed write, via {@link describeError} — never the
- * raw error object, which for a Redis error can embed REDIS_URL
- * (password and all).
+ * raw error object, AND with any REDIS_URL credential embedded in the
+ * error's own `.message` redacted (describeError's own doc comment,
+ * resolve-redis.ts, has the full "why" — a Redis connection error's
+ * `.message` itself, not just the object, is exactly where ioredis puts
+ * the password).
  */
 async function backfillHandleCache(
   key: string,

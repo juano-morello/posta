@@ -33,9 +33,24 @@ export interface LinkCacheRedis {
  * tombstone folded into `'miss'` would fall straight through to
  * Postgres on every request, which is exactly the outcome the tombstone
  * exists to prevent. The third `kind` below makes that distinction
- * load-bearing at the type level: resolveLink (further down) branches on
- * `'known-absent'` explicitly, so the compiler — not a caller's memory —
- * enforces that a tombstone read never reaches resolveLinkFromDb.
+ * load-bearing at the type level: resolveLink (further down) `switch`es
+ * over every `kind` with an exhaustiveness check (`const _exhaustive:
+ * never = cached`, mirroring middleware.ts's identical RequestTarget
+ * pattern), so the compiler — not a caller's memory — enforces that a
+ * tombstone read never reaches resolveLinkFromDb, AND that a FOURTH
+ * `kind` added here later cannot silently fall through to Postgres as if
+ * it were an ordinary miss: `tsc` fails at the exhaustiveness line until
+ * resolveLink grows a matching case.
+ *
+ * [S2.2 story-fan-out review, HIGH] That last guarantee did NOT hold
+ * before this note was added: resolveLink used a plain
+ * `if (cached.kind === 'hit') {...}` / `if (cached.kind === 'known-absent')
+ * {...}` chain rather than a switch. An `if` chain with no covering
+ * `else` compiles identically no matter how many `kind` values exist, so
+ * a fourth kind would have fallen through to the Postgres-query code
+ * completely silently — exactly the failure mode this type was
+ * introduced to make impossible, reintroduced by the very code meant to
+ * prevent it. The switch (below) is what actually closes that gap.
  */
 export type LinkLookupResult =
   | { readonly kind: 'hit'; readonly link: CachedLink }
@@ -408,11 +423,28 @@ export async function resolveLink(
   const { db, redis, logger, timeoutMs, cacheTtlSeconds } = deps;
 
   const cached = await lookupCachedLink(tenant, slug, { redis, logger, timeoutMs });
-  if (cached.kind === 'hit') {
-    return cached.link;
-  }
-  if (cached.kind === 'known-absent') {
-    return null;
+
+  // [S2.2 story-fan-out review, HIGH] A switch with an exhaustiveness
+  // check, not an `if (cached.kind === 'hit') {...} if (cached.kind ===
+  // 'known-absent') {...}` chain — see LinkLookupResult's own doc
+  // comment above for why the `if` shape was a real gap, not just
+  // stylistic. A behavior-preserving compile-time guard only: 'hit' and
+  // 'known-absent' still return exactly as before, 'miss' still falls
+  // through to the Postgres query below unchanged.
+  switch (cached.kind) {
+    case 'hit':
+      return cached.link;
+    case 'known-absent':
+      return null;
+    case 'miss':
+      break;
+    default: {
+      // Never reached at runtime — `tsc`, not this branch, is the
+      // enforcement mechanism. If this line stops compiling, a
+      // LinkLookupResult `kind` was added above with no matching case.
+      const _exhaustive: never = cached;
+      void _exhaustive;
+    }
   }
 
   const link = await resolveLinkFromDb(tenant, slug, { db });

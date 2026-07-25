@@ -1,3 +1,5 @@
+import { redactCredentialsFromMessage } from '@posta/contracts';
+
 // Split out of resolve.ts during T2.2.6's fix round, once that file
 // crossed this epic's ~750-line split trigger (800 is the hard cap) —
 // mirrors the earlier test-side split (resolve.test.ts ->
@@ -20,8 +22,33 @@ export const consoleWarnLogger: ResolveLogger = {
   },
 };
 
+/**
+ * Stringifies an unknown thrown value into something safe to hand a
+ * logger — every `logger.warn(..., { error: describeError(error) })`
+ * call site in this file family (resolve-tenant.ts, resolve-link.ts)
+ * goes through this one function, so "safe to log" has exactly one
+ * definition, not six copies of the same judgment call.
+ *
+ * [S2.2 story-fan-out review, CRITICAL] An EARLIER version of this
+ * function returned `error.message` unredacted, on the reasoning
+ * (documented in several call sites' own comments, e.g.
+ * backfillHandleCache above) that ".message, never the raw error object"
+ * was enough — the raw object can carry MORE than the message (extra
+ * enumerable properties an error subclass might attach), so extracting
+ * only `.message` looked like the safer half of the object. That
+ * reasoning is true and still insufficient: ioredis (and `pg`) put the
+ * CONNECTION URL — password and all — directly IN `.message` on a
+ * connection failure (e.g. "connect ECONNREFUSED
+ * redis://user:s3cret@host:6379"), so ".message is safer than the
+ * object" does not imply ".message is safe to log" for THIS class of
+ * error. redactCredentialsFromMessage (packages/contracts — isomorphic,
+ * shared with T2.4.4's own enqueue-failure logging, which needs the
+ * identical guarantee for REDIS_URL) strips only the embedded userinfo,
+ * leaving the host/port that make a connection error diagnosable intact.
+ */
 export function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return redactCredentialsFromMessage(message);
 }
 
 // T2.2.3 — a hung Redis must cost latency, not availability (invariant
