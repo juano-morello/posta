@@ -1,7 +1,17 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { CaptureEventSchema } from '@posta/contracts';
 import { describe, expect, it } from 'vitest';
-import { readSignals, type CaptureRequest, type HeaderSignals } from './capture';
+import {
+  buildCapturePayload,
+  computeVisitorHash,
+  readClientIp,
+  readSignals,
+  type CapturePayloadInput,
+  type CaptureRequest,
+  type ClientIp,
+  type HeaderSignals,
+} from './capture';
 
 // T2.3.2 — readSignals(req) reads the 16 spec §5.1 header-derived
 // signals by explicit name, NEVER by spreading or iterating req.headers.
@@ -235,5 +245,200 @@ describe('readSignals — header-name case (real Node normalization, not a mock)
 
     expect(captured?.user_agent).toBe('Mixed-Case-UA/1.0');
     expect(captured?.x_moz).toBe('prefetch');
+  });
+});
+
+// T2.3.7 [INV-6][security] — the client IP is read once, feeds exactly two
+// derivations (a geoip lookup, owned by T2.3.5; the salted hash below), and
+// is dropped. `readClientIp` returns a BRANDED `ClientIp`, never a plain
+// `string`, and `buildCapturePayload` accepts only the values already
+// derived FROM an ip, never an ip itself. The describe blocks below prove
+// both halves: the hash's own behavior, and — the hard part — that
+// `buildCapturePayload`'s signature structurally has no slot a `ClientIp`
+// fits, not merely a convention asking callers not to pass one.
+
+const DISTINCTIVE_IP = '203.0.113.77';
+
+describe('readClientIp — CF-Connecting-IP first, else the leftmost X-Forwarded-For entry', () => {
+  it('prefers CF-Connecting-IP over X-Forwarded-For when both are present', () => {
+    const headers = {
+      'cf-connecting-ip': '203.0.113.10',
+      'x-forwarded-for': '198.51.100.5, 10.0.0.1',
+    };
+
+    expect(readClientIp(headers)).toBe('203.0.113.10');
+  });
+
+  it('falls back to the LEFTMOST X-Forwarded-For entry — not the last, not a join — when CF-Connecting-IP is absent', () => {
+    const headers = { 'x-forwarded-for': '198.51.100.5, 10.0.0.1, 10.0.0.2' };
+
+    expect(readClientIp(headers)).toBe('198.51.100.5');
+  });
+
+  it('falls back to X-Forwarded-For when CF-Connecting-IP is present but empty — present-but-empty cannot identify a visitor', () => {
+    const headers = { 'cf-connecting-ip': '', 'x-forwarded-for': '198.51.100.5' };
+
+    expect(readClientIp(headers)).toBe('198.51.100.5');
+  });
+
+  it('returns null when neither header is present', () => {
+    expect(readClientIp({})).toBeNull();
+  });
+
+  it('returns null rather than an empty string when X-Forwarded-For is present but blank', () => {
+    expect(readClientIp({ 'x-forwarded-for': '   ' })).toBeNull();
+  });
+});
+
+describe('computeVisitorHash — the S2.3 mandatory cases', () => {
+  const ip = readClientIp({ 'cf-connecting-ip': DISTINCTIVE_IP }) as ClientIp;
+
+  it('is 32 lowercase hex characters', () => {
+    const hash = computeVisitorHash(ip, 'UA/1.0', 'salt-a');
+
+    expect(hash).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('is stable for the same ip + user_agent + salt', () => {
+    const first = computeVisitorHash(ip, 'UA/1.0', 'salt-a');
+    const second = computeVisitorHash(ip, 'UA/1.0', 'salt-a');
+
+    expect(first).toBe(second);
+  });
+
+  it('changes when the user agent changes, salt and ip held fixed', () => {
+    const withUaOne = computeVisitorHash(ip, 'UA/1.0', 'salt-a');
+    const withUaTwo = computeVisitorHash(ip, 'UA/2.0', 'salt-a');
+
+    expect(withUaOne).not.toBe(withUaTwo);
+  });
+
+  it('changes when the salt changes, ip and user agent held fixed', () => {
+    const withSaltOne = computeVisitorHash(ip, 'UA/1.0', 'salt-a');
+    const withSaltTwo = computeVisitorHash(ip, 'UA/1.0', 'salt-b');
+
+    expect(withSaltOne).not.toBe(withSaltTwo);
+  });
+
+  it('changes for two different IPs sharing one user agent — required so "únicos hoy" can distinguish them', () => {
+    const ipA = readClientIp({ 'cf-connecting-ip': '203.0.113.1' }) as ClientIp;
+    const ipB = readClientIp({ 'cf-connecting-ip': '203.0.113.2' }) as ClientIp;
+
+    const forIpA = computeVisitorHash(ipA, 'UA/1.0', 'salt-a');
+    const forIpB = computeVisitorHash(ipB, 'UA/1.0', 'salt-a');
+
+    expect(forIpA).not.toBe(forIpB);
+  });
+});
+
+describe('buildCapturePayload — assembly, INV-8 identity assignment, and no residual IP', () => {
+  const baseInput: CapturePayloadInput = {
+    tenantId: 'tenant-1',
+    linkId: 'link-1',
+    slug: 'promo',
+    signals: ALL_NULL_SIGNALS,
+    visitorHash: computeVisitorHash(
+      readClientIp({ 'cf-connecting-ip': DISTINCTIVE_IP }) as ClientIp,
+      null,
+      'salt-a',
+    ),
+    asn: 15169,
+    country: 'AR',
+  };
+
+  it('assigns a fresh ULID event_id and an ISO occurred_at on every call [INV-8]', () => {
+    const first = buildCapturePayload(baseInput);
+    const second = buildCapturePayload(baseInput);
+
+    expect(first.event_id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(first.event_id).not.toBe(second.event_id);
+    expect(new Date(first.occurred_at).toISOString()).toBe(first.occurred_at);
+  });
+
+  it("round-trips cleanly through the real CaptureEventSchema — not a hand-built shape assumed to match it", () => {
+    const payload = buildCapturePayload(baseInput);
+
+    expect(() => CaptureEventSchema.parse(payload)).not.toThrow();
+  });
+
+  it('contains no key matching /ip|addr|forwarded|cookie/i, derived from the payload\'s OWN runtime keys', () => {
+    const payload = buildCapturePayload(baseInput);
+    const suspiciousKeys = Object.keys(payload).filter((key) => /ip|addr|forwarded|cookie/i.test(key));
+
+    expect(suspiciousKeys).toEqual([]);
+  });
+
+  it('never contains the distinctive client IP anywhere in its serialized form, driven through the happy path', () => {
+    const ip = readClientIp({ 'cf-connecting-ip': DISTINCTIVE_IP }) as ClientIp;
+    const hash = computeVisitorHash(ip, 'Mozilla/5.0 (test)', 'daily-salt-value');
+
+    const payload = buildCapturePayload({
+      tenantId: 'tenant-1',
+      linkId: 'link-1',
+      slug: 'promo',
+      signals: { ...ALL_NULL_SIGNALS, user_agent: 'Mozilla/5.0 (test)' },
+      visitorHash: hash,
+      asn: 15169,
+      country: 'AR',
+    });
+
+    expect(JSON.stringify(payload)).not.toContain(DISTINCTIVE_IP);
+  });
+});
+
+describe('buildCapturePayload — the type does not admit an IP [INV-6], not merely a convention', () => {
+  it('rejects a ClientIp passed as visitorHash at COMPILE TIME; bypassing that override (as this test deliberately does, to be honest about the boundary) still leaks the raw value at RUNTIME', () => {
+    const ip = readClientIp({ 'cf-connecting-ip': DISTINCTIVE_IP }) as ClientIp;
+
+    const input: CapturePayloadInput = {
+      tenantId: 'tenant-1',
+      linkId: 'link-1',
+      slug: 'promo',
+      signals: ALL_NULL_SIGNALS,
+      // @ts-expect-error — visitorHash must be a VisitorHash minted by
+      // computeVisitorHash(); ClientIp is a DIFFERENTLY-branded string
+      // type and is not structurally assignable here. This is invariant
+      // 6's structural guard: buildCapturePayload's own signature has no
+      // slot a ClientIp fits without an override exactly like this one.
+      // Checked by `pnpm typecheck:tests` (tsconfig.test.json), which
+      // includes this file — NOT by `vitest run`, which transpiles test
+      // files with esbuild and never type-checks them. Verified by hand
+      // (T2.3.7's own report) that this line genuinely depends on a
+      // brand rather than passing vacuously: widening ONLY VisitorHash to
+      // plain `string` in capture.ts makes `pnpm typecheck:tests` fail
+      // here with "Unused '@ts-expect-error' directive" — a plain string
+      // then satisfies `VisitorHash | null` with no error left to
+      // suppress. Widening only ClientIp does NOT — VisitorHash's own
+      // brand alone is what rejects an unbranded value here, which is why
+      // the sibling test below pins ClientIp's brand at ITS actual
+      // enforcement point (computeVisitorHash's `ip` parameter) instead.
+      visitorHash: ip,
+      asn: null,
+      country: null,
+    };
+
+    // The type system stops a well-behaved caller; nothing stops an
+    // explicit cast like the one above, and once bypassed the raw IP
+    // flows straight into the payload. The brand raises the cost of a
+    // leak and makes the intent to smuggle an IP through visible in a
+    // diff — it is not a runtime capability boundary. See this file's
+    // header and capture.ts's own header comment.
+    expect(buildCapturePayload(input).visitor_hash).toBe(ip);
+  });
+
+  it("rejects a plain (unbranded) string passed as computeVisitorHash's ip parameter at COMPILE TIME — ClientIp's own brand pinned at its actual enforcement point", () => {
+    const rawHeaderValue: string = DISTINCTIVE_IP; // NOT run through readClientIp
+
+    // @ts-expect-error — computeVisitorHash's `ip` parameter is typed
+    // `ClientIp`, not `string`; a plain string (e.g. a header value read
+    // some other way, bypassing readClientIp) is not assignable without
+    // an explicit cast. This is the enforcement point ClientIp's own
+    // brand actually protects — see the sibling test above, which found
+    // that VisitorHash's brand alone (not ClientIp's) guards
+    // buildCapturePayload's visitorHash slot. Verified by hand: widening
+    // ONLY ClientIp to plain `string` in capture.ts makes
+    // `pnpm typecheck:tests` fail here with "Unused '@ts-expect-error'
+    // directive".
+    computeVisitorHash(rawHeaderValue, 'UA/1.0', 'salt-a');
   });
 });
