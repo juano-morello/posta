@@ -1,6 +1,11 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { Counter, type Registry } from 'prom-client';
+import type { CachedLink } from '@posta/contracts';
+import type { GetDailySalt, LookupNetwork } from '@posta/core';
+import { buildCapturePayload, computeVisitorHash, readClientIp, readSignals } from './capture';
+import type { EnqueueCapture } from './enqueue';
 import type { ParseRequestTarget } from './host';
+import type { ResolveTenant } from './resolve-tenant';
 
 // T2.1.4 [INV-2] — the redirect hot path itself: a raw Express middleware
 // mounted on the Express instance BEFORE NestFactory.create wires up
@@ -8,36 +13,37 @@ import type { ParseRequestTarget } from './host';
 // DI/controller ceremony, so this file has none: no decorators, no
 // providers, nothing `new`ed per request.
 //
-// Dependency shape: `deps` carries `parseRequestTarget`, `logger` and
-// `handleRootHitsCounter` — NOT `redis` yet. The brief for this story
-// describes the eventual factory as `createRedirectMiddleware({ redis })`,
-// but the middleware still does not read Redis at all: that starts at
-// T2.2.3's cached slug lookup. An unused `redis` field today would be
-// dead config threaded through for no reason, so it stays deferred to the
-// task that first reads it rather than added speculatively (YAGNI). All
-// three current deps are built ONCE at boot (see main.ts: makeUrlBuilders
-// + resolveReservedHandles + makeRequestTargetParser, plus
-// consoleErrorLogger and createHandleRootHitsCounter — every one called a
-// single time) and closed over here — this factory is called exactly
-// once, and the handler it returns allocates nothing beyond the `target`
-// it computes for the request it is currently serving.
+// Dependency shape: `deps` originally carried only `parseRequestTarget`,
+// `logger` and `handleRootHitsCounter` (T2.1.4) — no I/O beyond the pure
+// RequestTarget parse. T2.4.3 [INV-1] adds the five dependencies the
+// 'link' kind's resolve -> redirect -> enqueue composition needs
+// (`resolveTenant`, `resolveLink`, `lookupNetwork`, `getDailySalt`,
+// `enqueueCapture`) — every one of them a closure already resolved once
+// at boot by its own createX() factory (createResolveTenant,
+// resolve-link.ts's `resolveLink` partially applied over its own boot
+// deps, createNetworkLookup, createDailySalt, createEnqueueCapture — see
+// main.ts) and handed in here unchanged. Nothing in this file constructs
+// a Postgres/Redis/geoip/BullMQ resource itself [INV-2] — that stays
+// main.ts's job, exactly as it always has for `parseRequestTarget` /
+// `logger` / `handleRootHitsCounter`.
 //
 // Scope, deliberately narrow — T2.1.5 adds the handle-root alarm (error
 // log + counter) and makes reserved-path/reserved-handle/invalid-path
-// short-circuit behavior explicit, but everything below is still a LATER
-// task, not a bug:
+// short-circuit behavior explicit; T2.4.3 adds the 'link' kind's real
+// composition (`handleLinkTarget`, below). Everything else here is still
+// a LATER task, not a bug:
 //   - T2.5.2/T2.5.3 give the 404 a branded HTML body; a bare empty 404 is
-//     correct here.
-//   - S2.2 onward add the actual 'link' kind's slug resolution, Redis
-//     lookup and enqueue.
+//     correct here, for every 404 this file produces (`not-ours`
+//     excepted, which never 404s at all).
+//   - T2.4.4 replaces `logEnqueueFailurePlaceholder` (below) with the
+//     real, redacting enqueue-failure logger.
+//   - T2.4.5 adds a read-time open-redirect guard on the resolved
+//     destination, ahead of `sendLinkRedirect`.
 //   - T2.6.5 is where "reserved paths cost zero Redis GETs" becomes an
-//     assertion against a real client, once `redis` exists on this
-//     middleware's deps at all — today there is nothing to spy on.
-// Every RequestTarget kind other than 'not-ours' and 'handle-root'
-// therefore still gets the exact same bare 404 with no side effect beyond
-// it — the branching those later tasks need doesn't exist yet because
-// building it here would be scope creep this task's brief explicitly
-// rules out.
+//     assertion against a real client.
+// `reserved-path`, `reserved-handle`, `invalid-path` and `handle-root`
+// still get the exact same bare 404 with no side effect beyond it (plus
+// the alarm, for handle-root) — only `link` does real work now.
 
 /**
  * Minimal logger shape the redirect middleware needs — mirrors
@@ -94,6 +100,50 @@ export interface RedirectMiddlewareDeps {
   readonly logger: RedirectMiddlewareLogger;
   /** Built once at boot via createHandleRootHitsCounter — see main.ts. */
   readonly handleRootHitsCounter: Counter<string>;
+  /**
+   * T2.4.3 — resolves a Host-derived handle to a tenant_id. Built once at
+   * boot via createResolveTenant (resolve-tenant.ts) — see main.ts. The
+   * FIRST of the two "resolution lookup" awaits invariant 1's own wording
+   * carves out explicitly: the ordering guarantee holds because nothing
+   * else awaited sits ahead of `res.redirect` besides this call and
+   * `resolveLink`, below.
+   */
+  readonly resolveTenant: ResolveTenant;
+  /**
+   * T2.4.3 — resolves a tenant-scoped slug to its cached/Postgres-backed
+   * link. A thin closure over resolve-link.ts's `resolveLink(tenant, slug,
+   * deps)`, partially applied over its own boot-resolved deps (db, redis,
+   * logger, timeoutMs, cacheTtlSeconds) in main.ts — this file only ever
+   * sees the 2-argument shape. The SECOND, and last, "resolution lookup"
+   * await ahead of `res.redirect`.
+   */
+  readonly resolveLink: (tenantId: string, slug: string) => Promise<CachedLink | null>;
+  /**
+   * T2.4.3 — the ASN/country lookup (packages/core/src/geoip/lookup.ts),
+   * built once at boot via createNetworkLookup over the boot-time mmdb
+   * reader pair (T2.3.4's openGeoDatabases) — see main.ts. Synchronous:
+   * called with no `await`, so it can run either side of the response
+   * without ever delaying it — `handleLinkTarget` (below) runs it AFTER,
+   * for reasons explained there.
+   */
+  readonly lookupNetwork: LookupNetwork;
+  /**
+   * T2.4.3 — the daily visitor-hash salt (packages/core/src/redis/salt.ts),
+   * built once at boot via createDailySalt — see main.ts. The ONLY await
+   * in `handleLinkTarget` (below) that runs AFTER the response has
+   * already been sent — see that function's own comment for why it
+   * cannot sit any earlier without either blocking the redirect on a live
+   * Redis round trip or duplicating getDailySalt's own memoization here.
+   */
+  readonly getDailySalt: GetDailySalt;
+  /**
+   * T2.4.3 — the BullMQ producer (enqueue.ts's createEnqueueCapture, over
+   * createEventsQueue and env.MAX_INFLIGHT_ENQUEUES) — see main.ts.
+   * Called at most once per successfully-redirected 'link' request,
+   * always AFTER the response, always `void`d with a `.catch()` attached
+   * in the same synchronous tick — see `handleLinkTarget`.
+   */
+  readonly enqueueCapture: EnqueueCapture;
 }
 
 /**
@@ -148,10 +198,20 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
         handleRootHitsCounter.inc();
         break;
 
+      case 'link':
+        // T2.4.3 — the only kind that does real work. handleLinkTarget
+        // owns its ENTIRE response (307 on a hit, 404 on a miss), so this
+        // returns immediately rather than falling through to the shared
+        // 404 below. `void`d deliberately: the switch itself stays
+        // synchronous, and handleLinkTarget's own header comment explains
+        // why nothing inside it can throw an unhandled rejection back
+        // out here.
+        void handleLinkTarget(target.handle, target.slug, req, res, deps);
+        return;
+
       case 'reserved-path':
       case 'reserved-handle':
       case 'invalid-path':
-      case 'link':
         // No alarm, no side effect beyond the shared 404 below — see the
         // file header for why each of these stays a bare 404 for now.
         break;
@@ -173,20 +233,195 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
   };
 }
 
+// T2.4.3 — a MINIMAL placeholder for logEnqueueFailure(err, ctx). The
+// real function belongs in enqueue.ts, not this file (T2.4.4's own
+// "files" line), and logs event_id, tenant_id, slug, the error's name and
+// message — the message redacted through redactCredentialsFromMessage,
+// since REDIS_URL's password rides inside an ioredis connection error's
+// own `.message` (see resolve-redis.ts's describeError, which needs the
+// identical guarantee). None of that redaction exists yet — building it
+// is explicitly out of THIS task's scope — so this placeholder logs only
+// the failing error's constructor name, mirroring every other "safe
+// until the real logger lands" call site in this epic (geoip/lookup.ts's
+// logLookupFailure, redis/salt.ts's fetchOrGenerateSalt). T2.4.4 replaces
+// this function and its one call site (in handleLinkTarget, below)
+// wholesale.
+function logEnqueueFailurePlaceholder(
+  error: unknown,
+  logger: RedirectMiddlewareLogger,
+  context: { readonly eventId: string; readonly tenantId: string; readonly slug: string },
+): void {
+  const errorType = error instanceof Error ? error.constructor.name : typeof error;
+  logger.error('Enqueue failed; the redirect already succeeded, event dropped', {
+    ...context,
+    errorType,
+  });
+}
+
+// T2.4.3 [INV-1][INV-3] — the 'link' kind's real composition: resolve ->
+// redirect -> enqueue, in that exact order, with the response sent before
+// anything analytics-adjacent runs. `resolveTenant` and `resolveLink` are
+// the ONLY two awaits ahead of `sendLinkRedirect` — the two "resolution
+// lookup" awaits invariant 1's own wording carves out explicitly.
+//
+// Everything after `sendLinkRedirect` — reading headers/IP, the geoip
+// lookup, the salt fetch, hashing, assembling the payload, enqueueing —
+// is deliberately pushed to AFTER the response, even the parts that are
+// perfectly synchronous (readClientIp/readSignals/lookupNetwork carry no
+// `await` at all, and could technically run ahead of the redirect without
+// costing it any wall-clock wait). Moving them there anyway keeps this
+// function's shape a single, unambiguous fact instead of a judgment call
+// a future edit could get wrong: every await AFTER `sendLinkRedirect` is
+// automatically safe (the response already went out), every await BEFORE
+// it is exactly the two resolution lookups and nothing else. `req`
+// itself stays perfectly readable after `res.end()` — Node never
+// invalidates the request object when the response finishes — so nothing
+// is lost by waiting.
+//
+// [R16 / capture-privacy.test.ts] The try/catch below is this task's half
+// of closing T2.3.8's own gap: that suite's `runCapturePipeline` fixture
+// stood in for "whatever T2.4.3 eventually builds" and proved a SAFE
+// handler (log only the error's type, never touch the request) leaks
+// nothing, while a LEAKY one (`log.error({ req })`, the literal bug
+// pattern the dispatch named) does. This function reuses that exact safe
+// shape, in a file capture-privacy.test.ts's own static scan
+// (REDIRECT_HOT_PATH_FILES) already covers — so the leak class that suite
+// guards against is checked against the REAL composition site now, not
+// only the fixture that modeled it.
+async function handleLinkTarget(
+  handle: string,
+  slug: string,
+  req: Request,
+  res: Response,
+  deps: Pick<
+    RedirectMiddlewareDeps,
+    'resolveTenant' | 'resolveLink' | 'lookupNetwork' | 'getDailySalt' | 'enqueueCapture' | 'logger'
+  >,
+): Promise<void> {
+  const { resolveTenant, resolveLink, lookupNetwork, getDailySalt, enqueueCapture, logger } = deps;
+
+  let tenantId: string | null;
+  let link: CachedLink | null;
+  try {
+    tenantId = await resolveTenant(handle);
+    if (tenantId === null) {
+      res.set('Cache-Control', 'no-store');
+      res.status(404).end();
+      return;
+    }
+
+    link = await resolveLink(tenantId, slug);
+    if (link === null) {
+      // No link_id to attach an event to — events.link_id is NOT NULL by
+      // design. Enqueueing nothing here is not an oversight; it is the
+      // only honest option for a slug that does not resolve.
+      res.set('Cache-Control', 'no-store');
+      res.status(404).end();
+      return;
+    }
+  } catch (error) {
+    // resolveTenant/resolveLink both degrade a Redis failure to a
+    // fall-through to Postgres internally, but a genuine POSTGRES failure
+    // propagates — see resolve-tenant.ts's createResolveTenant and
+    // resolve-link.ts's resolveLinkFromDb, both of which document exactly
+    // this: Postgres is the resolution of last resort, so there is
+    // nothing left to fall through to. Without this catch, that failure
+    // would reject handleLinkTarget's own promise with no handler
+    // attached (an unhandled rejection) and — worse — never answer the
+    // request at all, hanging it until the client times out. The same
+    // terminal 404 every other undecidable outcome on this path already
+    // gets is the answer here too, logged the same SAFE way as the
+    // capture-pipeline catch below: only the error's constructor name,
+    // never the request.
+    const errorType = error instanceof Error ? error.constructor.name : typeof error;
+    logger.error('Link resolution failed; answering 404 rather than leaving the request hanging', {
+      errorType,
+      handle,
+      slug,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.status(404).end();
+    return;
+  }
+
+  // The response, sent. Everything below this line runs AFTER the
+  // visitor already has their 307 — see this function's own header
+  // comment for why even the synchronous reads are deferred this far.
+  sendLinkRedirect(res, link.destination);
+  if (res.statusCode !== 307) {
+    // sendLinkRedirect itself 404'd: an unencodable destination
+    // (encodeDestinationForHeader's own `null` case, below). No
+    // successful redirect happened, so — same reasoning as the
+    // link-miss branch above — there is nothing honest to enqueue.
+    return;
+  }
+
+  try {
+    const ip = readClientIp(req.headers);
+    const signals = readSignals(req);
+    const cfCountryHeader = req.headers['cf-ipcountry'];
+    const cfCountry = typeof cfCountryHeader === 'string' ? cfCountryHeader : null;
+    const { asn, country } = lookupNetwork(ip ?? '', cfCountry);
+
+    // The one await in this whole function that runs AFTER the response
+    // has already been flushed. getDailySalt() is memoized per UTC day
+    // (redis/salt.ts) but its FIRST call of the day is a real Redis round
+    // trip — awaiting it ahead of sendLinkRedirect would make every
+    // visitor's redirect latency depend on that round trip once a day,
+    // exactly what invariant 1 forbids. Sitting here costs nothing: the
+    // redirect has already happened, and nothing downstream is waiting on
+    // this promise either.
+    const salt = await getDailySalt();
+    const visitorHash = ip ? computeVisitorHash(ip, signals.user_agent, salt) : null;
+
+    const payload = buildCapturePayload({
+      tenantId,
+      linkId: link.link_id,
+      slug,
+      signals,
+      visitorHash,
+      asn,
+      country,
+    });
+
+    // Fire-and-forget with the `.catch()` attached in the same
+    // synchronous tick the promise is created in — enqueueCapture's own
+    // doc comment (enqueue.ts) is explicit that this is what makes
+    // `void`ing it safe: no unhandled rejection, whatever queue.add()
+    // eventually does.
+    void enqueueCapture(payload).catch((error: unknown) =>
+      logEnqueueFailurePlaceholder(error, logger, {
+        eventId: payload.event_id,
+        tenantId,
+        slug,
+      }),
+    );
+  } catch (error) {
+    // A capture failure (geoip, salt, hash, payload assembly) can no
+    // longer cost the redirect — it already happened. Degrades to "no
+    // analytics for this request", logged the same SAFE way
+    // capture-privacy.test.ts's own fixture proves leaks nothing: only
+    // the error's constructor name, never the request.
+    const errorType = error instanceof Error ? error.constructor.name : typeof error;
+    logger.error('Capture failed; the redirect already succeeded, no analytics for this request', {
+      errorType,
+      tenantId,
+      slug,
+    });
+  }
+}
+
 // T2.4.1 [INV-3] — the response half of S2.4: given an already-resolved
-// destination, this is what turns it into a 307. Deliberately NOT called
-// from the switch's 'link' case above yet: T2.4.3 owns wiring
-// resolveLink (resolve-link.ts) into this middleware and composing
-// resolve -> respond -> enqueue in that exact order [INV-1] — calling it
-// from here would collide with that task's composition and leave the
-// 'link' case half-built with no real destination to redirect to. This
-// function IS the seam: T2.4.3 calls it with the resolved link's
-// `destination` the instant resolveLink returns a hit, then enqueues
-// AFTER, never before. [T2.4.1 fix round 2] Note for that composition:
-// this function no longer GUARANTEES a 307 — a destination that cannot
-// be turned into a valid Location header (see the `null` case below)
-// ends in a 404 instead. T2.4.3 decides for itself whether that outcome
-// still warrants an enqueue; this file makes no assumption either way.
+// destination, this is what turns it into a 307. Called from
+// handleLinkTarget (above) with the resolved link's `destination` the
+// instant resolveLink returns a hit; enqueueing happens strictly AFTER,
+// never before — see handleLinkTarget's own header comment for the full
+// composition and why. [T2.4.1 fix round 2] This function does not
+// GUARANTEE a 307 — a destination that cannot be turned into a valid
+// Location header (see the `null` case below) ends in a 404 instead.
+// handleLinkTarget checks `res.statusCode` after calling this function to
+// tell the two outcomes apart, since this function's own return type
+// carries no signal of which one happened.
 //
 // `res.redirect(307, destination)` is deliberately NOT used here.
 // Express's res.redirect() — and res.location(), which it calls

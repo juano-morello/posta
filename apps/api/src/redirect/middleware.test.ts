@@ -8,6 +8,7 @@ import express from 'express';
 import { Counter, Registry, register } from 'prom-client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeUrlBuilders, resolveReservedHandles } from '@posta/contracts';
+import type { CachedLink } from '@posta/contracts';
 import { makeRequestTargetParser } from './host';
 import {
   consoleErrorLogger,
@@ -15,6 +16,26 @@ import {
   createRedirectMiddleware,
   HANDLE_ROOT_HITS_COUNTER_NAME,
 } from './middleware';
+
+// T2.4.3 — none of the tests in this file exercise the 'link' kind (that
+// is ordering.test.ts's own job, against a real server); every one of
+// them only reaches `not-ours`, `handle-root`, `reserved-path`,
+// `reserved-handle` or `invalid-path`. RedirectMiddlewareDeps still
+// requires the five link-composition fields structurally, though, so
+// each throws if a test regression ever DID reach the 'link' branch here
+// — a loud failure instead of a silent stub returning plausible-looking
+// data no test asked for.
+function notExercisedInThisFile(): never {
+  throw new Error("T2.4.3 link-composition dep called, but no test in middleware.test.ts exercises 'link'");
+}
+
+const UNUSED_LINK_DEPS = {
+  resolveTenant: async (): Promise<string | null> => notExercisedInThisFile(),
+  resolveLink: async (): Promise<CachedLink | null> => notExercisedInThisFile(),
+  lookupNetwork: () => notExercisedInThisFile(),
+  getDailySalt: async (): Promise<string> => notExercisedInThisFile(),
+  enqueueCapture: async (): Promise<void> => notExercisedInThisFile(),
+};
 
 // T2.1.4 [INV-2] — proves the ordering claim, not just the branching:
 // the redirect middleware must be mounted on the Express instance BEFORE
@@ -193,6 +214,7 @@ describe('createRedirectMiddleware — mounted ahead of the Nest router', () => 
         parseRequestTarget,
         logger: consoleErrorLogger,
         handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+        ...UNUSED_LINK_DEPS,
       }),
     );
 
@@ -284,6 +306,7 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     parseRequestTarget,
     logger: consoleErrorLogger,
     handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+    ...UNUSED_LINK_DEPS,
   });
 
   it('calls next() exactly once for a not-ours host and touches nothing else', () => {
@@ -309,17 +332,83 @@ describe('createRedirectMiddleware — handler behavior in isolation', () => {
     expect(res.ended).toBe(false);
   });
 
-  it('404s with Cache-Control: no-store for a link target, without calling next()', () => {
+  // T2.4.3 — a 'link' target used to fall into this same synchronous
+  // no-op branch as every other terminal kind (bare 404, no I/O). It no
+  // longer does: resolving a link means awaiting resolveTenant/
+  // resolveLink, so the dispatch out of the switch is still synchronous
+  // (next() is still never called, immediately) but the RESPONSE is not
+  // — this test is `async` and waits for it, unlike every sibling above.
+  // The real resolve -> redirect -> enqueue composition (a hit, not this
+  // unknown-handle miss) is ordering.test.ts's job, against a real
+  // server; this one just proves an unresolvable link still 404s cleanly
+  // through the async path, with no next() call.
+  it('eventually 404s with Cache-Control: no-store for an unresolvable link target, without calling next()', async () => {
     const req = { headers: { host: `juano.${DOMAIN}` }, path: '/promo' } as never;
     const res = makeRes();
     const next = vi.fn();
+    const unresolvedLinkMiddleware = createRedirectMiddleware({
+      parseRequestTarget,
+      logger: consoleErrorLogger,
+      handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      ...UNUSED_LINK_DEPS,
+      resolveTenant: async () => null, // unknown handle — no Postgres/Redis needed
+    });
 
-    middleware(req, res as never, next);
+    unresolvedLinkMiddleware(req, res as never, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.ended).toBe(false); // still pending immediately after dispatch
+
+    await vi.waitFor(() => {
+      expect(res.ended).toBe(true);
+    });
 
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(404);
     expect(res.headers['Cache-Control']).toBe('no-store');
-    expect(res.ended).toBe(true);
+  });
+
+  // T2.4.3 — resolveTenant/resolveLink both degrade a Redis failure to a
+  // Postgres fall-through internally, but neither catches a genuine
+  // POSTGRES failure — resolve-tenant.ts's own header comment says so
+  // explicitly: Postgres is the resolution of last resort, so a query
+  // error propagates. Without handleLinkTarget's own top-level catch,
+  // that throw would reject its promise with no handler attached (an
+  // unhandled rejection) AND never answer the request — this test proves
+  // both are fixed: the request still 404s, and the error is logged the
+  // SAFE way (constructor name only, never a request/error object that
+  // might carry a connection string).
+  it('eventually 404s and logs safely when resolveTenant throws a genuine infrastructure failure', async () => {
+    const req = { headers: { host: `juano.${DOMAIN}` }, path: '/promo' } as never;
+    const res = makeRes();
+    const next = vi.fn();
+    const logger = { error: vi.fn<LoggerErrorFn>() };
+    const brokenResolutionMiddleware = createRedirectMiddleware({
+      parseRequestTarget,
+      logger,
+      handleRootHitsCounter: createHandleRootHitsCounter(new Registry()),
+      ...UNUSED_LINK_DEPS,
+      resolveTenant: async () => {
+        throw new Error('connect ECONNREFUSED postgresql://posta:s3cret@db:5432/posta');
+      },
+    });
+
+    brokenResolutionMiddleware(req, res as never, next);
+    await vi.waitFor(() => {
+      expect(res.ended).toBe(true);
+    });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['Cache-Control']).toBe('no-store');
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [message, meta] = logger.error.mock.calls[0] as [string, Record<string, unknown> | undefined];
+    expect(meta).toMatchObject({ errorType: 'Error', handle: 'juano', slug: 'promo' });
+    // The SAFE shape: only the error's constructor name, never its raw
+    // message — which is exactly where a connection string (password
+    // included) would ride if this ever logged `error` or `error.message`
+    // directly instead.
+    expect(JSON.stringify([message, meta])).not.toContain('s3cret');
   });
 });
 
@@ -379,7 +468,12 @@ describe('createRedirectMiddleware — handle-root alarm (T2.1.5)', () => {
     registry = new Registry();
     handleRootHitsCounter = createHandleRootHitsCounter(registry);
     logger = { error: vi.fn<LoggerErrorFn>() };
-    middleware = createRedirectMiddleware({ parseRequestTarget, logger, handleRootHitsCounter });
+    middleware = createRedirectMiddleware({
+      parseRequestTarget,
+      logger,
+      handleRootHitsCounter,
+      ...UNUSED_LINK_DEPS,
+    });
   });
 
   it('404s "/" on a handle host, with Cache-Control: no-store and no next()', () => {
@@ -462,7 +556,12 @@ describe('createRedirectMiddleware — reserved paths short-circuit, no alarm (T
     registry = new Registry();
     handleRootHitsCounter = createHandleRootHitsCounter(registry);
     logger = { error: vi.fn<LoggerErrorFn>() };
-    middleware = createRedirectMiddleware({ parseRequestTarget, logger, handleRootHitsCounter });
+    middleware = createRedirectMiddleware({
+      parseRequestTarget,
+      logger,
+      handleRootHitsCounter,
+      ...UNUSED_LINK_DEPS,
+    });
   });
 
   it.each([['/favicon.ico'], ['/robots.txt'], ['/.well-known/x']])(

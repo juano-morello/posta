@@ -5,14 +5,25 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import express from 'express';
 import type { Request, Response } from 'express';
 import { formatEnvFailures, loadEnv, makeUrlBuilders, resolveReservedHandles } from '@posta/contracts';
+import {
+  createDailySalt,
+  createDbClient,
+  createNetworkLookup,
+  getRedis,
+  openGeoDatabases,
+} from '@posta/core';
 import { AppModule } from './app.module';
 import { apiEnvSchema } from './env';
+import { createEnqueueCapture, createEnqueueDroppedCounter, createEventsQueue } from './redirect/enqueue';
 import { makeRequestTargetParser } from './redirect/host';
 import {
   consoleErrorLogger,
   createHandleRootHitsCounter,
   createRedirectMiddleware,
 } from './redirect/middleware';
+import { consoleWarnLogger } from './redirect/resolve-redis';
+import { resolveLink } from './redirect/resolve-link';
+import { createResolveTenant } from './redirect/resolve-tenant';
 
 // T0.3.8 — fail fast on invalid env (S0.3). The very first thing this
 // process does, before NestFactory.create or anything else: validate
@@ -62,11 +73,66 @@ async function bootstrap(): Promise<void> {
   });
   const handleRootHitsCounter = createHandleRootHitsCounter();
 
+  // T2.4.3 [INV-1][INV-2] — the redirect hot path's remaining boot-time
+  // dependencies: Postgres, the shared cache Redis client, the GeoIP
+  // reader pair, the daily salt manager, and the BullMQ producer. Every
+  // one of these is resolved exactly ONCE, here, before server.use() ever
+  // mounts the middleware that closes over them — see
+  // resolveTenant/resolveLink/lookupNetwork/getDailySalt/enqueueCapture's
+  // own doc comments (middleware.ts's RedirectMiddlewareDeps) for why
+  // each is shaped as a closure built at boot rather than constructed
+  // per request.
+  //
+  // `getRedis()` is the ONE shared cache client both the handle tier
+  // (resolveTenant) and the link tier (resolveLink) read/write — the hot
+  // link/salt cache, per CLAUDE.md. The BullMQ producer below gets its
+  // OWN dedicated connection instead (createEventsQueue's own doc comment
+  // explains why: the cache's fail-fast timeouts are wrong for a durable
+  // queue write, and sharing one socket would let load on one path stall
+  // the other).
+  const dbClient = createDbClient({ connectionString: env.DATABASE_URL });
+  const redis = getRedis({ url: env.REDIS_URL });
+  const geoDatabases = openGeoDatabases({ dbDir: env.GEOIP_DB_DIR });
+
+  const resolveTenant = createResolveTenant({
+    db: dbClient.db,
+    redis,
+    logger: consoleWarnLogger,
+    timeoutMs: env.REDIS_LOOKUP_TIMEOUT_MS,
+  });
+  // A thin closure over resolve-link.ts's resolveLink(tenant, slug, deps)
+  // — middleware.ts's RedirectMiddlewareDeps only ever sees the
+  // 2-argument shape; db/redis/logger/timeoutMs/cacheTtlSeconds are
+  // partially applied here, once, exactly like createResolveTenant above.
+  const resolveLinkForRedirect = (tenantId: string, slug: string) =>
+    resolveLink(tenantId, slug, {
+      db: dbClient.db,
+      redis,
+      logger: consoleWarnLogger,
+      timeoutMs: env.REDIS_LOOKUP_TIMEOUT_MS,
+      cacheTtlSeconds: env.LINK_CACHE_TTL_SECONDS,
+    });
+  const lookupNetwork = createNetworkLookup(geoDatabases);
+  const getDailySalt = createDailySalt({ redis, logger: consoleErrorLogger });
+
+  const eventsQueue = createEventsQueue(env.REDIS_URL);
+  const enqueueDroppedCounter = createEnqueueDroppedCounter();
+  const enqueueCapture = createEnqueueCapture({
+    queue: eventsQueue,
+    droppedCounter: enqueueDroppedCounter,
+    maxInflight: env.MAX_INFLIGHT_ENQUEUES,
+  });
+
   server.use(
     createRedirectMiddleware({
       parseRequestTarget,
       logger: consoleErrorLogger,
       handleRootHitsCounter,
+      resolveTenant,
+      resolveLink: resolveLinkForRedirect,
+      lookupNetwork,
+      getDailySalt,
+      enqueueCapture,
     }),
   );
 
