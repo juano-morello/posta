@@ -131,6 +131,49 @@ jobs:
               .catch((error) => { console.error(error); process.exit(1); });
           "
 
+      # T2.3.4 review fixup (interim — T2.6.10 owns the FULL hot-path CI
+      # wiring, including its own dedicated job; this is only enough to
+      # keep THIS job green until that lands, not the final arrangement).
+      # packages/core/src/geoip/loader.test.ts's real-data tests (7 of its
+      # 13) need the actual DB-IP .mmdb pair under data/geoip/, which is
+      # git-ignored (T0.1.1) and never populated by `pnpm install` alone.
+      # Without this, those 7 tests fail here with the loader's own "run
+      # `pnpm geo:fetch`" guidance instead of a real assertion, every run.
+      #
+      # Cached by DB-IP's release month (UTC): the two files are ~18 MB
+      # combined and DB-IP re-releases both monthly (scripts/fetch-geoip.sh's
+      # own header) — every run within the same month reuses an earlier
+      # run's download instead of re-pulling from download.db-ip.com. A
+      # cache miss (new month, or the first run ever) falls through to a
+      # real fetch. Exact-key only, no restore-keys: a restored PARTIAL
+      # match from a prior month would report cache-hit=false and still
+      # trigger a real fetch below anyway, so a fallback key would only add
+      # a redundant partial download with no skip benefit.
+      - name: Resolve GeoIP cache key (current UTC year-month)
+        id: geoip-month
+        run: echo "year_month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache GeoIP databases
+        id: geoip-cache
+        uses: actions/cache@v6
+        with:
+          path: data/geoip
+          key: geoip-${{ steps.geoip-month.outputs.year_month }}
+
+      # No `continue-on-error`, no `|| true`: fetch-geoip.sh already exits
+      # non-zero (set -euo pipefail) on a genuine download failure, and this
+      # step is left to fail the job loudly on that exit code rather than
+      # swallowing it. Tolerating a failure here would not avoid a red
+      # build — it would only move the failure 3 steps down to the 7 geoip
+      # tests below, each reporting the loader's generic "file not found,
+      # run pnpm geo:fetch" guidance instead of the real network/
+      # availability problem. A red fetch step with fetch-geoip.sh's own
+      # clear "could not download ... aborting" message is strictly more
+      # debuggable than a red test suite pointing at the wrong cause.
+      - name: Fetch GeoIP databases (data/geoip)
+        if: steps.geoip-cache.outputs.cache-hit != 'true'
+        run: pnpm geo:fetch
+
       - name: Lint
         run: pnpm lint
 
