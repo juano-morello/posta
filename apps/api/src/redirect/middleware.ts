@@ -202,11 +202,27 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
         // T2.4.3 — the only kind that does real work. handleLinkTarget
         // owns its ENTIRE response (307 on a hit, 404 on a miss), so this
         // returns immediately rather than falling through to the shared
-        // 404 below. `void`d deliberately: the switch itself stays
-        // synchronous, and handleLinkTarget's own header comment explains
-        // why nothing inside it can throw an unhandled rejection back
-        // out here.
-        void handleLinkTarget(target.handle, target.slug, req, res, deps);
+        // 404 below.
+        //
+        // [fix round 1] `void`d with a defensive `.catch()` attached in
+        // the same synchronous tick, not a bare `void`. handleLinkTarget's
+        // own two try/catch blocks SHOULD cover its entire throwing
+        // surface today, but that is a fact about the code BETWEEN them
+        // holding forever, not something the type system enforces —
+        // insert one new synchronous statement between the two try blocks
+        // (another header write, say) and an unhandled-rejection path
+        // reopens silently, in a file other people will keep editing.
+        // This `.catch()` costs nothing on the hot path (it only ever
+        // runs if handleLinkTarget's own safety net already failed) and
+        // removes the dependence on that invariant holding forever.
+        void handleLinkTarget(target.handle, target.slug, req, res, deps).catch((error: unknown) => {
+          const errorType = error instanceof Error ? error.constructor.name : typeof error;
+          logger.error(
+            'handleLinkTarget rejected unexpectedly — this should be structurally impossible; its ' +
+              'own two try/catch blocks are meant to cover every throw. See this case\'s own comment.',
+            { errorType },
+          );
+        });
         return;
 
       case 'reserved-path':

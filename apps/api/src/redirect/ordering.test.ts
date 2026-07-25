@@ -65,11 +65,13 @@ interface TestServer {
 
 /** The pieces beyond `addImpl` a handful of tests below need to swap out
  * — resolveLink (an unencodable destination), lookupNetwork (a
- * capture-pipeline throw), and logger (to inspect what gets logged when
- * it does). Everything else stays the shared happy-path stub. */
+ * capture-pipeline throw), getDailySalt (a slow salt fetch — the ordering
+ * risk this task is named for), and logger (to inspect what gets logged
+ * when it does). Everything else stays the shared happy-path stub. */
 interface ServerOverrides {
   readonly resolveLink?: (tenantId: string, slug: string) => Promise<CachedLink | null>;
   readonly lookupNetwork?: (ip: string, cfCountry?: string | null) => { asn: number | null; country: string | null };
+  readonly getDailySalt?: () => Promise<string>;
   readonly logger?: RedirectMiddlewareLogger;
 }
 
@@ -133,7 +135,7 @@ function buildServer(
       resolveTenant: resolveTenantStub,
       resolveLink: overrides.resolveLink ?? resolveLinkStub,
       lookupNetwork: overrides.lookupNetwork ?? (() => ({ asn: null, country: null })),
-      getDailySalt: async () => 'ordering-test-salt-not-a-real-secret',
+      getDailySalt: overrides.getDailySalt ?? (async () => 'ordering-test-salt-not-a-real-secret'),
       enqueueCapture,
     }),
   );
@@ -231,6 +233,34 @@ describe('redirect -> enqueue ordering (T2.4.3) [INV-1]', () => {
     // redirect is.
     await requestLink(server.port, `/${SLUG}`);
     await waitFor(() => server.addCalls === 1);
+
+    const startedAt = performance.now();
+    const response = await requestLink(server.port, `/${SLUG}`);
+    const elapsedMs = response.receivedAt - startedAt;
+
+    expect(response.status).toBe(307);
+    expect(elapsedMs).toBeLessThan(15);
+  });
+
+  // [fix round 1] The scenario this task is named for: getDailySalt()
+  // reads like a third "resolution lookup" but is NOT one — it must be
+  // awaited strictly AFTER sendLinkRedirect (see handleLinkTarget's own
+  // header comment for why). Every other test in this file stubs
+  // getDailySalt to resolve near-instantly, so none of them would notice
+  // if a future edit moved this await ahead of the redirect — the same
+  // shape as the rejecting-queue test above, but for salt instead of the
+  // queue, so a slow salt fetch is exactly as harmless to the redirect as
+  // a slow/dead queue already is.
+  it('a getDailySalt() that resolves after 500ms still delivers the 307 in under 15ms', async () => {
+    const server = await buildServer(() => Promise.resolve('job-1'), {
+      getDailySalt: () => new Promise((resolve) => setTimeout(() => resolve('slow-salt'), 500)),
+    });
+    openServers.push(server);
+
+    // Same warm-up rationale as the rejecting-queue test above:
+    // connection/JIT noise isn't what this assertion cares about; the
+    // SLOW SALT never blocking the redirect is.
+    await requestLink(server.port, `/${SLUG}`);
 
     const startedAt = performance.now();
     const response = await requestLink(server.port, `/${SLUG}`);
