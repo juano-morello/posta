@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makeUrlBuilders } from '@posta/contracts';
 import { escapeHtml } from './escape-html';
 import { makeNotFoundRenderer } from './not-found';
@@ -35,6 +35,13 @@ const renderNotFound = makeNotFoundRenderer({ urls });
 // The one URL this document is allowed to contain — buildAppUrl() takes
 // no path argument in not-found.ts, so this must be the bare origin.
 const HOME_URL = urls.buildAppUrl();
+
+// not-found.ts's own HOME_LINK_TEXT constant is not exported (it has no
+// reason to be, outside this one call site) — duplicated here as a
+// literal so the "quiet link" test below asserts against a fixed,
+// human-readable expectation rather than importing the very value under
+// test.
+const HOME_LINK_VISIBLE_TEXT = 'volver a posta';
 
 /** Every src="..."/href="..." (or '...') attribute value in `html`, in
  * document order — a structural scan, not a spot-check for one known
@@ -101,14 +108,82 @@ describe('renderNotFound — structure and budget', () => {
     expect(Buffer.byteLength(html, 'utf8')).toBeLessThan(4096);
   });
 
-  it('stays under the 4 KB budget even for a maximally hostile slug', () => {
-    // escapeHtml's own clamp (MAX_ESCAPED_HTML_LENGTH, T2.5.1) bounds how
-    // much a hostile slug can inflate this page — this proves that bound
-    // is actually tight enough for THIS document's own 4 KB ceiling, not
-    // merely asserted in isolation over escapeHtml alone.
-    const hostileSlug = '<img src=x onerror=alert(1)>'.repeat(50);
+  // [fix round 1] The task review found the original version of this test
+  // (a repeated '<img src=x onerror=alert(1)>' slug) asserted a TRUE fact
+  // (under 4 KB) while proving NOTHING about escapeHtml's clamp: that
+  // payload has only '<' and '>' as escapable characters, and
+  // MAX_INPUT_LENGTH (128 chars, T2.5.1) truncates the raw slug before
+  // escaping ever runs — so its escaped contribution to the page never
+  // got anywhere near either of escapeHtml's own length ceilings. Bumping
+  // MAX_ESCAPED_HTML_LENGTH from 384 to 5000 left the test green, which
+  // is exactly the "looked thorough, could not fail" shape flagged by the
+  // review.
+  //
+  // Investigating the reviewer's own suggested fix (bump
+  // MAX_ESCAPED_HTML_LENGTH, expect RED) surfaced something worth
+  // recording rather than silently working around: it does NOT go red
+  // either, for any payload — not a test bug, a property of the module.
+  // escapeHtml chains TWO clamps (escape-html.ts): MAX_INPUT_LENGTH
+  // (2 * SLUG_MAX_LENGTH = 128 raw chars) truncates BEFORE escaping,
+  // MAX_ESCAPED_HTML_LENGTH (6 * SLUG_MAX_LENGTH = 384) truncates AFTER.
+  // Even with NO output clamp at all, 128 raw chars can escape to at most
+  // 128 * 6 = 768 chars (the widest entity, `&quot;`, is 6 characters) —
+  // and this document's own static overhead (~1.37 KB, measured via
+  // `renderNotFound('')`) leaves roughly 2.7 KB of headroom under the
+  // 4 KB ceiling, so 768 escaped characters can never threaten it no
+  // matter how the OUTPUT clamp alone is misconfigured. Empirically
+  // confirmed (see the fix-round report for the full transcript): an
+  // all-'&' 1000-character slug (`&` → `&amp;` is escapeHtml's widest
+  // COMMON-case expansion, 5x) renders to 1754 bytes under the real
+  // clamps; with ONLY MAX_ESCAPED_HTML_LENGTH raised to 5000, 2010 bytes
+  // — still comfortably safe; only with BOTH clamps loosened together
+  // (the realistic failure mode, since both derive from the SAME
+  // SLUG_MAX_LENGTH constant) does it reach 6370 bytes and breach budget.
+  //
+  // So the test that actually discriminates has to defeat BOTH clamps at
+  // once, not name one in isolation. Rather than hand-editing
+  // escape-html.ts's exported constants (fragile, and would leave a
+  // window where a real edit could go uncommitted), this mocks
+  // escapeHtml's OWN behavior down to "just the entity substitution, no
+  // length limit at all" — i.e. exactly "the clamp is absent" — and
+  // proves that WOULD blow the budget, which is what makes the sibling
+  // test (same slug, real unmocked escapeHtml) an actual regression
+  // guard rather than a coincidence.
+  it('would breach the 4 KB budget if escapeHtml applied no length clamp — proving the clamp is what keeps it under, not luck', async () => {
+    vi.resetModules();
+    vi.doMock('./escape-html', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./escape-html')>();
+      return {
+        ...actual,
+        // Same entity substitution as the real escapeHtml, but with
+        // BOTH of its length clamps removed — the "clamp absent or
+        // misconfigured" scenario the review round asked this test to
+        // discriminate against. The real escape-html.ts module (and its
+        // own dedicated test suite, T2.5.1) is untouched by this mock.
+        escapeHtml: (s: string) => s.replace(/&/g, '&amp;'),
+      };
+    });
 
-    const html = renderNotFound(hostileSlug);
+    const { makeNotFoundRenderer: makeUnclampedRenderer } = await import('./not-found');
+    const unclampedRenderNotFound = makeUnclampedRenderer({ urls });
+    const adversarialSlug = '&'.repeat(1000);
+
+    const html = unclampedRenderNotFound(adversarialSlug);
+
+    expect(Buffer.byteLength(html, 'utf8')).toBeGreaterThan(4096);
+
+    vi.doUnmock('./escape-html');
+    vi.resetModules();
+  });
+
+  it('stays under the 4 KB budget for the SAME adversarial slug through the real, clamped escapeHtml', () => {
+    // The sibling of the test above: identical payload, but through the
+    // real, unmocked escapeHtml (MAX_INPUT_LENGTH + MAX_ESCAPED_HTML_LENGTH
+    // both active, exactly as T2.5.1 shipped them) — this is what
+    // actually ships, and it is what must stay green.
+    const adversarialSlug = '&'.repeat(1000);
+
+    const html = renderNotFound(adversarialSlug);
 
     expect(Buffer.byteLength(html, 'utf8')).toBeLessThan(4096);
   });
@@ -236,6 +311,14 @@ describe('renderNotFound — on-brand contract', () => {
 
   it('disables the cursor animation under prefers-reduced-motion, without hiding it', () => {
     const html = renderNotFound('promo');
+    // [fix round 1, minor] `[^}]*` captures up to the FIRST `}`, which is
+    // only correct because today's media query body holds exactly one
+    // flat CSS rule (`.cursor{...}`) with no nested braces. If a future
+    // edit ever put a second, brace-nested rule inside this same query,
+    // this capture would need to become brace-aware (e.g. a proper
+    // balanced-match) instead of a single `[^}]*` — noted here so that
+    // future edit doesn't silently start passing against a truncated
+    // capture.
     const mediaQueryMatch = html.match(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{([^}]*)\}/,
     );
@@ -265,5 +348,22 @@ describe('renderNotFound — on-brand contract', () => {
     const html = renderNotFound('promo');
 
     expect(html).toContain(`href="${HOME_URL}"`);
+
+    // [fix round 1, minor] The original assertion only checked the href
+    // was present — it named "quiet ... link text" without ever reading
+    // the visible text or the at-rest color, so a regression that made
+    // the link loud (bright lime, or button-styled) at rest would have
+    // passed silently. Both are checked directly now.
+    const anchorMatch = html.match(/<a[^>]*class="home"[^>]*>([^<]*)<\/a>/);
+    expect(anchorMatch?.[1]).toBe(HOME_LINK_VISIBLE_TEXT);
+
+    // "Quiet" means non-lime AT REST. `\ba\{` matches only the bare
+    // `a{...}` rule — it does NOT match `a:hover{...}`, since the
+    // character right after "a" there is ':', not '{' — so the hover
+    // state (which legitimately DOES use lime, per not-found.ts) is
+    // excluded from this check on purpose.
+    const restRuleMatch = html.match(/\ba\{([^}]*)\}/);
+    expect(restRuleMatch).not.toBeNull();
+    expect(restRuleMatch?.[1] ?? '').not.toContain('#B4FF39');
   });
 });
