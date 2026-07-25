@@ -3,7 +3,7 @@ import { Counter, type Registry } from 'prom-client';
 import type { CachedLink } from '@posta/contracts';
 import type { GetDailySalt, LookupNetwork } from '@posta/core';
 import { buildCapturePayload, computeVisitorHash, readClientIp, readSignals } from './capture';
-import type { EnqueueCapture } from './enqueue';
+import { createLogEnqueueFailure, type EnqueueCapture, type LogEnqueueFailure } from './enqueue';
 import type { ParseRequestTarget } from './host';
 import type { ResolveTenant } from './resolve-tenant';
 
@@ -35,8 +35,9 @@ import type { ResolveTenant } from './resolve-tenant';
 //   - T2.5.2/T2.5.3 give the 404 a branded HTML body; a bare empty 404 is
 //     correct here, for every 404 this file produces (`not-ours`
 //     excepted, which never 404s at all).
-//   - T2.4.4 replaces `logEnqueueFailurePlaceholder` (below) with the
-//     real, redacting enqueue-failure logger.
+//   - T2.4.4 replaced the former `logEnqueueFailurePlaceholder` with
+//     enqueue.ts's real, redacting `createLogEnqueueFailure` — see
+//     `handleLinkTarget`'s own comment for the wiring.
 //   - T2.4.5 adds a read-time open-redirect guard on the resolved
 //     destination, ahead of `sendLinkRedirect`.
 //   - T2.6.5 is where "reserved paths cost zero Redis GETs" becomes an
@@ -159,6 +160,13 @@ export interface RedirectMiddlewareDeps {
  */
 export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestHandler {
   const { parseRequestTarget, logger, handleRootHitsCounter } = deps;
+  // T2.4.4 — built once here, via enqueue.ts's createLogEnqueueFailure(logger):
+  // the same "closure resolved once at boot" treatment every other
+  // dependency in this function gets (see the file header).
+  // createRedirectMiddleware itself is called exactly once (main.ts), so
+  // this costs nothing per request and needs no new RedirectMiddlewareDeps
+  // field — logger is already one.
+  const logEnqueueFailure = createLogEnqueueFailure(logger);
 
   return function redirectMiddleware(req: Request, res: Response, next: NextFunction): void {
     // req.path (not req.url) is Express's query-string-stripped path, so
@@ -215,7 +223,10 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
         // This `.catch()` costs nothing on the hot path (it only ever
         // runs if handleLinkTarget's own safety net already failed) and
         // removes the dependence on that invariant holding forever.
-        void handleLinkTarget(target.handle, target.slug, req, res, deps).catch((error: unknown) => {
+        void handleLinkTarget(target.handle, target.slug, req, res, {
+          ...deps,
+          logEnqueueFailure,
+        }).catch((error: unknown) => {
           const errorType = error instanceof Error ? error.constructor.name : typeof error;
           logger.error(
             'handleLinkTarget rejected unexpectedly — this should be structurally impossible; its ' +
@@ -249,30 +260,14 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
   };
 }
 
-// T2.4.3 — a MINIMAL placeholder for logEnqueueFailure(err, ctx). The
-// real function belongs in enqueue.ts, not this file (T2.4.4's own
-// "files" line), and logs event_id, tenant_id, slug, the error's name and
-// message — the message redacted through redactCredentialsFromMessage,
-// since REDIS_URL's password rides inside an ioredis connection error's
-// own `.message` (see resolve-redis.ts's describeError, which needs the
-// identical guarantee). None of that redaction exists yet — building it
-// is explicitly out of THIS task's scope — so this placeholder logs only
-// the failing error's constructor name, mirroring every other "safe
-// until the real logger lands" call site in this epic (geoip/lookup.ts's
-// logLookupFailure, redis/salt.ts's fetchOrGenerateSalt). T2.4.4 replaces
-// this function and its one call site (in handleLinkTarget, below)
-// wholesale.
-function logEnqueueFailurePlaceholder(
-  error: unknown,
-  logger: RedirectMiddlewareLogger,
-  context: { readonly eventId: string; readonly tenantId: string; readonly slug: string },
-): void {
-  const errorType = error instanceof Error ? error.constructor.name : typeof error;
-  logger.error('Enqueue failed; the redirect already succeeded, event dropped', {
-    ...context,
-    errorType,
-  });
-}
+// T2.4.4 — `logEnqueueFailure(err, ctx)` used to be a minimal placeholder
+// here (logged only the error's constructor name, no redaction, no
+// message). It now lives in enqueue.ts (its own "files" line) as
+// `createLogEnqueueFailure`, is built once at boot in
+// `createRedirectMiddleware` above, and is threaded into
+// `handleLinkTarget`'s deps below. See enqueue.ts's own header for why
+// the redaction matters (REDIS_URL's password rides inside an ioredis
+// connection error's own `.message`).
 
 // T2.4.3 [INV-1][INV-3] — the 'link' kind's real composition: resolve ->
 // redirect -> enqueue, in that exact order, with the response sent before
@@ -312,9 +307,16 @@ async function handleLinkTarget(
   deps: Pick<
     RedirectMiddlewareDeps,
     'resolveTenant' | 'resolveLink' | 'lookupNetwork' | 'getDailySalt' | 'enqueueCapture' | 'logger'
-  >,
+  > & {
+    /** T2.4.4 — built once at boot by `createRedirectMiddleware` above,
+     * via enqueue.ts's `createLogEnqueueFailure(logger)`. Not a
+     * `RedirectMiddlewareDeps` field itself (it is DERIVED from `logger`,
+     * which already is one) — see that function's own comment. */
+    readonly logEnqueueFailure: LogEnqueueFailure;
+  },
 ): Promise<void> {
-  const { resolveTenant, resolveLink, lookupNetwork, getDailySalt, enqueueCapture, logger } = deps;
+  const { resolveTenant, resolveLink, lookupNetwork, getDailySalt, enqueueCapture, logger, logEnqueueFailure } =
+    deps;
 
   let tenantId: string | null;
   let link: CachedLink | null;
@@ -406,7 +408,7 @@ async function handleLinkTarget(
     // `void`ing it safe: no unhandled rejection, whatever queue.add()
     // eventually does.
     void enqueueCapture(payload).catch((error: unknown) =>
-      logEnqueueFailurePlaceholder(error, logger, {
+      logEnqueueFailure(error, {
         eventId: payload.event_id,
         tenantId,
         slug,

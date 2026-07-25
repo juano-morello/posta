@@ -1,5 +1,5 @@
 import { Queue } from 'bullmq';
-import type { CaptureEvent } from '@posta/contracts';
+import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
 import { Counter, type Registry } from 'prom-client';
 
 // T2.4.2 [INV-1] — the producer half of S2.4's "redirect, then enqueue".
@@ -223,5 +223,96 @@ export function createEnqueueCapture(deps: CreateEnqueueCaptureDeps): EnqueueCap
       .finally(() => {
         inflight -= 1;
       });
+  };
+}
+
+// T2.4.4 [security] — the failure half of "redirect, then enqueue": by
+// the time enqueueCapture's returned promise rejects, the visitor already
+// has their 307 (T2.4.3's own ordering guarantee) and is gone. All that
+// remains is one log line, and that log line is the single place three
+// different secrets could escape at once:
+//   1. The visitor's raw IP [INV-6] — never reaches this file at all.
+//      `EnqueueFailureContext` (below) has no slot for one, and its
+//      three fields are the only inputs this function ever touches.
+//   2. The Redis password. This producer's own dedicated connection
+//      (createEventsQueue, above) can fail exactly the way
+//      resolve-redis.ts's own header describes: ioredis embeds
+//      REDIS_URL — password included — directly in a connection error's
+//      `.message` (e.g. "connect ECONNREFUSED redis://user:s3cret@host:6379").
+//      redactCredentialsFromMessage (packages/contracts) is the SAME
+//      redactor describeError (resolve-redis.ts) already uses for this
+//      exact problem — built once, in packages/contracts, specifically
+//      so this call site would not need a second copy. See that file's
+//      own header for why ".message is safer than the raw Error object"
+//      is true but insufficient on its own.
+//   3. The capture payload's signal values (user_agent, referer, ...).
+//      Structurally excluded — see EnqueueFailureContext's own comment.
+
+/**
+ * The three fields a diagnosable enqueue-failure log line needs, and
+ * NOTHING else. Deliberately its OWN type — not `CaptureEvent`, not
+ * `Pick<CaptureEvent, 'event_id' | 'tenant_id' | 'slug'>` — and
+ * deliberately camelCase while `CaptureEvent`'s own fields are snake_case
+ * (`event_id`, `tenant_id`, `slug`, packages/contracts/src/capture.ts).
+ * That naming difference is not cosmetic: it is what makes passing a
+ * whole `CaptureEvent` payload here a COMPILE ERROR rather than a
+ * structurally-valid accident — a `CaptureEvent` value has no `eventId`/
+ * `tenantId` property for TypeScript to match against, so `logEnqueueFailure(error,
+ * payload)` fails to typecheck instead of silently widening what this
+ * log line carries. A caller MUST build this object field-by-field at
+ * the call site, the same "structural, not conventional" standard T2.3.7
+ * held `ClientIp`/`VisitorHash` (capture.ts) to for the identical reason:
+ * a signature that accepts the whole payload is a signature someone will
+ * eventually spread.
+ */
+export interface EnqueueFailureContext {
+  readonly eventId: string;
+  readonly tenantId: string;
+  readonly slug: string;
+}
+
+/** Minimal logger shape this function needs — mirrors
+ * RedirectMiddlewareLogger (./middleware.ts) and ResolveLogger
+ * (./resolve-redis.ts). Duplicated rather than imported: middleware.ts
+ * already imports `EnqueueCapture` FROM this file, so importing
+ * `RedirectMiddlewareLogger` back from middleware.ts would be a circular
+ * import — the same reasoning resolve-redis.ts's own `ResolveLogger` and
+ * geoip/lookup.ts's `GeoLookupLogger` already document for their own
+ * near-identical shapes. */
+export interface EnqueueFailureLogger {
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+export type LogEnqueueFailure = (error: unknown, context: EnqueueFailureContext) => void;
+
+/**
+ * Builds `logEnqueueFailure(error, context)`, closing over `logger`
+ * exactly like `createNetworkLookup`/`createDailySalt` close over their
+ * own deps (packages/core) — built once at boot (middleware.ts's
+ * `createRedirectMiddleware`, itself called once in main.ts), never per
+ * request [INV-2].
+ *
+ * Logs exactly five things: `context.eventId`, `context.tenantId`,
+ * `context.slug`, and the failing error's own `name` and REDACTED
+ * `message` — nothing else. Not the stack (can carry surrounding closure
+ * scope in some runtimes), not the raw `Error` object, not `.cause`, and
+ * — because `EnqueueFailureContext` has no slot for one — never the
+ * `CaptureEvent` payload or the originating request.
+ *
+ * A non-`Error` rejection (a thrown string, say) still produces a safe
+ * line: `typeof error` stands in for `.name`, and `String(error)` stands
+ * in for `.message` before either goes through the same redactor.
+ */
+export function createLogEnqueueFailure(logger: EnqueueFailureLogger): LogEnqueueFailure {
+  return function logEnqueueFailure(error: unknown, context: EnqueueFailureContext): void {
+    const errorName = error instanceof Error ? error.name : typeof error;
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = redactCredentialsFromMessage(rawMessage);
+
+    logger.error('Enqueue failed; the redirect already succeeded, event dropped', {
+      ...context,
+      errorName,
+      errorMessage,
+    });
   };
 }
