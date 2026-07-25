@@ -164,11 +164,11 @@ The client IP is read once from `CF-Connecting-IP` (falling back to the leftmost
 `buildCapturePayload()` takes the *derived* values — `visitor_hash`, `asn`, `country` — as parameters, so there is no call path along which an IP can reach the payload builder, the queue, or a log line. This is structural, not a convention: the type of the payload builder does not admit an IP.
 → **files** `apps/api/src/redirect/capture.ts` · `apps/api/src/redirect/capture.test.ts` · **verify** `pnpm test redirect/capture.test.ts` asserts the hash is 32 lowercase hex chars, same ip+ua+salt is stable, a changed UA or salt changes it, and that `buildCapturePayload`'s TypeScript signature accepts no IP-typed argument (a `@ts-expect-error` case) · **after** T2.3.2, T2.3.5, T2.3.6
 
-#### T2.3.8 · `test: no ip in the built payload or in any log path` [INV-6][security]
+#### T2.3.8 · `test: no ip in the built payload or in any log path` [INV-6][security] ✅ done (`49bf7b9`)
 Drives capture with a distinctive IP (`203.0.113.77`) through the happy path, a geoip lookup that throws, a salt fetch that throws, and a payload-build that throws, capturing every log line emitted. Asserts the octet string appears in none of them and that `JSON.stringify(payload)` contains no key matching `/ip|addr|forwarded|cookie/i`. Error handlers are the specific gap this closes — the usual way an IP leaks is a `catch` that logs the whole request.
 → **files** `apps/api/src/redirect/capture-privacy.test.ts` · **verify** `pnpm test redirect/capture-privacy.test.ts` passes, and fails when a fixture handler is patched to `log.error({ req })` · **after** T2.3.7
 
-#### T2.3.9 · `test: visitor_hash stability within a day and across a rotation`
+#### T2.3.9 · `test: visitor_hash stability within a day and across a rotation` ✅ done (`d9661dd`)
 Two requests from the same IP+UA on the same UTC day produce one hash; the same visitor after the clock is advanced past midnight UTC produces a different one; two UAs from one IP produce different hashes; two IPs with one UA produce different hashes. This is the test that makes the "únicos hoy" claim in E7 true rather than aspirational.
 → **files** `apps/api/src/redirect/visitor-hash.test.ts` · **verify** `pnpm test redirect/visitor-hash.test.ts` asserts all four cases using fake timers to cross the UTC date boundary and a real Redis for the salt · **after** T2.3.8
 
