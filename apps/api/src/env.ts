@@ -77,6 +77,17 @@ export const apiEnvSchema = z.object({
   // millisecond, so this only ever gets paid when Redis is already in
   // trouble.
   REDIS_LOOKUP_TIMEOUT_MS: z.coerce.number().int().positive(),
+
+  // T2.4.2 [INV-1] — bounds the redirect hot path's own BullMQ producer
+  // (redirect/enqueue.ts): how many enqueueCapture() calls may have an
+  // outstanding queue.add() in flight at once before further calls are
+  // dropped (and counted via posta_enqueue_dropped_total) instead of
+  // piling up unresolved promises, each retaining a full capture
+  // payload, while a stalled queue never settles them. A stalled queue
+  // must cost events, never the process. .env.example's default (1000)
+  // is a generous ceiling for a healthy queue; it only starts mattering
+  // once Redis/BullMQ is already in trouble.
+  MAX_INFLIGHT_ENQUEUES: z.coerce.number().int().positive(),
 });
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;

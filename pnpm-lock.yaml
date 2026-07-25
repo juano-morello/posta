@@ -89,6 +89,9 @@ importers:
       '@posta/core':
         specifier: workspace:*
         version: link:../../packages/core
+      bullmq:
+        specifier: ^5.80.10
+        version: 5.80.10
       express:
         specifier: ^5.2.1
         version: 5.2.1

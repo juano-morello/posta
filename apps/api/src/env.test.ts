@@ -38,6 +38,7 @@ const VALID_API_ENV: Record<string, string> = {
   API_PORT: '3001',
   LINK_CACHE_TTL_SECONDS: '3600',
   REDIS_LOOKUP_TIMEOUT_MS: '30',
+  MAX_INFLIGHT_ENQUEUES: '1000',
 };
 
 describe('apiEnvSchema', () => {
