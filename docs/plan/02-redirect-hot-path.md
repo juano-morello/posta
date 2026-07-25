@@ -190,11 +190,11 @@ Two requests from the same IP+UA on the same UTC day produce one hash; the same 
 
 **Tasks:**
 
-#### T2.4.1 · `feat: 307 redirect with cache-control no-store` [INV-3]
+#### T2.4.1 · `feat: 307 redirect with cache-control no-store` [INV-3] ✅ done (`c14ded3`)
 The response half of the middleware: `res.setHeader('Cache-Control', 'no-store')` then `res.redirect(307, destination)`, with the destination taken verbatim from the resolved record — no query-string rewriting, no UTM injection, no normalisation. The worker strips query strings later for `dest_host`; doing it here would change where the visitor actually lands.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/redirect-response.test.ts` · **verify** `pnpm test redirect/redirect-response.test.ts` asserts the status is exactly 307 (explicitly not 301, 302 or 308), `Location` byte-equals a stored destination containing `?a=1&b=2#frag`, and `Cache-Control` is `no-store` · **after** T2.2.5
 
-#### T2.4.2 · `feat: bullmq producer with a bounded in-flight cap`
+#### T2.4.2 · `feat: bullmq producer with a bounded in-flight cap` ✅ done (`e6b55bf`)
 `enqueue.ts` creates the `events` Queue once at boot and exports `enqueueCapture(payload)` with `removeOnComplete` / `removeOnFail` set so the producer cannot grow Redis unboundedly. An in-flight counter capped at `MAX_INFLIGHT_ENQUEUES` (default 1000) drops and counts instead of accumulating promises — a stalled queue must cost events, never the process. Dropped events increment `posta_enqueue_dropped_total`.
 → **files** `apps/api/src/redirect/enqueue.ts` · `apps/api/src/redirect/enqueue.test.ts` · **verify** `pnpm test redirect/enqueue.test.ts` with a stub whose `add` never settles asserts the 1001st call returns synchronously, the dropped counter reads 1, and in-flight never exceeds 1000 · **after** T2.3.1, T2.1.3
 
@@ -209,6 +209,16 @@ Ordering is the invariant: resolve → build payload → `res.redirect(307, …)
 #### T2.4.5 · `feat: read-time open-redirect guard on the resolved destination` [security]
 Validation on write (T1.1.11) is not enough: the value reaching `res.redirect` may have come from Redis, which is a second writer. A destination failing the absolute-`http(s)` check is refused — 404 via S2.5, an `error` log naming `link_id` and the rejected scheme, and no `Location` header at all. Cheap on the hot path (one regex), and the alternative is shipping an open redirect the moment a cache entry is poisoned.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/open-redirect.test.ts` · **verify** `pnpm test redirect/open-redirect.test.ts` plants `javascript:alert(1)`, `//evil.com`, `data:text/html,x` and `/relative` directly into Redis and then directly into Postgres, asserting 404, no `Location`, and one `error` log for each of the eight cases · **after** T2.4.1, T1.1.11
+
+> **⚠ Known gap, found by T2.4.3's review (2026-07-25). Unresolved — E3 or a hardening task before E10 must close it.**
+>
+> **The clients this story builds are not drained on SIGTERM, so a rollout silently loses in-flight events.** `main.ts` now constructs a Postgres client, a Redis client and the BullMQ producer as plain objects, not Nest providers. `app.enableShutdownHooks(['SIGTERM'], { useProcessExit: true })` therefore never closes them — that call only walks Nest's own provider graph, as `main.ts`'s own T0.7.8 comment already anticipated ("a Postgres/Redis provider implementing `onModuleDestroy()` is where pool teardown goes").
+>
+> Concretely: on every SIGTERM rollout, any `enqueueCapture()` whose `queue.add()` write has not completed when Nest's shutdown chain reaches `process.exit(0)` is lost. **Unlike the `MAX_INFLIGHT_ENQUEUES` drop path, that loss never increments `posta_enqueue_dropped_total`** — it is silent and uncounted, which is the part that matters. CLAUDE.md's whole thesis is that the number is honest; an uncounted loss on every deploy is exactly the kind of quiet inaccuracy this product exists to not have. CLAUDE.md also states plainly that every service must handle SIGTERM and that `terminationGracePeriodSeconds` must exceed the flush timeout "or Kubernetes eats buffered events on every rollout".
+>
+> **Why it is not fixed in E2.** The fix is to make these clients real Nest providers with `onModuleDestroy()` teardown, which is E3's shape once the worker's pipeline exists — S2.4 never mentions shutdown, and the extension point is pre-existing infrastructure this story did not introduce. Doing it here would mean inventing the provider layer ahead of its consumer.
+>
+> **What closing it requires:** drain in-flight enqueues before exit (or count what is abandoned, so the loss stops being silent), close the pg pool and both Redis connections, and verify `terminationGracePeriodSeconds` exceeds the drain bound. It needs a test that a SIGTERM mid-flight loses nothing — or, if some loss is accepted, that it is counted.
 
 > Ordering is the whole invariant. Enqueue-then-redirect is a promise; redirect-then-enqueue is a guarantee. If a refactor ever moves the enqueue above the redirect, S2.6 fails — that is the test's entire job.
 
