@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import express from 'express';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sendLinkRedirect } from './middleware';
 
 // T2.4.1 [INV-3] — the response half of S2.4, exercised in isolation
@@ -98,13 +101,18 @@ describe('sendLinkRedirect', () => {
 
   // Guards against res.redirect()/res.location(): both run the URL
   // through Express's `encodeurl` dependency before writing the Location
-  // header, which would silently rewrite an already-percent-encoded
-  // sequence's `%` into `%25` (double-encoding) — verified by hand
-  // against a live Express server before choosing res.set() instead. A
-  // destination already carrying percent-encoding must reach the visitor
-  // exactly as stored, not re-escaped a second time.
-  it('preserves an already percent-encoded destination byte-identical — no re-encoding', () => {
-    const destination = 'https://example.test/%2Falready%2Fencoded?a=1&b=2#frag';
+  // header, and encodeurl re-escapes a `%` that is NOT part of a valid
+  // `%XX` escape sequence — verified by hand against encodeurl's own
+  // source and against a live Express server. This destination's `%zz`
+  // is deliberately NOT a valid escape (`z` isn't a hex digit), so it is
+  // what actually discriminates res.set() from res.redirect(): encodeurl
+  // turns it into `%25zz`, while an ALREADY-valid escape like `%2F`
+  // passes through encodeurl completely untouched and would prove
+  // nothing about which one sendLinkRedirect uses (an earlier version of
+  // this test used `%2F` and did not, in fact, discriminate — see the
+  // T2.4.1 fix-round-1 report for how that was caught).
+  it('preserves a destination containing an invalid percent escape byte-identical — no re-encoding', () => {
+    const destination = 'https://example.test/50%zz-off?a=1&b=2#frag';
     const res = makeRes();
 
     sendLinkRedirect(res as never, destination);
@@ -135,5 +143,99 @@ describe('sendLinkRedirect', () => {
     expect(res.calls.indexOf('end')).toBe(res.calls.length - 1);
     expect(res.calls).toContain('set:Cache-Control');
     expect(res.calls).toContain('set:Location');
+  });
+});
+
+// [T2.4.1 fix round 1, CRITICAL] `zDestination` (packages/contracts/src/links.ts)
+// accepts an absolute http(s) URL containing any Unicode character —
+// confirmed by hand: `https://example.test/日本語` parses successfully.
+// Node's raw HTTP header writer does not: it throws `ERR_INVALID_CHAR`
+// synchronously for any code point above the Latin-1 supplement block
+// (0xFF) — confirmed by sweeping every code point 0x00-0xFF one at a
+// time against a real `http.ServerResponse`. Left uncaught, that turns a
+// legitimately-created link into a PERMANENT per-slug outage: every
+// future request for that slug throws.
+//
+// makeRes() (the describe block above) CANNOT reproduce this: its set()
+// is a plain object method with no header validation at all, so it
+// would silently accept a destination that crashes a real server — this
+// is exactly why the original submission's tests didn't catch the bug.
+// This block boots an ACTUAL Express app (this repo's own Express
+// 5.2.1) on a real port and drives it with a real node:http request —
+// mirroring middleware.test.ts's own real-server describe block — so a
+// regression here fails for real, not just in a mock that never
+// noticed.
+describe('sendLinkRedirect — destinations outside the Latin-1 range, against a real Express server', () => {
+  let server: http.Server;
+  let port: number;
+  let destination = '';
+
+  beforeAll(async () => {
+    const app = express();
+    app.get('/redirect', (_req, res) => {
+      sendLinkRedirect(res, destination);
+    });
+    server = app.listen(0);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  function requestRedirect(): Promise<{ status: number; location: string | undefined }> {
+    return new Promise((resolve, reject) => {
+      http
+        .get({ hostname: '127.0.0.1', port, path: '/redirect' }, (res) => {
+          res.resume();
+          res.on('end', () => {
+            resolve({ status: res.statusCode ?? 0, location: res.headers.location });
+          });
+        })
+        .on('error', reject);
+    });
+  }
+
+  it('percent-encodes a CJK destination instead of crashing the request with ERR_INVALID_CHAR', async () => {
+    destination = 'https://example.test/日本語?a=1&b=2#frag';
+
+    const response = await requestRedirect();
+
+    expect(response.status).toBe(307);
+    expect(response.location).toBe('https://example.test/%E6%97%A5%E6%9C%AC%E8%AA%9E?a=1&b=2#frag');
+  });
+
+  // A surrogate-pair character (astral plane, represented as TWO UTF-16
+  // code units) — proves encodeDestinationForHeader reads by Unicode
+  // code point, not by code unit, so this doesn't come back as two
+  // broken half-encodings.
+  it('percent-encodes a surrogate-pair emoji destination instead of crashing the request', async () => {
+    destination = 'https://example.test/🎉?a=1&b=2#frag';
+
+    const response = await requestRedirect();
+
+    expect(response.status).toBe(307);
+    expect(response.location).toBe(`https://example.test/${encodeURIComponent('🎉')}?a=1&b=2#frag`);
+  });
+
+  it('still redirects a plain ASCII destination byte-identical through the same real server', async () => {
+    destination = DESTINATION_WITH_QUERY_AND_FRAGMENT;
+
+    const response = await requestRedirect();
+
+    expect(response.status).toBe(307);
+    expect(response.location).toBe(DESTINATION_WITH_QUERY_AND_FRAGMENT);
+  });
+
+  it('still redirects a Latin-1 accented destination byte-identical through the same real server', async () => {
+    destination = 'https://example.test/promoción?a=1&b=2#frag';
+
+    const response = await requestRedirect();
+
+    expect(response.status).toBe(307);
+    expect(response.location).toBe(destination);
   });
 });

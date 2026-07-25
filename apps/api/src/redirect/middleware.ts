@@ -190,19 +190,88 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
 // writing the Location header. Verified by hand against a live Express
 // server: a destination containing a Latin-1 accented character (e.g.
 // "promoción", the kind of destination this Spanish-first product will
-// see routinely) comes back as "promoci%C3%B3n", and an
-// already-percent-encoded destination gets its own `%` signs re-escaped
-// to `%25`. Both are exactly the "no normalisation, no re-encoding" this
-// story's acceptance criteria rule out — the destination must reach the
-// visitor's browser byte-identical to what is in storage. res.redirect()
-// also formats and writes a Content-Type-negotiated HTML/text body plus
-// a Content-Length header on every call, work this hot path (every
-// single click) has no use for. res.set() — Express's own header
-// setter, NOT res.location() — writes the header value untouched, which
-// is what both the percent-encoded and non-ASCII cases in
-// redirect-response.test.ts depend on.
+// see routinely) comes back as "promoci%C3%B3n" — encodeurl re-encodes
+// UNCONDITIONALLY on any character outside its own allowed set, Latin-1
+// accents included, regardless of whether the source was already valid.
+// That is exactly the "no normalisation, no re-encoding" this story's
+// acceptance criteria rule out — the destination must reach the
+// visitor's browser byte-identical to what is in storage. (encodeurl
+// does NOT, however, touch an already-valid `%XX` escape sequence like
+// `%2F` — it only re-escapes a `%` that is NOT part of one, e.g. `%zz`
+// or a trailing `%`; see redirect-response.test.ts's percent-encoding
+// case for the destination that actually demonstrates the difference.)
+// res.redirect() also formats and writes a Content-Type-negotiated
+// HTML/text body plus a Content-Length header on every call, work this
+// hot path (every single click) has no use for. res.set() — Express's
+// own header setter, NOT res.location() — writes the header value
+// untouched, which is what redirect-response.test.ts's byte-identity
+// cases depend on.
 export function sendLinkRedirect(res: Response, destination: string): void {
   res.set('Cache-Control', 'no-store');
-  res.set('Location', destination);
+  res.set('Location', encodeDestinationForHeader(destination));
   res.status(307).end();
+}
+
+// [T2.4.1 fix round 1, CRITICAL] `zDestination` (packages/contracts/src/links.ts)
+// accepts an absolute http(s) URL containing ANY Unicode character —
+// verified by hand: `https://example.test/日本語` and
+// `https://exámple.test/x` both parse successfully. Node's raw HTTP
+// header writer does not: it throws `ERR_INVALID_CHAR` synchronously for
+// any code point above the Latin-1 supplement block, confirmed by direct
+// measurement against a real `http.ServerResponse` on this Node version
+// (0x00-0xFF swept one code point at a time; see isHeaderSafeCodePoint's
+// own comment for the exact accepted set — narrower than the commonly
+// cited `checkInvalidHeaderChar` regex, which does not match this
+// runtime's actual behaviour). Left uncaught, that turns a
+// legitimately-created link whose destination contains such a character
+// into a PERMANENT per-slug outage: every request for that slug throws
+// inside sendLinkRedirect, forever — worse than the 404 T2.4.5 ships for
+// a genuinely malicious destination, and not something T2.4.5's guard
+// (dangerous URL SCHEMES, a different concern) or E5's write-time
+// validation (Redis is a second writer that write-time validation
+// structurally cannot cover — the same reasoning T2.4.5's own brief
+// already establishes) would catch. It is this function's problem.
+//
+// The fix percent-encodes ONLY the characters that would actually make
+// the header write throw, leaving every already-safe character —
+// including every ASCII delimiter this hot path must never touch (`/`,
+// `?`, `&`, `=`, `#`) and every Latin-1 accented character — completely
+// untouched, so the byte-identical guarantee for every destination that
+// CAN be sent verbatim still holds exactly as before. A destination that
+// needed encoding still lands the visitor on the identical target: this
+// is the same transform a browser applies when it parses a URL
+// containing such a character by any other route.
+//
+// Iterates by Unicode CODE POINT (`Array.from`, not a plain index-based
+// loop over UTF-16 code units) so a supplementary-plane character
+// represented as a surrogate PAIR — an emoji, for instance — is read and
+// encoded as the single code point it is, not as two broken halves; see
+// redirect-response.test.ts's emoji case, which specifically exercises
+// this. `encodeURIComponent` on that one resulting character/pair
+// produces its exact percent-encoded UTF-8 bytes.
+//
+// Deliberately does NOT attempt to repair a LONE, unpaired UTF-16
+// surrogate (malformed input with no valid Unicode representation —
+// `encodeURIComponent` itself throws `URIError` on one). That is a
+// different problem: malformed/invalid input, not a legitimate
+// destination containing a character outside Latin-1, and closer in
+// kind to T2.4.5's malicious-input guard than to this fix. Not handling
+// it here is a scope decision, not an oversight — recording it so it
+// isn't silently rediscovered later.
+function isHeaderSafeCodePoint(codePoint: number): boolean {
+  if (codePoint === 0x09) return true; // horizontal tab
+  if (codePoint >= 0x20 && codePoint <= 0x7e) return true; // printable ASCII
+  if (codePoint >= 0x80 && codePoint <= 0xff) return true; // Latin-1 supplement
+  return false;
+}
+
+function encodeDestinationForHeader(destination: string): string {
+  return Array.from(destination)
+    .map((char) => {
+      const codePoint = char.codePointAt(0);
+      return codePoint !== undefined && isHeaderSafeCodePoint(codePoint)
+        ? char
+        : encodeURIComponent(char);
+    })
+    .join('');
 }
