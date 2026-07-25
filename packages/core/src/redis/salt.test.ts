@@ -153,23 +153,38 @@ describe('createDailySalt — in-process behaviour (T2.3.6)', () => {
     // one — a broken implementation using getFullYear()/getMonth()/getDate()
     // would report Jan 5 and Jan 6 (Berlin-local) as the SAME UTC day here
     // and wrongly reuse one salt across the real UTC boundary.
-    await withPinnedTz('Europe/Berlin', async () => {
-      const redis = makeFakeSaltRedis();
-      const getDailySalt = createDailySalt({ redis, logger: makeSpyLogger() });
+    //
+    // [T2.3.9 fan-out finding] Each instant gets its OWN withPinnedTz call
+    // below — do NOT hoist one pin around both setSystemTime()/read pairs.
+    // An earlier draft held a SINGLE withPinnedTz around both reads and
+    // passed unchanged against a deliberately broken (local-getter)
+    // formatUtcDate: a @sinonjs/fake-timers/Node interaction makes a
+    // SECOND local-getter read inside one held pin silently return a stale
+    // result instead of reflecting the new vi.setSystemTime() instant, even
+    // though process.env.TZ itself never changed in between. Calling
+    // withPinnedTz again per instant forces a genuine reassignment of
+    // process.env.TZ immediately before each read, which is what clears
+    // the staleness — see withPinnedTz's own doc comment (test-support.ts)
+    // for the fuller account.
+    const redis = makeFakeSaltRedis();
+    const getDailySalt = createDailySalt({ redis, logger: makeSpyLogger() });
 
-      vi.useFakeTimers();
-      try {
+    vi.useFakeTimers();
+    try {
+      const beforeMidnightUtc = await withPinnedTz('Europe/Berlin', () => {
         vi.setSystemTime(new Date('2026-01-05T23:30:00.000Z'));
-        const beforeMidnightUtc = await getDailySalt();
+        return getDailySalt();
+      });
 
+      const afterMidnightUtc = await withPinnedTz('Europe/Berlin', () => {
         vi.setSystemTime(new Date('2026-01-06T00:30:00.000Z'));
-        const afterMidnightUtc = await getDailySalt();
+        return getDailySalt();
+      });
 
-        expect(beforeMidnightUtc).not.toBe(afterMidnightUtc);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+      expect(beforeMidnightUtc).not.toBe(afterMidnightUtc);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('when Redis is unreachable', () => {

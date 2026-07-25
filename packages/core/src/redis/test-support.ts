@@ -22,6 +22,26 @@
  * implementation. This epic already shipped one UTC guard (T2.1.3's own
  * keys.test.ts) that made exactly that mistake in an early draft; a
  * positive offset is what forces UTC and local to actually disagree.
+ *
+ * **Call this ONCE PER INSTANT you read a local Date getter against —
+ * never once around multiple `vi.setSystemTime()` instants.** A
+ * `@sinonjs/fake-timers`/Node interaction (the engine behind Vitest's
+ * `vi.useFakeTimers()`) means a SECOND local-getter read taken inside one
+ * HELD pin — after a second `vi.setSystemTime()` call moves the fake
+ * clock — can silently return a STALE result instead of reflecting the new
+ * instant, even though `process.env.TZ` itself never changed in between.
+ * `salt.test.ts`'s own UTC-midnight rotation case (T2.3.6) hit this for
+ * real: an early draft held ONE `withPinnedTz` call around TWO
+ * `vi.setSystemTime()` + read pairs, and passed unchanged against a
+ * deliberately broken (local-getter) `formatUtcDate` — the exact
+ * regression the test existed to catch, discovered only once a SIBLING
+ * task's own rotation guard (T2.3.9) hit the identical failure and traced
+ * it back here. The fix is to call `withPinnedTz` again for every instant:
+ * `process.env.TZ = tz` below is a genuine write each time, even when `tz`
+ * is the same string as last time, and that write is what clears the
+ * staleness. So: wrap each `vi.setSystemTime()` + read pair in ITS OWN
+ * `withPinnedTz(tz, () => { vi.setSystemTime(instant); return read(); })`
+ * call — never hoist one pin around more than one instant.
  */
 export function withPinnedTz<T>(tz: string, fn: () => T): T {
   const originalTz = process.env.TZ;
