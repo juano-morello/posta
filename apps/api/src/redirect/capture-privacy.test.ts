@@ -13,6 +13,7 @@ import {
   type ClientIp,
   type VisitorHash,
 } from './capture';
+import { captureAllOutputChannels, createRecordingLogger, type RecordedLogCall } from './output-channel-test-support';
 
 // T2.3.8 [INV-6][security] — adversarial coverage for the IP-discard
 // boundary T2.3.7 built. This is NOT a restatement of capture.test.ts's
@@ -236,92 +237,16 @@ const THROW_SCENARIOS: ThrowScenario[] = [
 
 // ── Output-channel capture ────────────────────────────────────────────
 //
-// Every logger in this codebase writes only to console (see
-// consoleErrorLogger in middleware.ts, geoip/lookup.ts, redis/salt.ts,
-// partition-maintenance.job.ts — no pino instance is wired up anywhere
-// yet), so capturing every console method PLUS raw stdout/stderr writes
-// IS capturing "any injected logger" for this codebase as it exists
-// today. If a future logger writes somewhere else entirely (a direct
-// socket to a log aggregator, say), this channel list would need
-// extending — noted as a known limit, not silently assumed away.
-
-function stringifyLoggable(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value instanceof Error) return `${value.message}\n${value.stack ?? ''}`;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function recordChunk(chunks: string[], chunk: unknown): void {
-  if (typeof chunk === 'string') {
-    chunks.push(chunk);
-    return;
-  }
-  if (Buffer.isBuffer(chunk)) {
-    chunks.push(chunk.toString('utf8'));
-    return;
-  }
-  chunks.push(stringifyLoggable(chunk));
-}
-
-interface CapturedChannels {
-  getOutput(): string;
-  restore(): void;
-}
-
-/** Spies on every console method a stray leak could use, plus raw
- * process.stdout/stderr writes — see this section's header for why that
- * covers "any injected logger" in this codebase specifically. */
-function captureAllOutputChannels(): CapturedChannels {
-  const chunks: string[] = [];
-  const recordArgs = (...args: unknown[]): void => {
-    chunks.push(args.map(stringifyLoggable).join(' '));
-  };
-
-  type WriteFn = typeof process.stdout.write;
-  const writeRecorder = ((chunk: unknown) => {
-    recordChunk(chunks, chunk);
-    return true;
-  }) as WriteFn;
-
-  const spies = [
-    vi.spyOn(console, 'log').mockImplementation(recordArgs),
-    vi.spyOn(console, 'warn').mockImplementation(recordArgs),
-    vi.spyOn(console, 'error').mockImplementation(recordArgs),
-    vi.spyOn(console, 'debug').mockImplementation(recordArgs),
-    vi.spyOn(console, 'info').mockImplementation(recordArgs),
-    vi.spyOn(process.stdout, 'write').mockImplementation(writeRecorder),
-    vi.spyOn(process.stderr, 'write').mockImplementation(writeRecorder),
-  ];
-
-  return {
-    getOutput: () => chunks.join('\n'),
-    restore: () => {
-      for (const spy of spies) spy.mockRestore();
-    },
-  };
-}
-
-interface RecordedLogCall {
-  readonly message: string;
-  readonly meta?: Record<string, unknown>;
-}
-
-/** A logger that BOTH forwards to console.error (so captureAllOutputChannels
- * sees it, matching every real logger in this codebase) AND keeps its own
- * call log (so a test can inspect exactly what was logged directly,
- * independent of the console-capture mechanism). */
-function createRecordingLogger(calls: RecordedLogCall[]): CapturePipelineLogger {
-  return {
-    error(message, meta) {
-      calls.push(meta !== undefined ? { message, meta } : { message });
-      console.error(message, meta);
-    },
-  };
-}
+// [S2.4 fan-out fix round] captureAllOutputChannels/createRecordingLogger
+// and their supporting types used to be defined here AND, independently,
+// in enqueue-logging.test.ts — ~77 duplicated lines that a story-level
+// review found had already drifted apart (stringifyLoggable's Error
+// handling differed between the two copies). Both moved to
+// output-channel-test-support.ts; see that file's own header for the full
+// reasoning. `createRecordingLogger`'s return type there
+// (`RecordingLoggerLike`) is structurally identical to this file's own
+// `CapturePipelineLogger` below, so it satisfies every call site here
+// with no cast needed.
 
 // ── IP-leak assertions ────────────────────────────────────────────────
 

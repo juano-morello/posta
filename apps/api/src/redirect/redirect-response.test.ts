@@ -2,17 +2,19 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { sendLinkRedirect } from './middleware';
+import { sendLinkRedirect } from './redirect-response';
 
 // T2.4.1 [INV-3] — the response half of S2.4, exercised in isolation
 // from resolution and enqueueing (T2.4.2-T2.4.5, dispatched separately,
-// none of which this file touches). sendLinkRedirect is the seam T2.4.3
-// will call once resolveLink (resolve-link.ts) returns a hit:
-// `sendLinkRedirect(res, link.destination)`, immediately before
-// `void enqueueCapture(payload).catch(logEnqueueFailure)` — see
-// middleware.ts's own doc comment on the function for the full seam
-// contract and why it is not wired into the middleware's switch yet
-// (that composition is T2.4.3's job, not this task's).
+// none of which this file touches). sendLinkRedirect is the seam
+// middleware.ts's handleLinkTarget calls once resolveLink
+// (resolve-link.ts) returns a hit — see that function's own doc comment
+// for the full seam contract.
+//
+// [S2.4 fan-out fix round] sendLinkRedirect and its encoding helpers
+// moved to `./redirect-response.ts` once middleware.ts crossed the
+// epic's 800-line hard cap — this file's own import is the only line
+// that changed; every test below is unchanged, a pure move.
 
 /**
  * A minimal Express Response double. Mirrors middleware.test.ts's own

@@ -8,6 +8,7 @@ import {
   type EnqueueFailureContext,
   type EnqueueFailureLogger,
 } from './enqueue';
+import { captureAllOutputChannels, createRecordingLogger, type RecordedLogCall } from './output-channel-test-support';
 
 // T2.4.4 [security] — by the time enqueueCapture's returned promise
 // rejects, the visitor already has their 307 (T2.4.3's own ordering
@@ -84,91 +85,18 @@ function contextFor(payload: CaptureEvent): EnqueueFailureContext {
   };
 }
 
-// ── Output-channel capture — mirrors capture-privacy.test.ts's identical
-// helper. Every logger in this codebase writes only to console (see
-// consoleErrorLogger in middleware.ts/enqueue.ts's own EnqueueFailureLogger
-// shape, geoip/lookup.ts, redis/salt.ts, partition-maintenance.job.ts — no
-// pino instance is wired up anywhere in this codebase yet), so capturing
-// every console method PLUS raw stdout/stderr writes IS capturing "any
-// injected logger" for this codebase as it exists today.
-
-function stringifyLoggable(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value instanceof Error) return `${value.name}: ${value.message}`;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function recordChunk(chunks: string[], chunk: unknown): void {
-  if (typeof chunk === 'string') {
-    chunks.push(chunk);
-    return;
-  }
-  if (Buffer.isBuffer(chunk)) {
-    chunks.push(chunk.toString('utf8'));
-    return;
-  }
-  chunks.push(stringifyLoggable(chunk));
-}
-
-interface CapturedChannels {
-  getOutput(): string;
-  restore(): void;
-}
-
-/** Spies on every console method a stray leak could use, plus raw
- * process.stdout/stderr writes. */
-function captureAllOutputChannels(): CapturedChannels {
-  const chunks: string[] = [];
-  const recordArgs = (...args: unknown[]): void => {
-    chunks.push(args.map(stringifyLoggable).join(' '));
-  };
-
-  type WriteFn = typeof process.stdout.write;
-  const writeRecorder = ((chunk: unknown) => {
-    recordChunk(chunks, chunk);
-    return true;
-  }) as WriteFn;
-
-  const spies = [
-    vi.spyOn(console, 'log').mockImplementation(recordArgs),
-    vi.spyOn(console, 'warn').mockImplementation(recordArgs),
-    vi.spyOn(console, 'error').mockImplementation(recordArgs),
-    vi.spyOn(console, 'debug').mockImplementation(recordArgs),
-    vi.spyOn(console, 'info').mockImplementation(recordArgs),
-    vi.spyOn(process.stdout, 'write').mockImplementation(writeRecorder),
-    vi.spyOn(process.stderr, 'write').mockImplementation(writeRecorder),
-  ];
-
-  return {
-    getOutput: () => chunks.join('\n'),
-    restore: () => {
-      for (const spy of spies) spy.mockRestore();
-    },
-  };
-}
-
-interface RecordedLogCall {
-  readonly message: string;
-  readonly meta?: Record<string, unknown>;
-}
-
-/** A logger that BOTH forwards to console.error (so captureAllOutputChannels
- * sees it, matching every real logger in this codebase) AND keeps its own
- * call log (so a test can inspect exactly what was logged directly,
- * independent of the console-capture mechanism) — mirrors
- * capture-privacy.test.ts's createRecordingLogger. */
-function createRecordingLogger(calls: RecordedLogCall[]): EnqueueFailureLogger {
-  return {
-    error(message, meta) {
-      calls.push(meta !== undefined ? { message, meta } : { message });
-      console.error(message, meta);
-    },
-  };
-}
+// ── Output-channel capture ────────────────────────────────────────────
+//
+// [S2.4 fan-out fix round] captureAllOutputChannels/createRecordingLogger
+// and their supporting types used to be defined here AND, independently,
+// in capture-privacy.test.ts — ~77 duplicated lines that a story-level
+// review found had already drifted apart (stringifyLoggable's Error
+// handling differed between the two copies — this file's own version
+// dropped the stack). Both moved to output-channel-test-support.ts; see
+// that file's own header for the full reasoning.
+// `createRecordingLogger`'s return type there (`RecordingLoggerLike`) is
+// structurally identical to `EnqueueFailureLogger` (enqueue.ts), so it
+// satisfies every call site here with no cast needed.
 
 /** A logger that records but never forwards to console — for the
  * `@ts-expect-error` test below ONLY. That test's whole point is a
