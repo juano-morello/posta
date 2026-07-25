@@ -172,3 +172,37 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
     res.status(404).end();
   };
 }
+
+// T2.4.1 [INV-3] — the response half of S2.4: given an already-resolved
+// destination, this is what turns it into a 307. Deliberately NOT called
+// from the switch's 'link' case above yet: T2.4.3 owns wiring
+// resolveLink (resolve-link.ts) into this middleware and composing
+// resolve -> respond -> enqueue in that exact order [INV-1] — calling it
+// from here would collide with that task's composition and leave the
+// 'link' case half-built with no real destination to redirect to. This
+// function IS the seam: T2.4.3 calls it with the resolved link's
+// `destination` the instant resolveLink returns a hit, then enqueues
+// AFTER, never before.
+//
+// `res.redirect(307, destination)` is deliberately NOT used here.
+// Express's res.redirect() — and res.location(), which it calls
+// internally — run the URL through the `encodeurl` package before
+// writing the Location header. Verified by hand against a live Express
+// server: a destination containing a Latin-1 accented character (e.g.
+// "promoción", the kind of destination this Spanish-first product will
+// see routinely) comes back as "promoci%C3%B3n", and an
+// already-percent-encoded destination gets its own `%` signs re-escaped
+// to `%25`. Both are exactly the "no normalisation, no re-encoding" this
+// story's acceptance criteria rule out — the destination must reach the
+// visitor's browser byte-identical to what is in storage. res.redirect()
+// also formats and writes a Content-Type-negotiated HTML/text body plus
+// a Content-Length header on every call, work this hot path (every
+// single click) has no use for. res.set() — Express's own header
+// setter, NOT res.location() — writes the header value untouched, which
+// is what both the percent-encoded and non-ASCII cases in
+// redirect-response.test.ts depend on.
+export function sendLinkRedirect(res: Response, destination: string): void {
+  res.set('Cache-Control', 'no-store');
+  res.set('Location', destination);
+  res.status(307).end();
+}
