@@ -153,13 +153,27 @@ done
 # (`openSync` is deliberately disabled and throws as of v5) and not worth
 # an event-loop round trip inside a shell script's verification step.
 echo "fetch-geoip: verifying both files with a real MMDB reader (maxmind)..."
-node -e "
+# [security-reviewer, S2.3 fan-out, LOW] OUT_DIR is passed through the
+# environment (OUT_DIR="$OUT_DIR" prefixing this one command — a temporary
+# env var for the node child process only, not a persistent export) and
+# read back via process.env.OUT_DIR inside the script, rather than
+# bash-interpolated straight into the JS string literal below. Bash
+# substitutes a `${OUT_DIR}` interpolation BEFORE node ever parses the
+# string, so a value containing a single quote (GEOIP_DB_DIR is an
+# operator-controlled deploy-time env var, not attacker input, but "a
+# config value can become executable code" is a bad shape to leave lying
+# around regardless of who controls it today) would close the JS string
+# literal early and inject arbitrary JS into this node -e call. Going
+# through the environment removes the interpolation entirely instead of
+# trying to escape it.
+OUT_DIR="$OUT_DIR" node -e "
 const { Reader } = require('maxmind');
 const fs = require('fs');
 const path = require('path');
+const outDir = process.env.OUT_DIR;
 const files = ['dbip-asn-lite.mmdb', 'dbip-country-lite.mmdb'];
 for (const file of files) {
-  const dbPath = path.join('${OUT_DIR}', file);
+  const dbPath = path.join(outDir, file);
   const reader = new Reader(fs.readFileSync(dbPath));
   console.log('fetch-geoip: ' + file + ' opened OK (databaseType=' + reader.metadata.databaseType + ')');
 }

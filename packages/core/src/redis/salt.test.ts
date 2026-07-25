@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { startRedisContainer, type RedisContainerHandle } from '../test/redis-container';
 import { saltKey } from './keys';
 import { createDailySalt, type DailySaltLogger, type DailySaltRedis } from './salt';
-import { withPinnedTz } from './test-support';
+import { withPinnedTz } from '../test/pinned-tz';
 
 // T2.3.6 — the daily visitor-hash salt (invariant 6, story S2.3). Split
 // deliberately across two Redis doubles, mirroring resolve-tenant.test.ts's
@@ -164,8 +164,8 @@ describe('createDailySalt — in-process behaviour (T2.3.6)', () => {
     // though process.env.TZ itself never changed in between. Calling
     // withPinnedTz again per instant forces a genuine reassignment of
     // process.env.TZ immediately before each read, which is what clears
-    // the staleness — see withPinnedTz's own doc comment (test-support.ts)
-    // for the fuller account.
+    // the staleness — see withPinnedTz's own doc comment
+    // (packages/core/src/test/pinned-tz.ts) for the fuller account.
     const redis = makeFakeSaltRedis();
     const getDailySalt = createDailySalt({ redis, logger: makeSpyLogger() });
 

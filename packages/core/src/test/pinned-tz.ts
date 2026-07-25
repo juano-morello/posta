@@ -1,11 +1,21 @@
-// Shared test-only support for packages/core/src/redis's own test files
-// (keys.test.ts, salt.test.ts) — a plain sibling module, not a *.test.ts
-// file itself, so importing it never re-executes another file's own
-// describe()/it() blocks the way importing a *.test.ts file directly
-// would (each Vitest test file gets its own isolated module registry, so
-// a static import of another test file re-runs its whole top-level body).
-// Same role apps/api/src/redirect/resolve-test-support.ts plays for that
-// folder's test files.
+// T2.3.6 (S2.3 story-fan-out fix) — promoted here from
+// packages/core/src/redis/test-support.ts, which originally served only
+// that folder's own test files (keys.test.ts, salt.test.ts). Once
+// apps/api/src/redirect/visitor-hash.test.ts (T2.3.9) needed the identical
+// tool for its own UTC-rotation guard, it couldn't reach a file under
+// packages/core/src/redis via a relative import (that would cross the
+// api->core package boundary on disk, which no test file in this repo
+// does) and copied the function locally instead — a copy whose CODE stayed
+// correct but whose docstring (the part that actually matters here, see
+// below) did not travel with it. A code-reviewer finding on the S2.3
+// story-level fan-out called that drift out explicitly: promoting the one
+// definition to `@posta/core`'s TEST-ONLY subpath (`@posta/core/testing`,
+// see ./index.ts's own header for why that subpath exists) is what lets
+// every package/app import the SAME copy instead of maintaining several.
+// packages/core's own test files (keys.test.ts, salt.test.ts) import this
+// via the relative path below (same-package imports never go through the
+// package's own subpath export), while apps/api imports it via
+// `@posta/core/testing`.
 
 /**
  * Runs `fn` with `process.env.TZ` pinned to `tz`, restoring the original

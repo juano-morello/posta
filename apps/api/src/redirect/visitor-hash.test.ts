@@ -1,5 +1,6 @@
 import type { CaptureEvent } from '@posta/contracts';
 import { createDailySalt, type DailySaltLogger, type DailySaltRedis } from '@posta/core';
+import { withPinnedTz } from '@posta/core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeVisitorHash, readClientIp, type ClientIp } from './capture';
 
@@ -43,42 +44,21 @@ import { computeVisitorHash, readClientIp, type ClientIp } from './capture';
 // that behaves correctly (proven there), does visitor_hash stay stable
 // within a day and rotate across one (proven here)?
 //
-// ── withPinnedTz: duplicated locally, not imported ──
+// ── withPinnedTz: imported from @posta/core/testing ──
 //
-// packages/core/src/redis/test-support.ts's withPinnedTz is exactly the
-// right tool for the rotation property below (see its own doc comment:
-// this repo's CI and this repo's dev sandbox are both non-positive UTC
-// offsets, so only a PINNED positive offset actually forces UTC and
-// local reads to disagree). It is not reachable from here without either
-// a bare relative path that reaches across the api->core package
-// boundary on disk (no test file in this repo does that — every existing
-// cross-directory test-support file, this one included, is local to its
-// own package/app: packages/core/src/redis/test-support.ts serves
-// packages/core/src/redis's own test files, apps/api/src/redirect/
-// resolve-test-support.ts serves this directory's — see that file's own
-// header for the explicit statement of that pattern) or a change to
-// packages/core/src/test/index.ts's public "@posta/core/testing" barrel
-// to re-export it, which is a change to another story's file this task's
-// brief says to avoid ("No production code changes... stop and report it
-// as a finding rather than making it"). The four lines below are that
-// finding's practical resolution: a byte-identical local copy, so this
-// file stays self-contained. Reported in this task's report file as a
-// minor followup candidate (promote withPinnedTz to the shared testing
-// barrel), not acted on here.
-function withPinnedTz<T>(tz: string, fn: () => T): T {
-  const originalTz = process.env.TZ;
-  process.env.TZ = tz;
-
-  try {
-    return fn();
-  } finally {
-    if (originalTz === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = originalTz;
-    }
-  }
-}
+// Previously a byte-identical local copy (this file couldn't reach
+// packages/core/src/redis/test-support.ts via a relative import across the
+// api->core package boundary). A code-reviewer finding on the S2.3
+// story-level fan-out caught that the copy's docstring had already drifted
+// from the original — the "call once per instant, never once around
+// multiple vi.setSystemTime() instants" rule this file's own rotation
+// tests below depend on lived only in the original, not here. Fixed by
+// promoting withPinnedTz onto @posta/core's TEST-ONLY subpath
+// (packages/core/src/test/pinned-tz.ts, exported via
+// packages/core/src/test/index.ts's "@posta/core/testing" barrel — see
+// that file's own header for why the subpath exists), so every caller
+// shares the one definition and its one docstring instead of a copy that
+// can silently fall behind it.
 
 /** Matches salt.test.ts's own LoggerErrorFn workaround: an untyped
  * `vi.fn()` infers `(...args: any[]) => any`, which is not structurally
@@ -220,11 +200,16 @@ describe('visitor_hash — rotation across the UTC midnight boundary (T2.3.9)', 
 
     // Property under test: the SALT rotated (the cause) ...
     expect(beforeMidnightUtc.salt === afterMidnightUtc.salt).toBe(false);
-    // ... and the hash changed as a DIRECT consequence of that, not
-    // incidentally. Recomputing each side's hash from the OTHER side's
-    // salt reproduces the OTHER side's result — proving the hash
-    // difference traces entirely to the salt difference, with
-    // ip/userAgent held fixed throughout.
+    // [code-reviewer, S2.3 fan-out] The two lines below do NOT recompute
+    // either side's hash from the OTHER side's salt — each recomputes its
+    // OWN hash from its OWN salt. That is a determinism check
+    // (computeVisitorHash is pure: the same ip/userAgent/salt triple
+    // always yields the same hash), already covered more directly by
+    // capture.test.ts's own hash-math tests, not a cross-side proof. The
+    // actual causal proof that the hash changed BECAUSE the salt did is
+    // the pairing of the salt-inequality assertion above with the
+    // hash-inequality assertion below — ip/userAgent held fixed
+    // throughout, so nothing else could account for either difference.
     expect(computeVisitorHash(ip, UA_A, afterMidnightUtc.salt)).toBe(afterMidnightUtc.hash);
     expect(computeVisitorHash(ip, UA_A, beforeMidnightUtc.salt)).toBe(beforeMidnightUtc.hash);
     expect(beforeMidnightUtc.hash).not.toBe(afterMidnightUtc.hash);
@@ -291,11 +276,18 @@ describe('visitor_hash — discriminates between visitors on the SAME UTC day (T
 });
 
 // Sanity check that this file's own fixtures produce a schema-valid
-// visitor_hash shape (32 lowercase hex chars, CaptureEvent's own
-// visitor_hash type) — not a new property, just confirmation that the
-// real getDailySalt()-driven pipeline this file exercises still yields
-// what capture.test.ts's isolated hash-math tests already prove the
-// FORMULA produces.
+// visitor_hash shape (32 lowercase hex chars) — not a new property, just
+// confirmation that the real getDailySalt()-driven pipeline this file
+// exercises still yields what capture.test.ts's isolated hash-math tests
+// already prove the FORMULA produces. [code-reviewer, S2.3 fan-out] The
+// real check here is the toMatch() regex below. The `sampleField`
+// assignment two lines down is near-vacuous as a runtime assertion:
+// CaptureEvent['visitor_hash'] is plain `string | null`, so any string —
+// correct shape or not — is assignable to it. It's kept only as a
+// compile-time confirmation that this file's `hash` variable stays
+// assignable to the contract's field type at all (catching a future
+// widening of that field to something incompatible), not as evidence
+// about the hash's actual shape.
 describe('visitor_hash — shape sanity, driven through the real salt manager', () => {
   it('is a 32-character lowercase hex string, matching CaptureEvent\'s own visitor_hash field shape', async () => {
     const getDailySalt = createDailySalt({ redis: createInMemoryDailySaltRedis(), logger: makeSpyLogger() });
