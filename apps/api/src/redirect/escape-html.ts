@@ -7,13 +7,24 @@ import { SLUG_MAX_LENGTH } from '@posta/contracts';
 // module and its own test rather than being a two-line inline function
 // beside the template.
 //
-// This helper escapes for HTML TEXT CONTENT *and* HTML ATTRIBUTE VALUES
-// alike — it has no notion of which context its caller drops the result
-// into, and escaping all six characters below is what makes that safe
-// either way. A future caller must not read more into it than that: it
-// does not know about, say, a JS-string context inside a <script> tag
-// (a different escaping problem) or a URL context — it is a
-// single-purpose HTML escaper, nothing more.
+// [fix round 1] This helper escapes for HTML TEXT CONTENT and for
+// QUOTED HTML ATTRIBUTE VALUES (delimited by " or ') — escaping all six
+// characters below is what makes both of those safe with the SAME
+// output, with no notion of which one its caller is producing. It does
+// NOT make an UNQUOTED attribute value safe:
+// `<div data-slug=${escapeHtml(slug)}>` with a slug like
+// `x onmouseover=alert(1)` breaks out via a bare space without touching
+// any of the six escaped characters — a future caller must always QUOTE
+// the attribute it interpolates this into. Also out of scope, so a
+// future caller does not assume more than this function provides:
+//   - a backtick-delimited attribute value (`` `...` ``, a legacy IE
+//     quirks-mode attribute delimiter) — `escapeHtml('`')` returns the
+//     backtick untouched;
+//   - a JS-string literal inside an inline <script> block (a different
+//     escaping problem entirely);
+//   - a URL context (query string, href attribute target).
+// It is a single-purpose HTML escaper for text content and quoted
+// attributes, nothing more.
 
 /**
  * Every character this function escapes, and the exact entity it
@@ -36,7 +47,61 @@ const ESCAPE_ENTITIES: Readonly<Record<string, string>> = {
   '/': '&#x2F;',
 };
 
-const ESCAPABLE_CHARACTERS = /[&<>"'/]/g;
+// [fix round 1] Characters that carry a distinct meaning INSIDE a
+// `[...]` character class even though most regex metacharacters lose
+// their special meaning there: `]` closes the class, `^` negates it
+// when it is the class's first character, `-` forms a range with its
+// neighbours, and `\` is the class's own escape character. None of
+// ESCAPE_ENTITIES' current keys need escaping for this, but deriving
+// the pattern from the map's OWN keys below — rather than hand-writing
+// a second literal that merely happens to agree with it today — means
+// the two can never drift apart if a future key is added. Escaping
+// correctly here, instead of relying on today's six characters not
+// needing it, is what keeps that true the day one of THESE four
+// characters becomes a key.
+const CHARACTER_CLASS_METACHARACTERS = /[\]^\\-]/;
+
+function escapeForCharacterClass(char: string): string {
+  return CHARACTER_CLASS_METACHARACTERS.test(char) ? `\\${char}` : char;
+}
+
+const ESCAPABLE_CHARACTERS = new RegExp(
+  `[${Object.keys(ESCAPE_ENTITIES).map(escapeForCharacterClass).join('')}]`,
+  'g',
+);
+
+/**
+ * The INPUT length ceiling, applied BEFORE escaping runs.
+ *
+ * [fix round 1] MAX_ESCAPED_HTML_LENGTH alone bounds the RESPONSE, but
+ * `.replace()` still has to walk — and, when it substitutes, allocate —
+ * up to ~6x the INPUT length before that clamp ever gets a chance to
+ * run. Leaving the input unbounded meant this function's own cost
+ * ceiling was an accident of Node's ~16 KB HTTP request-line limit, a
+ * setting owned by a different layer entirely — the exact "safe by
+ * accident" shape this epic has been closing everywhere else (see e.g.
+ * host.ts's own MAX_ENCODED_SLUG_LENGTH check, which rejects an
+ * oversized path before decoding it for the identical reason). Bounding
+ * the input here makes the escaper's own cost a property of THIS
+ * module, not a borrowed guarantee from an HTTP server setting defined
+ * elsewhere.
+ *
+ * `SLUG_MAX_LENGTH * 2` (128): a small, deliberate multiple of the one
+ * length constant this module already anchors to, comfortably bigger
+ * than any legitimate slug (<=64 chars) could ever need, small enough
+ * that even the widest per-character expansion (6 characters, e.g.
+ * `&quot;`) on every one of its 128 characters — 768 — safely clears
+ * MAX_ESCAPED_HTML_LENGTH (384), so the OUTPUT clamp remains the
+ * property that actually bounds the worst case. For a low- or
+ * no-expansion input (most of an attacker's filler text, which by
+ * definition contains few or none of the six special characters), THIS
+ * bound is what actually governs in practice, yielding a shorter result
+ * than 384 — which is fine: this path only ever serves a slug that
+ * could never be a real link, so there is no display fidelity of a real
+ * link being sacrificed, only an upper bound on how much of an
+ * attacker's garbage this function will ever process or echo.
+ */
+export const MAX_INPUT_LENGTH = SLUG_MAX_LENGTH * 2;
 
 /**
  * The escaped-OUTPUT length ceiling. A legitimate slug
@@ -77,23 +142,35 @@ export const MAX_ESCAPED_HTML_LENGTH = SLUG_MAX_LENGTH * 6;
  * entities, it only escapes the raw characters actually present in the
  * input, exactly once each.
  *
- * The clamp runs AFTER escaping, not before: what is being bounded is
- * the RESPONSE the escaped output becomes part of, and clamping the
- * INPUT would still let escaping inflate the output up to ~6x past
- * whatever input limit was chosen — the exact inflation this clamp
- * exists to prevent. Truncation walks the escaped string by Unicode
- * CODE POINT (a `for...of` loop, which — like `Array.from` — treats a
- * UTF-16 surrogate pair as one unit) rather than slicing by UTF-16 code
- * UNIT count, so a multibyte character (an emoji, any supplementary-
- * plane character) straddling the cutoff is dropped whole rather than
- * split into a lone surrogate. A lone surrogate in the response body is
- * invalid UTF-16/UTF-8 on the wire — this epic has already shipped that
- * exact class of bug once, in the redirect Location header (see
+ * [fix round 1] The INPUT is ALSO bounded, to {@link MAX_INPUT_LENGTH},
+ * BEFORE escaping runs — see that constant's own comment for why an
+ * output-only clamp left the `.replace()` call's own cost tied to an
+ * HTTP-layer setting this module has no business depending on. Both
+ * truncation steps reuse the SAME {@link truncateAtCodePointBoundary}
+ * helper rather than each hand-rolling its own slice, specifically so
+ * the surrogate-pair safety below applies at both boundaries identically
+ * rather than being re-derived (and possibly gotten wrong) twice.
+ *
+ * Whichever clamp actually ends up binding for a given input — the
+ * escaped-output ceiling ({@link MAX_ESCAPED_HTML_LENGTH}) for a
+ * heavily-escaped input, or the input ceiling for one with little or
+ * nothing to escape — truncation walks by Unicode CODE POINT (a
+ * `for...of` loop, which — like `Array.from` — treats a UTF-16 surrogate
+ * pair as one unit) rather than slicing by UTF-16 code UNIT count, so a
+ * multibyte character (an emoji, any supplementary-plane character)
+ * straddling a cutoff is dropped whole rather than split into a lone
+ * surrogate. A lone surrogate in the response body is invalid
+ * UTF-16/UTF-8 on the wire — this epic has already shipped that exact
+ * class of bug once, in the redirect Location header (see
  * redirect-response.ts's encodeDestinationForHeader), so it is treated
  * here as a known hazard, not a hypothetical.
  */
 export function escapeHtml(s: string): string {
-  const escaped = s.replace(ESCAPABLE_CHARACTERS, (char) => ESCAPE_ENTITIES[char] ?? char);
+  const boundedInput = truncateAtCodePointBoundary(s, MAX_INPUT_LENGTH);
+  const escaped = boundedInput.replace(
+    ESCAPABLE_CHARACTERS,
+    (char) => ESCAPE_ENTITIES[char] ?? char,
+  );
   return truncateAtCodePointBoundary(escaped, MAX_ESCAPED_HTML_LENGTH);
 }
 

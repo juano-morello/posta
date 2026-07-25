@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escapeHtml, MAX_ESCAPED_HTML_LENGTH } from './escape-html';
+import { escapeHtml, MAX_ESCAPED_HTML_LENGTH, MAX_INPUT_LENGTH } from './escape-html';
 
 // T2.5.1 [security] — escapeHtml is the single control standing between
 // attacker-controlled path input (the requested slug) and the one HTML
@@ -75,19 +75,57 @@ describe('escapeHtml — length clamp', () => {
 
     const result = escapeHtml(oversized);
 
+    // [fix round 1] Two clamps now run in sequence: the 10 KB input is
+    // first bounded to MAX_INPUT_LENGTH (128 '<' survive), THEN escaped
+    // (128 * 4 = 512 chars), THEN the output is bounded to
+    // MAX_ESCAPED_HTML_LENGTH (384). The net observable result is
+    // identical to a single output-only clamp for this heavily-escaping
+    // input — both give the same 96 whole "&lt;" entities — because 512
+    // already exceeds 384, so the output clamp is still what ultimately
+    // governs here; only the intermediate allocation size changed.
     expect(result.length).toBeLessThanOrEqual(MAX_ESCAPED_HTML_LENGTH);
     // Every character that survived the clamp is still a whole, valid
-    // entity rather than a truncated fragment like "&l" — the input here
-    // becomes a repeated 4-character entity ("&lt;"), so a result whose
+    // entity rather than a truncated fragment like "&l" — a result whose
     // length isn't a clean multiple of 4 would mean the clamp cut
     // through an entity rather than around it.
     expect(result).toBe('&lt;'.repeat(result.length / 4));
   });
 
-  it('does not clamp input at or under the limit', () => {
-    const atLimit = 'a'.repeat(MAX_ESCAPED_HTML_LENGTH);
+  it('leaves content under both the input and output bounds untouched', () => {
+    const untouched = 'promo-'.repeat(10); // 60 chars, well under either bound
 
-    expect(escapeHtml(atLimit)).toBe(atLimit);
+    expect(escapeHtml(untouched)).toBe(untouched);
+  });
+
+  it('does not clamp escaped output landing exactly at the output limit', () => {
+    // 64 quote characters is well under MAX_INPUT_LENGTH (128), so the
+    // input bound is a no-op here — this isolates the OUTPUT clamp's own
+    // boundary behaviour. Each '"' becomes the widest entity ('&quot;',
+    // 6 chars), so 64 * 6 = 384 lands EXACTLY on MAX_ESCAPED_HTML_LENGTH.
+    // The `<=` (not `<`) in the clamp's fast path is what a test like
+    // this actually protects: an off-by-one there would truncate a
+    // result that was already exactly at the limit.
+    const atOutputLimit = '"'.repeat(64);
+
+    const result = escapeHtml(atOutputLimit);
+
+    expect(result.length).toBe(MAX_ESCAPED_HTML_LENGTH);
+    expect(result).toBe('&quot;'.repeat(64));
+  });
+
+  it('bounds the INPUT length before escaping runs, not only the escaped output', () => {
+    // [fix round 1] 'a' needs no escaping at all, so an output-only
+    // clamp would let this straight through to MAX_ESCAPED_HTML_LENGTH
+    // (384) unchanged. If the input bound below were removed, this
+    // assertion would fail with a 384-character result instead of a
+    // 128-character one — proving the input IS being truncated before
+    // `.replace()` ever sees the rest of it, not merely that the final
+    // output happens to be short.
+    const huge = 'a'.repeat(1_000_000);
+
+    const result = escapeHtml(huge);
+
+    expect(result).toBe('a'.repeat(MAX_INPUT_LENGTH));
   });
 });
 
@@ -103,19 +141,42 @@ describe('escapeHtml — multibyte input', () => {
     expect(escapeHtml(EMOJI)).toBe(EMOJI);
   });
 
-  it('does not split a surrogate pair at the clamp boundary', () => {
-    // A single leading ASCII character shifts every emoji pair onto an
-    // ODD starting offset. MAX_ESCAPED_HTML_LENGTH is even, so a naive
-    // `.slice(0, MAX_ESCAPED_HTML_LENGTH)` on this exact construction
-    // would cut between a pair's high and low surrogate, landing on a
-    // lone high surrogate as the very last character — this is what
-    // actually exercises the split, rather than an input that happens to
-    // stay aligned on pair boundaries by coincidence.
+  it('does not split a surrogate pair at the OUTPUT clamp boundary', () => {
+    // Isolates the OUTPUT boundary specifically: 'a' + 63 '"' characters
+    // is 64 raw characters, well under MAX_INPUT_LENGTH (128), so the
+    // input bound is a no-op and cannot be what protects this case.
+    // Escaped, that prefix is 1 + 63*6 = 379 characters — an ODD escaped
+    // offset — so the emoji sequence right after it starts at an odd
+    // position in the ESCAPED string. A naive `.slice(0, 384)` on this
+    // exact construction lands index 383 on the high surrogate of the
+    // third emoji (379 + 2*2 = 383) and excludes index 384 (its low
+    // surrogate) — hand-traced, not assumed — which is what actually
+    // exercises a split at THIS boundary, independent of the input-bound
+    // fix.
+    const prefix = 'a' + '"'.repeat(63);
+    const oversized = prefix + EMOJI.repeat(5);
+
+    const result = escapeHtml(oversized);
+
+    expect(result.length).toBeLessThanOrEqual(MAX_ESCAPED_HTML_LENGTH);
+    expect(hasLoneSurrogate(result)).toBe(false);
+  });
+
+  it('does not split a surrogate pair at the INPUT clamp boundary', () => {
+    // [fix round 1] A single leading ASCII character shifts every emoji
+    // pair onto an ODD starting offset. MAX_INPUT_LENGTH is even, so a
+    // naive `.slice(0, MAX_INPUT_LENGTH)` applied to the RAW input
+    // (before escaping) would cut between a pair's high and low
+    // surrogate — this is what actually exercises a split at the NEW
+    // input boundary, as opposed to the pre-existing output boundary
+    // above. None of these characters are escapable, so the escaped
+    // length equals the input-bounded length exactly, isolating the
+    // input-side truncation's own correctness.
     const repeated = 'a' + EMOJI.repeat(200);
 
     const result = escapeHtml(repeated);
 
-    expect(result.length).toBeLessThanOrEqual(MAX_ESCAPED_HTML_LENGTH);
+    expect(result.length).toBeLessThanOrEqual(MAX_INPUT_LENGTH);
     expect(hasLoneSurrogate(result)).toBe(false);
   });
 
