@@ -261,9 +261,29 @@ export function createEnqueueCapture(deps: CreateEnqueueCaptureDeps): EnqueueCap
  * payload)` fails to typecheck instead of silently widening what this
  * log line carries. A caller MUST build this object field-by-field at
  * the call site, the same "structural, not conventional" standard T2.3.7
- * held `ClientIp`/`VisitorHash` (capture.ts) to for the identical reason:
- * a signature that accepts the whole payload is a signature someone will
- * eventually spread.
+ * held `ClientIp`/`VisitorHash` (capture.ts) to for the identical reason.
+ *
+ * [security review, fix round 1 — corrected overclaim] Precisely what
+ * this stops, and what it does not: it rejects a whole-payload
+ * SUBSTITUTION — `logEnqueueFailure(error, payload)` — at compile time,
+ * which is the likely accidental regression (reaching for the
+ * already-in-scope payload instead of building the narrow object) and
+ * real protection against it. It does NOT stop a spread bolted on
+ * ALONGSIDE the explicit fields — `logEnqueueFailure(error, { ...payload,
+ * eventId: payload.event_id, tenantId, slug })` compiles with ZERO errors
+ * (verified by hand against this repo's own `tsc --noEmit -p
+ * tsconfig.test.json`): TypeScript's excess-property check only inspects
+ * properties written literally in an object literal, and spread-
+ * contributed properties are exempt from it. (Writing the spread AFTER
+ * the three explicit fields instead — `{ eventId, tenantId, slug,
+ * ...payload }` — additionally trips an UNRELATED diagnostic, TS2783
+ * "specified more than once", because `payload` itself also carries a
+ * `slug` key; that is a property-order lint, not the type-safety
+ * boundary this comment is about, and ordering the spread first avoids
+ * it while still demonstrating the same bypass.) The call site in
+ * `middleware.ts` has no such spread, and this type cannot enforce that
+ * one never gets added — that remains a code-review concern, not a
+ * compiler-enforced one.
  */
 export interface EnqueueFailureContext {
   readonly eventId: string;
