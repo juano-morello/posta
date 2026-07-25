@@ -467,15 +467,26 @@ async function handleLinkTarget(
   // buys: ONE guard, unconditional, that stays correct even if
   // `parseCachedLink`'s own protection is ever weakened — this is
   // deliberately not "trust the Redis tier already checked it".
+  //
+  // [fix round 1] This guard has no opinion on HEADER safety — an
+  // embedded CR/LF passes `zDestination` (it constrains scheme and
+  // length, not the full character set) and is not response-splitting
+  // ONLY because encodeDestinationForHeader (T2.4.1, below) percent-
+  // encodes it before it ever reaches a header. That property belongs to
+  // that function, not this guard — recorded here so nobody later
+  // "simplifies" the encoder on the assumption this guard already covers
+  // header safety.
   const destinationCheck = zDestination.safeParse(link.destination);
   if (!destinationCheck.success) {
     // [security] Never the destination itself — it is attacker-controlled
     // content the instant it reached here by an unvalidated path, and may
     // itself embed credentials or log-injection payloads. `link_id` is
-    // how an operator finds the offending row; the SCHEME (extracted
+    // how an operator finds the offending row; the SCHEME — extracted
     // without ever invoking `new URL()` on the untrusted string a second
-    // time — see describeRejectedScheme's own comment) is the diagnostic
-    // signal for what kind of attack this is.
+    // time, and hard-capped at REJECTED_SCHEME_MAX_LENGTH so a pathological
+    // scheme can never smuggle most of the destination back out through
+    // this log line, see describeRejectedScheme's own comment — is the
+    // diagnostic signal for what kind of attack this is.
     logger.error(
       'Resolved destination failed the read-time open-redirect guard; refusing to redirect. ' +
         'A destination this deployment itself validates at write time should never reach ' +
@@ -497,7 +508,27 @@ async function handleLinkTarget(
   // The response, sent. Everything below this line runs AFTER the
   // visitor already has their 307 — see this function's own header
   // comment for why even the synchronous reads are deferred this far.
-  sendLinkRedirect(res, link.destination);
+  //
+  // [fix round 1] `destinationCheck.data`, NOT `link.destination`. Zod's
+  // `z.url()` trims the input before validating it and returns the
+  // TRIMMED string as its parse output — `zDestination` never calls
+  // `.normalize()`, so that trimmed value is `destinationCheck.data`, and
+  // it can differ from `link.destination` on a COLD POSTGRES hit (a
+  // Redis hit is unaffected: parseCachedLink, T2.2.1, already hands back
+  // the schema's own parsed value, never the raw cache bytes).
+  // `link.destination` still passes the guard above either way — the
+  // guard only checks `.success` — so using it here would silently
+  // redirect to (and let a cold hit's own cache backfill persist) a
+  // value the guard never actually validated. No character in the gap
+  // `.trim()` closes is exploitable against `encodeDestinationForHeader`
+  // TODAY (verified by hand: only tab/space/NBSP overlap, and each either
+  // lands the browser on the same validated host via its own leading-trim
+  // or degrades to inert) — but that safety is `encodeDestinationForHeader`
+  // behaving incidentally well for a purpose it was never written for, not
+  // a guarantee this guard makes. Using the validated string is what
+  // makes "validated" and "served" provably the same value, independent
+  // of that incidental behavior.
+  sendLinkRedirect(res, destinationCheck.data);
   if (res.statusCode !== 307) {
     // sendLinkRedirect itself 404'd: an unencodable destination
     // (encodeDestinationForHeader's own `null` case, below). No
@@ -574,11 +605,33 @@ async function handleLinkTarget(
 // `new URL()`, it cannot throw.
 const SCHEME_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 
+// [fix round 1, security] `zDestination` rejects for reasons OTHER than
+// scheme grammar — a PROTOCOL MISMATCH (any scheme that isn't http/https)
+// is the common case, and SCHEME_PATTERN's own character class
+// (`[a-zA-Z0-9+.-]`) is permissive enough that a destination like
+// `'a'.repeat(2000) + ':x'` is a syntactically valid URL (`new URL()`
+// accepts it; only the protocol check fails, not the length bound) whose
+// entire 2000-character run would otherwise be captured verbatim as the
+// "scheme" — echoing essentially the whole attacker-controlled
+// destination into an `error` log, exactly what this guard's own log
+// line promises never to do. REJECTED_SCHEME_MAX_LENGTH hard-caps the
+// captured group before it is ever logged, rather than trying to
+// second-guess what a "real" scheme looks like (an allowlist would need
+// updating every time a legitimate-but-unusual scheme shows up in a
+// rejection, for zero security benefit — the cap's only job is bounding
+// attacker-controlled output, not classifying it). 32 is comfortably
+// longer than any real IANA-registered scheme (the longest few, e.g.
+// "microsoft-edge", are under 20 characters) and short enough that even
+// a maximally crafted payload never leaks more than a fixed, small
+// prefix.
+const REJECTED_SCHEME_MAX_LENGTH = 32;
+
 /**
  * Describes ONLY the scheme of a rejected destination — never the
- * destination itself — for the open-redirect guard's error log, above.
- * Three shapes, each named distinctly so an operator reading the log
- * doesn't have to guess:
+ * destination itself, and never more than {@link REJECTED_SCHEME_MAX_LENGTH}
+ * characters of it (see that constant's own comment) — for the
+ * open-redirect guard's error log, above. Four shapes, each named
+ * distinctly so an operator reading the log doesn't have to guess:
  *   - `javascript:alert(1)` / `data:text/html,x` -> `"javascript"` /
  *     `"data"`: a real, dangerous scheme. This is the case the guard
  *     exists for.
@@ -588,6 +641,10 @@ const SCHEME_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
  *     rather than folding into the generic "no scheme" case below.
  *   - `/relative` (or anything else with no leading scheme and no `//`
  *     prefix) -> `"(no scheme)"`.
+ *   - anything whose scheme text exceeds the cap -> the first
+ *     {@link REJECTED_SCHEME_MAX_LENGTH} characters plus a trailing `…`,
+ *     so the log line itself signals truncation rather than looking like
+ *     a short, complete scheme.
  * A destination that merely exceeds `zDestination`'s length bound, or is
  * `http(s)`-prefixed but fails full URL parsing (both pass the DB's own
  * loose `^https?://` CHECK constraint) still reports its real scheme
@@ -598,7 +655,9 @@ const SCHEME_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 function describeRejectedScheme(destination: string): string {
   if (destination.startsWith('//')) return '(protocol-relative)';
   const match = SCHEME_PATTERN.exec(destination);
-  return match ? match[1] ?? '(no scheme)' : '(no scheme)';
+  if (!match) return '(no scheme)';
+  const scheme = match[1] ?? '(no scheme)';
+  return scheme.length <= REJECTED_SCHEME_MAX_LENGTH ? scheme : `${scheme.slice(0, REJECTED_SCHEME_MAX_LENGTH)}…`;
 }
 
 // T2.4.1 [INV-3] — the response half of S2.4: given an already-resolved

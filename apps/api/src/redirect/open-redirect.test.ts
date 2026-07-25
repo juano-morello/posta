@@ -186,6 +186,11 @@ const CANONICAL_PAYLOADS: ReadonlyArray<{ readonly label: string; readonly desti
   { label: 'protocol-relative', destination: '//evil.com' },
   { label: 'data', destination: 'data:text/html,x' },
   { label: 'relative', destination: '/relative' },
+  // [fix round 1] Named explicitly by the task brief; verified rejected
+  // against the real zDestination before adding (both fail the protocol
+  // check the same way javascript:/data: do).
+  { label: 'vbscript', destination: 'vbscript:msgbox(1)' },
+  { label: 'file', destination: 'file:///etc/passwd' },
 ];
 
 // Both pass the DB's own CHECK constraint and a naive `^https?://` regex —
@@ -297,6 +302,70 @@ describe('open-redirect guard (T2.4.5) [security]', () => {
       expect(JSON.stringify(callsForThisRequest)).not.toContain(destination);
 
       expect(await getCounterValue(registry, OPEN_REDIRECT_REJECTED_COUNTER_NAME)).toBe(counterBefore + 1);
+    });
+
+    // [fix round 1, security] zDestination rejects for reasons OTHER than
+    // scheme grammar — a PROTOCOL mismatch is the common case, and the
+    // scheme grammar itself (a letter, then any run of letters/digits/
+    // `+`/`-`/`.`) is permissive enough that a 2000-character run before
+    // the `:` is a syntactically valid URL (only the protocol check
+    // fails, not zDestination's own 2048-char length bound). Without a
+    // cap, describeRejectedScheme (middleware.ts) would capture and log
+    // that whole run verbatim — echoing essentially the entire
+    // attacker-controlled destination into an `error` log, exactly what
+    // this guard's own comment promises never to do. None of the other
+    // cases in this file catch this: every one of them has a short,
+    // benign scheme ahead of its colon.
+    it('caps the logged rejectedScheme so a long, non-http(s) scheme cannot smuggle the destination out', async () => {
+      const longScheme = 'a'.repeat(2000);
+      const destination = `${longScheme}:x`;
+      const slug = `pg-${newId()}`.toLowerCase();
+      const linkId = await seedLink(pg, tenantId, slug, destination);
+
+      const callsBefore = logger.calls.length;
+      const res = await dispatch(middleware, `/${slug}`);
+
+      expect(res.statusCode).toBe(404);
+
+      const errorCalls = logger.calls.slice(callsBefore).filter((call) => call.level === 'error');
+      expect(errorCalls).toHaveLength(1);
+      const rejectedScheme = errorCalls[0]?.meta?.['rejectedScheme'];
+      expect(typeof rejectedScheme).toBe('string');
+      // Mirrors middleware.ts's own REJECTED_SCHEME_MAX_LENGTH (32) plus
+      // the trailing truncation marker — a precise assertion, not just a
+      // "shorter than the input" one, so a future change to the cap's
+      // exact value is a deliberate, visible edit here too.
+      expect(rejectedScheme).toBe(`${longScheme.slice(0, 32)}…`);
+      expect((rejectedScheme as string).length).toBe(33);
+      expect(JSON.stringify(errorCalls)).not.toContain(longScheme);
+      expect(JSON.stringify(errorCalls)).not.toContain(destination);
+      // linkId still matched correctly — the cap only affects the scheme
+      // field, nothing else about the log line.
+      expect(errorCalls[0]?.meta).toMatchObject({ linkId });
+    });
+  });
+
+  // [fix round 1] zod's z.url() trims the input before validating it and
+  // returns the TRIMMED string as its own parse output — zDestination
+  // never calls .normalize(), so destinationCheck.data (middleware.ts)
+  // can differ from link.destination on a COLD POSTGRES hit specifically
+  // (a Redis hit is unaffected: parseCachedLink, T2.2.1, already hands
+  // back the schema's own parsed value, never the raw cache bytes). This
+  // proves the guard now redirects using the value it actually validated,
+  // not the raw column value — "validated" and "served" provably the
+  // same string, independent of encodeDestinationForHeader's own
+  // (incidental, for THIS specific character) safe handling of a leading
+  // space.
+  describe('validated vs served on a cold Postgres hit (fix round 1)', () => {
+    it('redirects using the TRIMMED destination, not the raw column value, when the row carries leading whitespace', async () => {
+      const destination = ' https://example.test/promo'; // leading space — zDestination trims it
+      const slug = `pg-${newId()}`.toLowerCase();
+      await seedLink(pg, tenantId, slug, destination);
+
+      const res = await dispatch(middleware, `/${slug}`);
+
+      expect(res.statusCode).toBe(307);
+      expect(res.headers['Location']).toBe('https://example.test/promo');
     });
   });
 
