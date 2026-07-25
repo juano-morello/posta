@@ -52,12 +52,44 @@ const URL_LIKE_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g;
 
 const SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 
+// [security fix round 2, T2.4.4 review] `\S+` has no RIGHT boundary, so
+// a candidate immediately followed by ordinary prose punctuation — no
+// whitespace in between, e.g. "...host:6379; retrying", "(see
+// redis://...)", "...host:6379]" — swept that punctuation into the
+// chunk `new URL()` was asked to parse. When the trailing character
+// broke port/host parsing, the malformed-input fallback fired and
+// dropped host:port for what was actually a WELL-FORMED connection
+// string: a real regression against the pre-fix regex (which never
+// reached past the userinfo `@` to begin with) and a contradiction of
+// this file's own guarantee, two paragraphs below, that host:port
+// survive for anything but genuinely malformed input.
+//
+// The fix does NOT reopen "guess at a character class for the
+// CREDENTIAL" — the problem the round-1 fix moved away from. It only
+// decides how much TRAILING PROSE PUNCTUATION to peel off the candidate
+// before handing the remainder to `new URL()`, then glues the exact
+// same trailing characters back onto whatever comes out, verbatim,
+// regardless of what happened inside. The credential boundary itself is
+// still decided entirely by the parser, never by this set. Matches (in
+// full) each get treated the same way whether or not there is a
+// credential inside them, so a well-formed, credential-free URL ending
+// in this same punctuation (`https://h/x?y=1)`) is unaffected too — see
+// `redactUrlLikeChunk`'s no-credential branch, which always returns the
+// full original chunk (trailing punctuation included) untouched.
+const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)\]}>'"]+$/;
+
 /**
  * Redacts ONE `scheme://...` chunk (a single match of
  * {@link URL_LIKE_PATTERN}), used as `String.prototype.replace`'s
  * per-match callback.
  *
- * The common case: `new URL(chunk)` parses successfully. WHATWG's own
+ * First splits off any trailing prose punctuation
+ * ({@link TRAILING_PUNCTUATION_PATTERN}) — see that constant's own
+ * comment — parsing only what remains (`urlPart`) and re-appending
+ * `trailing` to whatever this function returns, unmodified, on every
+ * path below.
+ *
+ * The common case: `new URL(urlPart)` parses successfully. WHATWG's own
  * authority parser finds the TRUE userinfo/host boundary — the LAST `@`
  * before the host — handling a literal `@` inside a password correctly
  * (it becomes part of `.password`, percent-encoded, not a second
@@ -77,31 +109,43 @@ const SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
  * error-LOGGING path is exactly where a redactor throwing would be its
  * own bad failure mode — but it also must not fall back to the raw
  * chunk, since leaving it untouched IS the leak this function exists to
- * close. The safe default is to redact the WHOLE chunk, keeping only the
- * scheme (which can never contain user-supplied content): host and port
- * are sacrificed, but ONLY for input that was already malformed, never
- * for a well-formed connection string.
+ * close. The safe default is to redact the WHOLE `urlPart`, keeping only
+ * the scheme (which can never contain user-supplied content): host and
+ * port are sacrificed, but ONLY for input that was already malformed,
+ * never for a well-formed connection string.
+ *
+ * Known, accepted limit — NOT handled, deliberately (out of scope; no
+ * existing input in this codebase produces it): an IPv6 host with no
+ * port, e.g. `redis://user:pass@[::1]`, ends in a bracket this pattern's
+ * `]` would trim, breaking the parse the same way any other malformed
+ * input does (fails closed to the scheme-only fallback, no leak — just
+ * lost diagnosability for that one narrow shape).
  */
 function redactUrlLikeChunk(chunk: string): string {
+  const trailingMatch = TRAILING_PUNCTUATION_PATTERN.exec(chunk);
+  const urlPart = trailingMatch ? chunk.slice(0, trailingMatch.index) : chunk;
+  const trailing = trailingMatch ? trailingMatch[0] : '';
+
   let parsed: URL;
   try {
-    parsed = new URL(chunk);
+    parsed = new URL(urlPart);
   } catch {
-    const scheme = SCHEME_PATTERN.exec(chunk)?.[0] ?? '';
-    return `${scheme}${SECRET_REDACTION_PLACEHOLDER}`;
+    const scheme = SCHEME_PATTERN.exec(urlPart)?.[0] ?? '';
+    return `${scheme}${SECRET_REDACTION_PLACEHOLDER}${trailing}`;
   }
 
   if (parsed.username === '' && parsed.password === '') {
-    // No credential to redact. Returns the ORIGINAL chunk, not a
-    // reconstruction from the parsed URL's own components: WHATWG URL
-    // normalizes host casing/IDNA and can alter percent-encoding in ways
-    // that would silently change a message this function is supposed to
-    // leave byte-identical — see this file's own "leaves a
-    // credential-free URL unchanged" test.
+    // No credential to redact. Returns the ORIGINAL chunk (urlPart +
+    // trailing, i.e. byte-identical to the input), not a reconstruction
+    // from the parsed URL's own components: WHATWG URL normalizes host
+    // casing/IDNA and can alter percent-encoding in ways that would
+    // silently change a message this function is supposed to leave
+    // untouched — see this file's own "leaves a credential-free URL
+    // unchanged" test.
     return chunk;
   }
 
-  return `${parsed.protocol}//${SECRET_REDACTION_PLACEHOLDER}@${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  return `${parsed.protocol}//${SECRET_REDACTION_PLACEHOLDER}@${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}${trailing}`;
 }
 
 /**

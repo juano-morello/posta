@@ -141,4 +141,92 @@ describe('redactCredentialsFromMessage', () => {
     expect(result).toContain('redis://');
     expect(result).toContain('[REDACTED]');
   });
+
+  // [security fix round 2] URL_LIKE_PATTERN's `\S+` has no RIGHT
+  // boundary, so a credential-bearing URL immediately followed by
+  // ordinary prose punctuation — no whitespace in between, exactly the
+  // shape a sentence around an embedded connection string produces —
+  // swept that punctuation into the chunk `new URL()` had to parse. When
+  // the trailing character broke port parsing, the malformed-input
+  // fallback fired and dropped host:port for a WELL-FORMED connection
+  // string: a real regression against the round-1 fix's own documented
+  // guarantee ("host and port are sacrificed ONLY for input that was
+  // already malformed"), and against the pre-round-1 regex too (which
+  // never read past the userinfo `@` and so never touched trailing
+  // punctuation at all).
+
+  it('[security] a credential-bearing URL followed by ";" with no space keeps host:port and loses the password', () => {
+    const message = 'Error: getaddrinfo ENOTFOUND for redis://user:s3cret@host:6379; retrying';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toContain('host:6379');
+    expect(result).toContain('; retrying');
+  });
+
+  it('[security] a credential-bearing URL followed by ")" with no space keeps host:port and loses the password', () => {
+    const message = 'queue error (see redis://user:s3cret@host:6379)';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toContain('host:6379');
+    expect(result).toBe('queue error (see redis://[REDACTED]@host:6379)');
+  });
+
+  it('[security] a credential-bearing URL followed by "]" with no space keeps host:port and loses the password', () => {
+    const message = '[ioredis] connection error: redis://user:s3cret@host:6379]';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toContain('host:6379');
+    expect(result).toBe('[ioredis] connection error: redis://[REDACTED]@host:6379]');
+  });
+
+  it('[security] a credential-bearing URL followed by "," with no space keeps host:port and loses the password', () => {
+    const message = 'connect ECONNREFUSED redis://user:s3cret@host:6379, giving up';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toContain('host:6379');
+    expect(result).toBe('connect ECONNREFUSED redis://[REDACTED]@host:6379, giving up');
+  });
+
+  it('[security] a credential-bearing URL followed by a sentence-ending "." keeps host:port and loses the password', () => {
+    const message = 'connect ECONNREFUSED redis://user:s3cret@host:6379.';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toContain('host:6379');
+    expect(result).toBe('connect ECONNREFUSED redis://[REDACTED]@host:6379.');
+  });
+
+  it('[security] stacked trailing punctuation (")." together) still keeps host:port and loses the password', () => {
+    const message = 'queue error (see redis://user:s3cret@host:6379).';
+
+    const result = redactCredentialsFromMessage(message);
+
+    expect(result).not.toContain('s3cret');
+    expect(result).toBe('queue error (see redis://[REDACTED]@host:6379).');
+  });
+
+  it('leaves a message with a CREDENTIAL-FREE URL followed by ")" completely unchanged (the punctuation trim never runs unless there is a credential)', () => {
+    // https://h/x?y=1) — must "keep working": whether the trailing ")"
+    // is prose or genuinely part of the query, the no-credential branch
+    // in redactUrlLikeChunk always returns the ORIGINAL, untrimmed
+    // chunk, so this message is untouched either way.
+    const message = 'value is https://h/x?y=1)';
+
+    expect(redactCredentialsFromMessage(message)).toBe(message);
+  });
+
+  it('leaves a credential-free URL whose path contains "." (not at the very end) unchanged', () => {
+    const message = 'value is https://h/a.b';
+
+    expect(redactCredentialsFromMessage(message)).toBe(message);
+  });
 });
