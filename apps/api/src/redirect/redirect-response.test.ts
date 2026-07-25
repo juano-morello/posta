@@ -238,4 +238,25 @@ describe('sendLinkRedirect — destinations outside the Latin-1 range, against a
     expect(response.status).toBe(307);
     expect(response.location).toBe(destination);
   });
+
+  // [T2.4.1 fix round 2, CRITICAL] `zDestination` (`z.url()`) accepts a
+  // destination containing a LONE, unpaired UTF-16 surrogate — confirmed
+  // by hand: `String.fromCharCode(0xd800)` embedded mid-URL parses
+  // successfully. That single code unit is not a valid Unicode character
+  // on its own, so `encodeURIComponent` throws `URIError: URI malformed`
+  // when asked to encode it — the identical "permanent per-slug outage"
+  // shape as the CJK/emoji case above, just arriving through a different
+  // exception type that a try/catch around `res.setHeader` alone would
+  // not have caught. There is no valid Location this destination can
+  // ever produce, so sendLinkRedirect must 404 — the same terminal
+  // branch an unresolvable link already takes — rather than let the
+  // exception escape and crash the request.
+  it('responds 404, not a crash, when the destination contains a lone unpaired surrogate that cannot be encoded', async () => {
+    destination = `https://example.test/x${String.fromCharCode(0xd800)}x?a=1&b=2#frag`;
+
+    const response = await requestRedirect();
+
+    expect(response.status).toBe(404);
+    expect(response.location).toBeUndefined();
+  });
 });

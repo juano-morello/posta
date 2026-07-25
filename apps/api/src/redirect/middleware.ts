@@ -182,7 +182,11 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
 // 'link' case half-built with no real destination to redirect to. This
 // function IS the seam: T2.4.3 calls it with the resolved link's
 // `destination` the instant resolveLink returns a hit, then enqueues
-// AFTER, never before.
+// AFTER, never before. [T2.4.1 fix round 2] Note for that composition:
+// this function no longer GUARANTEES a 307 — a destination that cannot
+// be turned into a valid Location header (see the `null` case below)
+// ends in a 404 instead. T2.4.3 decides for itself whether that outcome
+// still warrants an enqueue; this file makes no assumption either way.
 //
 // `res.redirect(307, destination)` is deliberately NOT used here.
 // Express's res.redirect() — and res.location(), which it calls
@@ -206,9 +210,24 @@ export function createRedirectMiddleware(deps: RedirectMiddlewareDeps): RequestH
 // own header setter, NOT res.location() — writes the header value
 // untouched, which is what redirect-response.test.ts's byte-identity
 // cases depend on.
+// [T2.4.1 fix round 2] A destination can fail to produce a valid Location
+// header at all (see encodeDestinationForHeader's `null` case, below) —
+// there is nothing to redirect TO in that case, so this ends in the same
+// bare 404 the middleware's own terminal branch uses (Cache-Control:
+// no-store, no body), rather than let an encoding failure surface as an
+// uncaught exception. `Cache-Control` is set once, up front, so it is
+// present on EITHER outcome — both are terminal responses that must
+// never be cached by an intermediary.
 export function sendLinkRedirect(res: Response, destination: string): void {
   res.set('Cache-Control', 'no-store');
-  res.set('Location', encodeDestinationForHeader(destination));
+
+  const encoded = encodeDestinationForHeader(destination);
+  if (encoded === null) {
+    res.status(404).end();
+    return;
+  }
+
+  res.set('Location', encoded);
   res.status(307).end();
 }
 
@@ -241,23 +260,6 @@ export function sendLinkRedirect(res: Response, destination: string): void {
 // needed encoding still lands the visitor on the identical target: this
 // is the same transform a browser applies when it parses a URL
 // containing such a character by any other route.
-//
-// Iterates by Unicode CODE POINT (`Array.from`, not a plain index-based
-// loop over UTF-16 code units) so a supplementary-plane character
-// represented as a surrogate PAIR — an emoji, for instance — is read and
-// encoded as the single code point it is, not as two broken halves; see
-// redirect-response.test.ts's emoji case, which specifically exercises
-// this. `encodeURIComponent` on that one resulting character/pair
-// produces its exact percent-encoded UTF-8 bytes.
-//
-// Deliberately does NOT attempt to repair a LONE, unpaired UTF-16
-// surrogate (malformed input with no valid Unicode representation —
-// `encodeURIComponent` itself throws `URIError` on one). That is a
-// different problem: malformed/invalid input, not a legitimate
-// destination containing a character outside Latin-1, and closer in
-// kind to T2.4.5's malicious-input guard than to this fix. Not handling
-// it here is a scope decision, not an oversight — recording it so it
-// isn't silently rediscovered later.
 function isHeaderSafeCodePoint(codePoint: number): boolean {
   if (codePoint === 0x09) return true; // horizontal tab
   if (codePoint >= 0x20 && codePoint <= 0x7e) return true; // printable ASCII
@@ -265,13 +267,71 @@ function isHeaderSafeCodePoint(codePoint: number): boolean {
   return false;
 }
 
-function encodeDestinationForHeader(destination: string): string {
-  return Array.from(destination)
-    .map((char) => {
-      const codePoint = char.codePointAt(0);
-      return codePoint !== undefined && isHeaderSafeCodePoint(codePoint)
-        ? char
-        : encodeURIComponent(char);
-    })
-    .join('');
+// [T2.4.1 fix round 2, INV-2] This hot path runs on every single
+// redirect, and the overwhelming common case is a destination that
+// needs NO transformation at all — yet the original fix round 1
+// implementation ran `Array.from(destination).map(...).join('')` on
+// EVERY call regardless, paying an array allocation plus a per-character
+// codePointAt/function-call for a destination that never had anything to
+// encode. This pattern expresses isHeaderSafeCodePoint's exact same
+// 0x00-0xFF boundary (tab, printable ASCII, Latin-1 supplement) as a
+// single non-allocating regex scan: when the WHOLE destination already
+// matches, encodeDestinationForHeader returns it completely unchanged
+// with no further work — no Array.from, no per-character loop, nothing
+// beyond one `.test()` call. Only a destination containing at least one
+// character outside this set falls through to the slower per-code-point
+// path below, which is the rare path, not the hot one.
+const HEADER_SAFE_DESTINATION_PATTERN = /^[\t\x20-\x7e\x80-\xff]*$/;
+
+/**
+ * Percent-encodes `destination` for the Location header, touching only
+ * the characters {@link isHeaderSafeCodePoint} says Node's raw header
+ * writer cannot represent. Returns `null` when the destination cannot be
+ * represented AT ALL — [T2.4.1 fix round 2, CRITICAL] a lone, unpaired
+ * UTF-16 surrogate (malformed input with no valid Unicode representation
+ * on its own) makes `encodeURIComponent` throw `URIError` rather than
+ * return anything, and this IS reachable through the normal validated
+ * path: `zDestination` (`z.url()`) accepts
+ * `String.fromCharCode(0xd800)` embedded in an otherwise-valid URL,
+ * confirmed by hand. `sendLinkRedirect` treats `null` as "no valid
+ * Location exists for this destination" and 404s rather than let the
+ * exception escape and crash the request — this is a narrower, purely
+ * mechanical fact ("this string cannot become a valid HTTP header
+ * value"), not the malicious-URL-scheme concern T2.4.5's guard exists
+ * for.
+ *
+ * The fast-path regex above doubles as the detector for this case with
+ * no separate check needed: an unpaired surrogate's own UTF-16 code unit
+ * (0xD800-0xDFFF) falls outside the regex's safe ranges exactly like a
+ * CJK or emoji character's code units do, so it already falls through to
+ * this per-code-point path, where the `catch` below is what actually
+ * turns the throw into `null` instead of letting it propagate.
+ *
+ * Iterates by Unicode CODE POINT (a plain `for...of` over the string,
+ * which — like `Array.from` — respects surrogate PAIRS) so a
+ * supplementary-plane character such as an emoji is read and encoded as
+ * the single code point it is, not as two broken halves; see
+ * redirect-response.test.ts's emoji case, which specifically exercises
+ * this. `encodeURIComponent` on that one resulting character/pair
+ * produces its exact percent-encoded UTF-8 bytes.
+ */
+function encodeDestinationForHeader(destination: string): string | null {
+  if (HEADER_SAFE_DESTINATION_PATTERN.test(destination)) {
+    return destination;
+  }
+
+  const parts: string[] = [];
+  for (const char of destination) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint !== undefined && isHeaderSafeCodePoint(codePoint)) {
+      parts.push(char);
+      continue;
+    }
+    try {
+      parts.push(encodeURIComponent(char));
+    } catch {
+      return null;
+    }
+  }
+  return parts.join('');
 }
