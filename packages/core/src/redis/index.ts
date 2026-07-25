@@ -7,3 +7,11 @@
 export * from './client';
 export * from './invalidate';
 export * from './keys';
+// T2.3.6 — explicit named exports, not `export *`, matching geoip/index.ts's
+// own switch (see that file's header for the fuller reasoning): keeps this
+// barrel's surface an intentional list rather than "whatever salt.ts
+// happens to export today", so a future test-only addition to salt.ts
+// doesn't silently widen @posta/core's public surface the way an `export *`
+// would.
+export type { DailySaltDeps, DailySaltLogger, DailySaltRedis, GetDailySalt } from './salt';
+export { createDailySalt } from './salt';

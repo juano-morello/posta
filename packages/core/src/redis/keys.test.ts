@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatUtcDate, handleKey, linkKey, saltKey } from './keys';
+import { withPinnedTz } from './test-support';
 
 // T2.1.3 — keys.ts is the ONE place every Redis key string in Posta's
 // keyspace (spec §9) gets built. These tests assert the exact formats
@@ -7,38 +8,19 @@ import { formatUtcDate, handleKey, linkKey, saltKey } from './keys';
 // `salt:YYYY-MM-DD` — never the SQL injection-style checks used against
 // untrusted input, since these builders are deliberately not the
 // validation layer (see keys.ts's own header comment).
-
-/**
- * Runs `fn` with `process.env.TZ` pinned to `tz`, restoring the original
- * value (or its absence) afterward — same set-then-restore-in-`finally`
- * shape as this file's sibling `client.test.ts` uses for env vars.
- *
- * Used only by the two "diverges from local time" tests below, and
- * specifically with a POSITIVE UTC offset (`Europe/Berlin`): 23:30 UTC on
- * Jan 5 only rolls over to the NEXT local calendar day (Jan 6) in a
- * timezone ahead of UTC. This repo's CI runs on `ubuntu-latest` with no
- * `TZ` override (defaults to UTC) and this repo's own dev sandbox runs
- * `America/Buenos_Aires` (UTC-3) — in BOTH of those, that same instant is
- * still "Jan 5" whether read via `getUTC*()` or the local
- * `getFullYear()`/`getMonth()`/`getDate()` equivalents, so an assertion
- * that only relies on the environment's ambient timezone would pass
- * identically under a regressed local-getter implementation. Pinning a
- * positive offset is what forces the two to actually disagree.
- */
-function withPinnedTz<T>(tz: string, fn: () => T): T {
-  const originalTz = process.env.TZ;
-  process.env.TZ = tz;
-
-  try {
-    return fn();
-  } finally {
-    if (originalTz === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = originalTz;
-    }
-  }
-}
+//
+// withPinnedTz moved out to ./test-support.ts (T2.3.6): salt.test.ts needs
+// the SAME positive-offset TZ pin this file's own two "diverges from local
+// time" tests use below, for the identical reason (see that file's own doc
+// comment). It was previously a local, unexported function here; importing
+// it from a sibling *.test.ts file would re-execute this file's own
+// describe/it blocks a second time inside salt.test.ts's module graph
+// (each Vitest test file gets its own isolated module registry, so a
+// static import of another test file re-runs its top-level code, including
+// every describe() call in it) — so the shared helper lives in a plain,
+// non-test-suffixed module instead, the same way
+// apps/api/src/redirect/resolve-test-support.ts holds shared fixtures for
+// that folder's test files without being a test file itself.
 
 describe('linkKey (T2.1.3)', () => {
   it('builds "link:{tenant}:{slug}"', () => {
