@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { assertRealGeoDataAvailable, REAL_ASN_PATH, REAL_GEOIP_DIR } from './geo-test-support';
 import { createGeoDatabases, openGeoDatabases, resetGeoDatabases } from './loader';
 
 // T2.3.4 — proves the boot-time GeoIP loader fails LOUDLY (never returns a
@@ -18,24 +19,12 @@ import { createGeoDatabases, openGeoDatabases, resetGeoDatabases } from './loade
 //      code, not the real maxmind Reader path the API depends on.
 //
 // The real-data tests do NOT skip when data/geoip is absent. They call
-// assertRealGeoDataAvailable() first, which throws the same
-// "run `pnpm geo:fetch`" guidance the production loader itself gives on a
-// missing file — a quietly-skipped test here would read as coverage that
-// isn't there, which is worse than a failing one (see T2.3.4's report for
-// the fuller reasoning).
-
-const REAL_GEOIP_DIR = join(process.cwd(), 'data', 'geoip');
-const REAL_ASN_PATH = join(REAL_GEOIP_DIR, 'dbip-asn-lite.mmdb');
-const REAL_COUNTRY_PATH = join(REAL_GEOIP_DIR, 'dbip-country-lite.mmdb');
-
-function assertRealGeoDataAvailable(): void {
-  if (existsSync(REAL_ASN_PATH) && existsSync(REAL_COUNTRY_PATH)) return;
-
-  throw new Error(
-    `This test needs the real DB-IP GeoIP databases. Run \`pnpm geo:fetch\` to download them ` +
-      `into ${REAL_GEOIP_DIR} before running this suite.`,
-  );
-}
+// assertRealGeoDataAvailable() first (./geo-test-support.ts, shared with
+// T2.3.5's lookup.test.ts so both suites give this same guidance from ONE
+// definition), which throws the same "run `pnpm geo:fetch`" guidance the
+// production loader itself gives on a missing file — a quietly-skipped
+// test here would read as coverage that isn't there, which is worse than
+// a failing one (see T2.3.4's report for the fuller reasoning).
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'posta-geoip-test-'));

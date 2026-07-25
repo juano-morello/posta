@@ -1,7 +1,7 @@
 // Barrel for packages/core/src/geoip — GeoIP database loading (T2.3.4)
-// and, landing separately, lookup (T2.3.5's lookup.ts). Consumers
-// (apps/api) import from '@posta/core' or this module, never reach past
-// it into './loader' directly — same pattern as ../redis/index.ts.
+// and per-request lookup (T2.3.5's lookup.ts). Consumers (apps/api)
+// import from '@posta/core' or this module, never reach past it into
+// './loader' or './lookup' directly — same pattern as ../redis/index.ts.
 //
 // Deliberately NAMED exports here, not `export * from './loader'` (T2.3.4
 // review fixup): loader.ts also exports resetGeoDatabases, a TEST-ONLY
@@ -21,3 +21,5 @@
 // re-export.
 export type { GeoDatabaseOptions, GeoDatabases } from './loader';
 export { createGeoDatabases, openGeoDatabases } from './loader';
+export type { GeoLookupLogger, LookupNetwork, NetworkLookup } from './lookup';
+export { consoleErrorLogger, createNetworkLookup } from './lookup';
