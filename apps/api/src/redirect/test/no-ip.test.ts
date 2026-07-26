@@ -330,6 +330,8 @@ describe('no IP in the queued payload, logs, or Redis key names — end to end (
   beforeAll(async () => {
     harness = await startHotPathHarness({
       lookupNetwork: (_ip, _cfCountry) => {
+        void _ip;
+        void _cfCountry;
         if (lookupNetworkShouldThrow) {
           throw new Error(GEOIP_THROW_ERROR_MESSAGE);
         }

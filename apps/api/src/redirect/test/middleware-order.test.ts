@@ -148,7 +148,11 @@ Module({ controllers: [ProbeController] })(ProbeModule);
 // 'nest-router-reached' string, with no real link ever needing to exist.
 const stubLogger: RedirectMiddlewareLogger = { error: () => {} };
 const stubResolveTenant: ResolveTenant = async () => null;
-const stubResolveLink = async (_tenantId: string, _slug: string): Promise<CachedLink | null> => null;
+const stubResolveLink = async (_tenantId: string, _slug: string): Promise<CachedLink | null> => {
+  void _tenantId;
+  void _slug;
+  return null;
+};
 const stubLookupNetwork: LookupNetwork = () => ({ asn: null, country: null });
 const stubGetDailySalt: GetDailySalt = async () => 'middleware-order-test-salt-not-a-real-secret';
 const stubEnqueueCapture: EnqueueCapture = async () => {};
