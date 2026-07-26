@@ -55,13 +55,27 @@ RUN chown posta:posta /app
 RUN corepack enable
 COPY --from=pruner --chown=posta:posta /app/out/json/ .
 USER posta
+# See apps/api/Dockerfile for the full reasoning on `--no-optional`: it is
+# what keeps apps/web's `next` (+ @next/swc, sharp-libvips) and the root's
+# `vitest` (+ vite, esbuild, rolldown, jsdom) out of this runtime image.
+# They arrive as better-auth's resolved OPTIONAL peerDependencies —
+# recorded as `optionalDependencies:` in the shared pnpm-lock.yaml, hence
+# production deps that `--prod` alone installs — via @posta/core, which
+# the worker depends on for exactly the same reason the api does.
+# Runtime-stage only; the `deps`/`builder` stages above are untouched. It
+# is coupled to pnpm's default `hoist-pattern=['*']`: the optional-peer
+# edges this image does need (@nestjs/core → @nestjs/platform-express,
+# better-auth → drizzle-orm/pg) survive only because hoisting mirrors
+# every installed package into node_modules/.pnpm/node_modules. Setting
+# `hoist=false` would break this image.
+#
 # See apps/api/Dockerfile — the store-prune must be the SAME RUN as the
 # install (layer diff nets zero bytes only if create+delete happen in one
 # instruction), and it's safe: pnpm hardlinks store files into
 # node_modules rather than symlinking, so the store is disposable once
 # the install is done. Left in place it measured ~26.5MB, close to
 # node_modules' own ~28MB.
-RUN pnpm install --prod --frozen-lockfile && rm -rf "$(pnpm store path)"
+RUN pnpm install --prod --frozen-lockfile --no-optional && rm -rf "$(pnpm store path)"
 # See apps/api/Dockerfile — @posta/worker resolves @posta/contracts and
 # @posta/core through pnpm workspace symlinks whose target needs its
 # compiled dist/ present.

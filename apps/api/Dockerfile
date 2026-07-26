@@ -105,6 +105,37 @@ COPY --from=pruner --chown=posta:posta /app/out/json/ .
 # writes anything — everything after it is just COPY --chown, which
 # doesn't care which USER is active.
 USER posta
+# `--no-optional` is load-bearing, not a micro-optimisation. `better-auth`
+# — a real production dependency of @posta/core, so unavoidably in this
+# image — declares `next`, `react`, `react-dom`, `vitest` and `drizzle-kit`
+# as OPTIONAL peerDependencies (they exist for `better-auth/next-js`,
+# `better-auth/react`, its test helpers and its migration CLI; none of
+# which this API imports). pnpm resolves optional peers against whatever
+# the WHOLE workspace provides, so in the single shared pnpm-lock.yaml
+# better-auth's snapshot binds apps/web's `next` and the root's `vitest`
+# and records them under `optionalDependencies:`. Those are PRODUCTION
+# deps, so `--prod` alone happily installs them: measured 536MB of
+# node_modules here, of which next (170MB), @next/swc-linux-arm64-musl
+# (120MB), sharp-libvips (17MB), rolldown (17MB), playwright-core (13MB),
+# drizzle-kit (10MB), jsdom (9MB) and three esbuilds are pure passengers.
+# That is the entire ~660MB-vs-300MB overrun T0.7.13 catches. Note what is
+# NOT the cause: `turbo prune` is correct (out/apps holds api only), and
+# root devDependencies are correctly skipped — /app/node_modules is empty.
+#
+# `--no-optional` is applied ONLY here, in the runtime stage. The `deps`
+# and `builder` stages above keep the full install, so nothing about the
+# build changes. The two optional-peer edges this image genuinely relies
+# on survive it: @nestjs/core's `require('@nestjs/platform-express')` and
+# better-auth's `require('drizzle-orm')`/`require('pg')` still resolve,
+# because all three are real dependencies of apps/api and packages/core
+# and pnpm's default `hoist-pattern=['*']` mirrors every installed package
+# into node_modules/.pnpm/node_modules, which Node reaches by walking up
+# from the .pnpm virtual store. Verified by require.resolve() inside the
+# built image and by tests/containers/image-smoke.test.ts (T0.7.12), which
+# boots this image and waits on /health. If anyone ever sets
+# `hoist=false` / `hoist-pattern=[]` in pnpm-workspace.yaml, re-check this
+# line before that lands: that setting and this flag are coupled.
+#
 # The trailing store-prune matters: pnpm installs by hardlinking from a
 # content-addressable store (~/.local/share/pnpm/store) into node_modules,
 # and that store is never needed again in a runtime image — nothing here
@@ -117,7 +148,7 @@ USER posta
 # entries are hardlinks into the store's files, not symlinks, so the
 # store can be deleted once the install is done without breaking anything
 # still holding a link to that data.
-RUN pnpm install --prod --frozen-lockfile && rm -rf "$(pnpm store path)"
+RUN pnpm install --prod --frozen-lockfile --no-optional && rm -rf "$(pnpm store path)"
 # @posta/api depends on @posta/contracts and @posta/core through pnpm
 # workspace symlinks (apps/api/node_modules/@posta/contracts ->
 # ../../../../packages/contracts) created by the install above — the
