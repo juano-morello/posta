@@ -76,6 +76,7 @@ jobs:
           POSTA_PROTOCOL=http
           POSTA_RESERVED_HANDLES=app,api,www,admin,static,assets,cdn,mail,blog,docs,status
           DATABASE_URL=postgresql://posta:posta@localhost:5432/posta
+          DB_POOL_MAX=10
           POSTGRES_USER=posta
           POSTGRES_PASSWORD=posta
           POSTGRES_DB=posta
@@ -103,6 +104,8 @@ jobs:
           EVENT_BATCH_SIZE=100
           EVENT_BATCH_INTERVAL_MS=2000
           LINK_CACHE_TTL_SECONDS=3600
+          REDIS_LOOKUP_TIMEOUT_MS=30
+          MAX_INFLIGHT_ENQUEUES=1000
           EOF
 
       - name: Set up pnpm
