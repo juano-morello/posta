@@ -67,28 +67,42 @@ import {
 //
 // DETECTOR PROOF (this epic's own standing requirement — prove the
 // detection mechanism has teeth, not just that it currently finds
-// nothing): this file's own "job id / job opts / Redis key name" check is
-// the genuinely NEW surface T2.3.8 could never reach, so it gets a
-// PERMANENT, always-green regression guard here (mirrors
+// nothing): this file's own "job id / job opts / Redis key name / log
+// line" checks are the genuinely NEW surfaces T2.3.8 could never reach,
+// so EACH gets a PERMANENT, always-green regression guard here (mirrors
 // capture-privacy.test.ts's and tests/conventions/no-literal-domain.test.ts's
-// "plant it, assert the detector finds it" shape): a job is added
-// directly through the real, running `harness.queue`, with the
-// distinctive IP planted as its `jobId` — never through `enqueueCapture`,
-// whose own narrow `EnqueueQueue` interface (enqueue.ts) has no `opts`
-// parameter at all and therefore cannot smuggle one today; this plants
-// the vector by hand to prove the CHECK itself would catch it if some
-// future call site ever could. It proves two things: this file's own
-// `findJobLeaks` helper flags the planted id, AND — the sharper, more
-// surprising fact — BullMQ really does bake a job's id verbatim into a
-// literal Redis key name (`bull:events:<jobId>`), so `assertIpAbsentFromRedisKeys`'s
-// `KEYS *` check is not a check that merely happens to always pass.
+// "plant it, assert the detector finds it" shape):
 //
-// The OTHER required detector proof — patching `createLogEnqueueFailure`
-// (enqueue.ts) to log the raw IP/context, confirming this file's own
-// checks go RED, then reverting exactly — is a manual, by-hand exercise
-// against real production code, not a committed test (committing a
-// permanent test that requires production code to leak would be
-// self-defeating). It is performed and reported separately, per this
+//   - Job id / job opts / Redis key name: a job is added directly through
+//     the real, running `harness.queue`, with the distinctive IP planted
+//     as its `jobId` AND (via the real, documented `deduplication.id`
+//     option — see that test's own comment for why this, not a
+//     contrivance) inside `job.opts` too — never through
+//     `enqueueCapture`, whose own narrow `EnqueueQueue` interface
+//     (enqueue.ts) has no `opts` parameter at all and therefore cannot
+//     smuggle one today; this plants the vector by hand to prove the
+//     CHECK itself would catch it if some future call site ever could.
+//     It proves: this file's own `findJobLeaks` helper flags the planted
+//     id AND the planted opts value SEPARATELY, AND — the sharper, more
+//     surprising fact — BullMQ really does bake a job's id verbatim into
+//     a literal Redis key name (`bull:events:<jobId>`), proven by calling
+//     this file's own actual `assertIpAbsentFromRedisKeys` helper (not a
+//     duplicate of its query logic) and asserting IT rejects.
+//   - Log lines: a synthetic line containing the planted ip is pushed
+//     directly into the harness's own captured-log array (see
+//     `plantSyntheticLogLine`), and this file's own actual
+//     `assertIpAbsentFromLogs` helper is asserted to throw on it. This
+//     closes the one channel a previous revision of this file left to a
+//     manual, by-hand exercise (see below) with zero committed guard.
+//
+// A SEPARATE, narrower manual exercise — patching `createLogEnqueueFailure`
+// (enqueue.ts) itself to log the raw IP/context, confirming this file's
+// own checks go RED, then reverting exactly — proves the layer BELOW the
+// one above: not "does `assertIpAbsentFromLogs` have teeth" (the
+// committed proof above answers that permanently), but "does today's
+// REAL production logging code actually leak" — which cannot be a
+// committed test without production code that leaks by design, so it
+// stays a by-hand exercise, performed and reported separately per this
 // task's own dispatch instruction; see this task's own final report for
 // the real RED/GREEN output observed.
 
@@ -225,6 +239,27 @@ async function assertIpAbsentFromQueue(queue: Queue<CaptureEvent>, ip: string): 
 function assertIpAbsentFromLogs(harness: HotPathHarness, ip: string): void {
   const leakingLines = harness.logs.filter((line) => line.includes(ip));
   expect(leakingLines).toEqual([]);
+}
+
+/** [Security review follow-up, T2.6.3] Plants a synthetic line straight
+ * into the harness's own captured-log array — the log channel's own
+ * "plant it, assert the detector finds it" detector proof, mirroring the
+ * job-id/Redis-key proof below. `HotPathHarness.logs` is `readonly
+ * string[]` for every other reader in this file (a real scenario must
+ * never mutate what the harness's logger actually recorded), so this
+ * cast is deliberate and confined to this one proof. */
+function plantSyntheticLogLine(harness: HotPathHarness, line: string): void {
+  (harness.logs as string[]).push(line);
+}
+
+/** Undoes `plantSyntheticLogLine` — removes the exact synthetic line by
+ * value (not by truncating to a saved length), so it can never
+ * accidentally swallow a real line the harness's logger captured
+ * concurrently while the proof ran. */
+function removeSyntheticLogLine(harness: HotPathHarness, line: string): void {
+  const logs = harness.logs as string[];
+  const index = logs.indexOf(line);
+  if (index !== -1) logs.splice(index, 1);
 }
 
 /** `KEYS *` — literally, per the verify line — checked against KEY NAMES
@@ -439,32 +474,69 @@ describe('no IP in the queued payload, logs, or Redis key names — end to end (
   );
 
   it(
-    'detector proof — an ip planted as a real BullMQ job id is caught by this file\'s own job check AND really does appear in a literal Redis key name',
+    'detector proof — an ip planted as a real BullMQ job id AND inside job.opts is caught by this file\'s own job check AND really does appear in a literal Redis key name (via the real assertIpAbsentFromRedisKeys helper)',
     async () => {
       const plantedPayload = buildDetectorProofPayload(harness);
-      const plantedJob = await harness.queue.add(CAPTURE_JOB_NAME, plantedPayload, { jobId: IP_DETECTOR_PLANTED });
+      // `deduplication.id` — a real, documented BaseJobOptions field (not
+      // a contrivance): BullMQ's own `Job.create` stores `opts` verbatim
+      // as `job.opts` (see bullmq's job.js: `this.opts = opts`), so this
+      // plants the ip inside `job.opts.deduplication.id` exactly the way
+      // a future, careless call site could smuggle a raw ip into any
+      // string-typed job option — proving findJobLeaks's `job-opts`
+      // branch specifically, not just the coarser whole-job stringify.
+      const plantedJob = await harness.queue.add(CAPTURE_JOB_NAME, plantedPayload, {
+        jobId: IP_DETECTOR_PLANTED,
+        deduplication: { id: IP_DETECTOR_PLANTED },
+      });
 
       try {
         // Proves findJobLeaks (used by every scenario above) actually
-        // fires on an ip smuggled into job.id — the specific gap this
-        // task's own dispatch names that a unit test structurally cannot
-        // reach at all.
+        // fires on an ip smuggled into job.id AND separately into
+        // job.opts — the specific gap this task's own dispatch names that
+        // a unit test structurally cannot reach at all.
         const hits = findJobLeaks([plantedJob], IP_DETECTOR_PLANTED);
         expect(hits.length).toBeGreaterThan(0);
         expect(hits.some((hit) => hit.location === 'job-id')).toBe(true);
+        expect(hits.some((hit) => hit.location === 'job-opts')).toBe(true);
 
         // Proves the OTHER half: BullMQ really does bake a job's id
-        // verbatim into a real Redis key name (`bull:events:<jobId>`), so
-        // assertIpAbsentFromRedisKeys's `KEYS *` check is not a check
-        // that merely happens to always find nothing.
-        const keys = await harness.redis.keys('*');
-        const leakingKeys = keys.filter((key) => key.includes(IP_DETECTOR_PLANTED));
-        expect(leakingKeys.length).toBeGreaterThan(0);
+        // verbatim into a real Redis key name (`bull:events:<jobId>`) —
+        // via this file's own ACTUAL `assertIpAbsentFromRedisKeys`
+        // helper, not a duplicate of its query logic, so this proves that
+        // specific function would itself catch a future regression to
+        // its own logic, not merely that the underlying BullMQ mechanism
+        // works.
+        await expect(assertIpAbsentFromRedisKeys(harness, IP_DETECTOR_PLANTED)).rejects.toThrow();
       } finally {
         // Removed immediately: IP_DETECTOR_PLANTED is a planted violation,
         // not a real scenario ip, and must never linger to pollute the
         // final "every real scenario ip leaks nowhere" sweep below.
         await plantedJob.remove();
+      }
+    },
+    CONTAINER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'detector proof — an ip planted directly into a captured log line is caught by this file\'s own actual assertIpAbsentFromLogs helper',
+    () => {
+      const plantedLine = `[error] synthetic leak planted for detector proof ip=${IP_DETECTOR_PLANTED}`;
+      plantSyntheticLogLine(harness, plantedLine);
+
+      try {
+        // Proves assertIpAbsentFromLogs — the log channel every scenario
+        // above relies on via assertIpLeaksNowhere — actually fires when
+        // an ip is present in a captured log line. This is the log
+        // channel's own permanent regression guard, closing the gap a
+        // previous revision of this file left to a manual, by-hand
+        // exercise only (see this file's own header for the narrower,
+        // separate manual exercise this does NOT replace).
+        expect(() => assertIpAbsentFromLogs(harness, IP_DETECTOR_PLANTED)).toThrow();
+      } finally {
+        // Removed immediately: a synthetic line, not a real captured one,
+        // and must never linger to pollute the final sweep below (or any
+        // later log-count assertion in this file).
+        removeSyntheticLogLine(harness, plantedLine);
       }
     },
     CONTAINER_TEST_TIMEOUT_MS,
