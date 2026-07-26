@@ -131,11 +131,17 @@ jobs:
               .catch((error) => { console.error(error); process.exit(1); });
           "
 
-      # T2.3.4 review fixup (interim — T2.6.10 owns the FULL hot-path CI
-      # wiring, including its own dedicated job; this is only enough to
-      # keep THIS job green until that lands, not the final arrangement).
-      # packages/core/src/geoip/loader.test.ts's real-data tests (7 of its
-      # 13) need the actual DB-IP .mmdb pair under data/geoip/, which is
+      # T2.3.4 review fixup — landed permanently now, not interim. This
+      # comment used to flag T2.6.10 as still-pending and note that its
+      # "own dedicated job" hadn't landed yet; that job is the `hot-path`
+      # job below, and it does NOT take this step over. It runs ONLY the
+      # S2.6 redirect suite (apps/api/src/redirect/test/), whose harness
+      # (hot-path-harness.ts) stubs `lookupNetwork` outright and never
+      # opens a real .mmdb file (see that file's own header) — the S2.6
+      # suite has no dependency on data/geoip/ at all. What this step
+      # actually feeds is unrelated: packages/core/src/geoip/loader.test.ts's
+      # real-data tests (7 of its 13), which run in THIS job's own `core`
+      # project and need the actual DB-IP .mmdb pair under data/geoip/,
       # git-ignored (T0.1.1) and never populated by `pnpm install` alone.
       # Without this, those 7 tests fail here with the loader's own "run
       # `pnpm geo:fetch`" guidance instead of a real assertion, every run.
@@ -395,3 +401,126 @@ jobs:
       # up here as PENDING instead).
       - name: pnpm migrate:status
         run: pnpm migrate:status
+
+  # T2.6.10 — "the invariant suite is documentation with extra steps"
+  # unless CI actually re-runs it on every PR. This is the job the "T2.3.4
+  # review fixup" comment in `ci` above was pointing at: its own dedicated
+  # job, same reasoning as `visual-regression` and `migrate-from-empty`
+  # above — a separate, focused pass/fail line and its own timeout,
+  # decoupled from the main `ci` job's already-heavy lint/typecheck/test/
+  # build/depcruise budget (20 minutes).
+  #
+  # DIVERGENCE FROM THIS TASK'S OWN DISPATCH BRIEF, recorded rather than
+  # silently made: the brief describes this job as "using the Postgres and
+  # Redis service containers from T0.5.2" (the `ci` job's `services:`
+  # block above). It deliberately does NOT get one here. Every S2.6 spec
+  # under apps/api/src/redirect/test/ goes through ONE shared factory,
+  # `startHotPathHarness` (test/hot-path-harness.ts, T2.6.1), which boots
+  # its OWN Postgres + Redis testcontainers pair per test file
+  # (`startPgContainer`/`startRedisContainer`, `@posta/core/testing`)
+  # against the runner's own Docker daemon — already available on
+  # `ubuntu-latest`, no service container needed, exactly like the `ci`
+  # job's own `packages/core` project already does for its testcontainers
+  # suite (see that job's "Test (with coverage)" step comment). The
+  # harness sets `DATABASE_URL`/`REDIS_URL` on `process.env` itself,
+  # pointed at whichever ephemeral container IT just started
+  # (hot-path-harness.ts's own `createEnvSetter`) — it never reads either
+  # var pointed at a `services:` block the way the `ci` job's OTHER tests
+  # do. A `postgres`/`redis` services block here would sit entirely
+  # unused: harmless to add for literal faithfulness to the brief's own
+  # wording, but also pure dead YAML, so it is omitted rather than kept
+  # around as decoration nothing ever connects to.
+  #
+  # No GeoIP fetch step either: hot-path-harness.ts's own `lookupNetwork`
+  # is a fixed stub (`() => ({ asn: null, country: null })`), never
+  # `createNetworkLookup(openGeoDatabases(...))` — see that file's own
+  # header. None of the real `data/geoip/*.mmdb` files are ever read by
+  # any S2.6 test, so fetching them here would cost real time (the `ci`
+  # job's own cache-miss path shells out to download.db-ip.com) for zero
+  # coverage benefit.
+  #
+  # `--no-file-parallelism`: EVERY file in this suite boots its own
+  # Postgres+Redis container pair, and Vitest parallelizes test files
+  # across workers by default — running all of them (7 today, 9 once
+  # T2.6.3/T2.6.7 land) at once means that many concurrent container
+  # pairs contending for the runner's CPU. Verified locally, not merely
+  # theorized: `pnpm test apps/api/src/redirect/test/` (default
+  # parallelism) intermittently failed queue-down.test.ts under that
+  # contention — one run reported 51 enqueue-failure log lines where
+  # exactly 50 were expected (a timing-sensitive polling assertion
+  # slipping under load), while the SAME file passed cleanly every time
+  # run in isolation. `--no-file-parallelism` (Vitest's own flag,
+  # equivalent to `fileParallelism: false` in vitest.config.ts, already
+  # used there for the unrelated `containers` project's own concurrent-
+  # docker-build contention) serializes the 7-9 files instead, and the
+  # exact same suite then passed 44/44 repeatably. The wall-clock cost is
+  # real (~26s serial vs ~9s parallel-but-flaky, measured locally) but
+  # trivial against this job's own 15-minute budget — a slower, honestly
+  # green job beats a faster, intermittently red one for a suite whose
+  # whole purpose is to be trusted without anyone re-running it by hand.
+  #
+  # Scoped to apps/api/src/redirect/test/ specifically, not the whole
+  # apps/api/src/redirect/ directory: that wider directory also holds the
+  # older S2.1-S2.5 unit tests (host.test.ts, resolve-link.test.ts,
+  # ordering.test.ts, ...) and the T2.4.3 ordering suite that already
+  # asserts `res.end` strictly precedes `queue.add` at the unit level —
+  # all of it already exercised by the `ci` job's own "Test (with
+  # coverage)" step (its `default` project's include glob already matches
+  # `apps/**/*.test.ts`). Running it again here would be redundant, not a
+  # gap this job needs to close; `apps/api/src/redirect/test/` holds
+  # exactly the 7 (soon 9) S2.6 integration files built across
+  # T2.6.1-T2.6.9, each reusing the one real harness described above.
+  hot-path:
+    name: Hot path invariant suite (S2.6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Found by actually running this job's own steps against a fresh
+      # checkout, not assumed: every S2.6 spec imports `@posta/contracts`
+      # and `@posta/core` by PACKAGE NAME, and both resolve to real `dist/`
+      # output (package.json's own `main`/`exports`, e.g.
+      # `./dist/index.js`) — there is no source-file alias for either in
+      # vitest.config.ts. The `ci` job above never runs an explicit build
+      # step before ITS OWN "Test (with coverage)" step either, but gets
+      # away with it for a reason that does NOT carry over to a separate
+      # job on a separate runner: its own "Typecheck" step runs `tsc -b`
+      # (project-reference BUILD mode, not `--noEmit`) over exactly these
+      # packages, which — because packages/contracts/tsconfig.json and
+      # packages/core/tsconfig.json both set `composite: true` with no
+      # `noEmit` — emits real `dist/**` as a side effect ahead of that same
+      # job's Test step. THIS job has no typecheck step and no shared
+      # filesystem with the `ci` job's runner (separate jobs never share a
+      # runner or its disk), so without building explicitly here, the step
+      # below fails immediately with "Failed to resolve entry for package
+      # @posta/contracts" — reproduced locally against a genuinely fresh
+      # checkout before adding this step, confirmed fixed after. `--filter
+      # @posta/core` is enough on its own: turbo.json's `build` task
+      # declares `dependsOn: ["^build"]`, so turbo builds `@posta/contracts`
+      # first (core's own workspace dependency) without a second, separate
+      # filter — mirrors the `ci` job's own final Build step comment on how
+      # turbo resolves this same contracts -> core order.
+      - name: Build contracts + core
+        run: pnpm exec turbo run build --filter=@posta/core
+
+      # No DATABASE_URL/REDIS_URL env needed here, unlike the `ci` job
+      # above — see this job's own header for why: every S2.6 spec boots
+      # its own real Postgres+Redis testcontainers pair and points itself
+      # at it, over the runner's own Docker daemon.
+      - name: Hot path invariant suite (S2.6)
+        run: pnpm test apps/api/src/redirect/test/ --no-file-parallelism
