@@ -27,43 +27,43 @@
 Git repo on `main`, `.gitignore` covering node_modules, `.env*` (except `.env.example`), `.turbo`, `dist`, `.next`, `*.mmdb`, `.idea`, compose volumes.
 → **files** `.gitignore` · **verify** `git check-ignore -v .env` resolves to a rule · **after** —
 
-#### T0.1.2 · `chore: add pnpm workspace manifest`
+#### T0.1.2 · `chore: add pnpm workspace manifest` ✅ done (`52310fc`)
 Root `package.json` (private, `packageManager` pinned to an exact pnpm version) and `pnpm-workspace.yaml` listing `apps/*` and `packages/*`. No dependencies yet beyond turbo.
 → **files** `package.json`, `pnpm-workspace.yaml` · **verify** `pnpm install` exits 0 · **after** T0.1.1
 
-#### T0.1.3 · `chore: pin node version across the workspace`
+#### T0.1.3 · `chore: pin node version across the workspace` ✅ done (`07b3ce6`)
 `.nvmrc` plus an `engines.node` range in the root manifest. `api` and `worker` must run the same major — they share `@posta/core` and a mismatch surfaces as native-module breakage at deploy time, not locally.
 → **files** `.nvmrc`, `package.json` · **verify** `node -v` matches `.nvmrc`; `pnpm install` emits no engine warning · **after** T0.1.2
 
-#### T0.1.4 · `chore: add turborepo pipelines`
+#### T0.1.4 · `chore: add turborepo pipelines` ✅ done (`e05c1b8`)
 `turbo.json` with `build` (`dependsOn: ["^build"]`, outputs `dist/**` and `.next/**`), `test`, `lint`, `typecheck`, and `dev` (`persistent: true`, `cache: false`). Remote cache explicitly disabled.
 → **files** `turbo.json` · **verify** `pnpm turbo run build --dry-run=json` parses and lists every workspace package · **after** T0.1.2
 
-#### T0.1.5 · `chore: add shared tsconfig base`
+#### T0.1.5 · `chore: add shared tsconfig base` ✅ done (`73737d9`)
 `tsconfig.base.json` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `moduleResolution: bundler`, `isolatedModules`. Per-package tsconfigs extend it.
 → **files** `tsconfig.base.json` · **verify** `pnpm exec tsc -p tsconfig.base.json --showConfig` resolves · **after** T0.1.2
 
-#### T0.1.6 · `feat: scaffold contracts package`
+#### T0.1.6 · `feat: scaffold contracts package` ✅ done (`97c96da`)
 `@posta/contracts` with `package.json` (zod as the only runtime dep), tsconfig extending base, and `src/index.ts` exporting nothing yet. Builds to `dist/`.
 → **files** `packages/contracts/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/contracts build` exits 0 · **after** T0.1.5
 
-#### T0.1.7 · `feat: scaffold core package`
+#### T0.1.7 · `feat: scaffold core package` ✅ done (`4a08ac1`)
 `@posta/core`, depends on `@posta/contracts` via `workspace:*`. Empty `src/index.ts`. Client-bundle protection comes in T0.2.6 (a dependency-cruiser rule, not the `server-only` package — see that task).
 → **files** `packages/core/{package.json,tsconfig.json,src/index.ts}` · **verify** `pnpm --filter @posta/core build` exits 0 · **after** T0.1.6
 
-#### T0.1.8 · `feat: scaffold api app`
+#### T0.1.8 · `feat: scaffold api app` ✅ done (`cca67b9`)
 Minimal NestJS: `main.ts` bootstrapping `AppModule`, listening on `API_PORT`. No controllers yet — the redirect middleware in E2 mounts before the Nest router, so `main.ts` is deliberately the interesting file here.
 → **files** `apps/api/{package.json,tsconfig.json,nest-cli.json,src/main.ts,src/app.module.ts}` · **verify** `pnpm --filter @posta/api build` exits 0; the process starts and answers a health route · **after** T0.1.7
 
-#### T0.1.9 · `feat: scaffold worker app`
+#### T0.1.9 · `feat: scaffold worker app` ✅ done (`d945eb1`)
 Minimal NestJS, separate process, no HTTP server beyond a health endpoint.
 → **files** `apps/worker/{package.json,tsconfig.json,nest-cli.json,src/main.ts,src/app.module.ts}` · **verify** `pnpm --filter @posta/worker build` exits 0 · **after** T0.1.7
 
-#### T0.1.10 · `feat: scaffold web app`
+#### T0.1.10 · `feat: scaffold web app` ✅ done (`d1ef002`)
 Next.js App Router, TypeScript, no Tailwind yet (that lands in E6/S6.1). Depends on `@posta/contracts` only.
 → **files** `apps/web/{package.json,tsconfig.json,next.config.ts,src/app/layout.tsx,src/app/page.tsx}` · **verify** `pnpm --filter @posta/web build` exits 0 · **after** T0.1.6
 
-#### T0.1.11 · `chore: wire typescript project references`
+#### T0.1.11 · `chore: wire typescript project references` ✅ done (`1f10259`)
 Composite builds so `tsc` resolves workspace packages from source in dev and from `dist` in CI. Prevents the "works in dev, fails in build" split.
 → **files** all five `tsconfig.json` files, `package.json` · **verify** `pnpm typecheck` passes from a clean `pnpm install` with no prior build · **after** T0.1.10
 
@@ -90,23 +90,23 @@ Allowed: `web→contracts` · `api→core,contracts` · `worker→core,contracts
 
 **Tasks:**
 
-#### T0.2.1 · `chore: add eslint flat config`
+#### T0.2.1 · `chore: add eslint flat config` ✅ done (`baac947`)
 Base ESLint 9 flat config with `typescript-eslint`, applied across the workspace. No custom rules yet.
 → **files** `eslint.config.js`, `package.json` · **verify** `pnpm lint` exits 0 on the empty scaffolds · **after** T0.1.11
 
-#### T0.2.2 · `chore: add dependency-cruiser`
+#### T0.2.2 · `chore: add dependency-cruiser` ✅ done (`f85c893`)
 Install and generate a baseline `.dependency-cruiser.js`. No arrow rules yet — this task only proves the tool runs over the graph.
 → **files** `.dependency-cruiser.js`, `package.json` · **verify** `pnpm depcruise` exits 0 and reports 5 modules · **after** T0.2.1
 
-#### T0.2.3 · `feat: encode the allowed dependency arrows`
+#### T0.2.3 · `feat: encode the allowed dependency arrows` ✅ done (`c99f59a`)
 Forbidden rules for every disallowed edge: `web→core`, `web→api`, any app→app, `contracts→anything`. Each rule carries a `comment` explaining *why*, because the error message is the only thing the person who trips it will read.
 → **files** `.dependency-cruiser.js` · **verify** `pnpm depcruise` exits 0 on the current tree · **after** T0.2.2
 
-#### T0.2.4 · `test: assert web cannot import core`
+#### T0.2.4 · `test: assert web cannot import core` ✅ done (`2addb79`)
 A fixture file importing `@posta/core` from `apps/web`, plus a test asserting `depcruise` exits non-zero and names the rule. The fixture lives under a path excluded from the build.
 → **files** `tests/boundaries/web-imports-core.fixture.ts`, `tests/boundaries/arrows.test.ts` · **verify** `pnpm test tests/boundaries` passes (it asserts the *failure*) · **after** T0.2.3
 
-#### T0.2.5 · `test: assert contracts has only zod as a runtime dependency`
+#### T0.2.5 · `test: assert contracts has only zod as a runtime dependency` ✅ done (`cc8c64a`)
 Reads `packages/contracts/package.json` and asserts `dependencies` is exactly `["zod"]`. Guards invariant "contracts is isomorphic, zero server deps" against a casual `pnpm add`.
 → **files** `tests/boundaries/contracts-deps.test.ts` · **verify** `pnpm test tests/boundaries/contracts-deps.test.ts` · **after** T0.2.4
 
@@ -134,43 +134,43 @@ Guard `packages/core` against client-bundle imports with the `no-illegal-core-im
 All 24 variables with inline rationale where it matters. Committed; real `.env` git-ignored.
 → **files** `.env.example` · **verify** `git check-ignore .env` matches, `.env.example` is tracked · **after** —
 
-#### T0.3.2 · `feat: add shared env primitives to contracts`
+#### T0.3.2 · `feat: add shared env primitives to contracts` ✅ done (`76bbe3d`)
 Reusable Zod primitives: `zPort`, `zUrl`, `zNonEmpty`, `zBooleanish`, `zCsvList`. Isomorphic, no `process.env` access — schemas only, so `web` can use them too.
 → **files** `packages/contracts/src/env.ts` · **verify** `pnpm test packages/contracts/src/env.test.ts` · **after** T0.2.6
 
-#### T0.3.3 · `feat: derive every host from POSTA_LINK_DOMAIN`
+#### T0.3.3 · `feat: derive every host from POSTA_LINK_DOMAIN` ✅ done (`2a0e3fa`)
 `buildLinkUrl(handle, slug)`, `buildBioUrl(handle)`, `buildAppUrl(path)`, `buildApiUrl(path)`, `parseHandleFromHost(host)`. **This is the task that makes the grep test in T0.3.9 passable** — if hosts are assembled anywhere else, literals creep back in.
 → **files** `packages/contracts/src/domain.ts` · **verify** `pnpm test packages/contracts/src/domain.test.ts` — covers handle round-trip, reserved-handle rejection, and a non-`posta.lat` domain · **after** T0.3.2
 
-#### T0.3.4 · `feat: add reserved handle and path lists to contracts`
+#### T0.3.4 · `feat: add reserved handle and path lists to contracts` ✅ done (`ec4f0fe`)
 `RESERVED_HANDLES` and `RESERVED_PATHS` as frozen arrays, parsed from `POSTA_RESERVED_HANDLES`. Shared by the redirect hot path (S2.1) and slug validation (S5.3) — **one list, never a copy**, because a drift here lets a user claim a slug that then 404s.
 → **files** `packages/contracts/src/reserved.ts` · **verify** `pnpm test packages/contracts/src/reserved.test.ts` · **after** T0.3.3
 
-#### T0.3.5 · `feat: add api env schema`
+#### T0.3.5 · `feat: add api env schema` ✅ done (`26159f7`)
 Zod schema for the API's variables: DB, Redis, R2, DB-IP database paths, auth, domain, ports. The DB-IP keys are filesystem paths, not credentials — the lite databases are CC BY 4.0 and ship inside the image (S0.7), so there is no licence key to validate.
 → **files** `apps/api/src/env.ts` · **verify** `pnpm test apps/api/src/env.test.ts` asserts a missing key produces a named error · **after** T0.3.4
 
-#### T0.3.6 · `feat: add worker env schema`
+#### T0.3.6 · `feat: add worker env schema` ✅ done (`02c9c31`)
 Worker's subset plus `EVENT_BATCH_SIZE` and `EVENT_BATCH_INTERVAL_MS`. Also `DATABASE_URL_WORKER` — the worker connects as the **writer** role while the API connects as a reader that has no `SELECT` on raw `events` (T4.2.4). Two roles means two URLs, and the split only bites if both are actually wired.
 → **files** `apps/worker/src/env.ts` · **verify** `pnpm test apps/worker/src/env.test.ts` · **after** T0.3.4
 
-#### T0.3.7 · `feat: add web env schema`
+#### T0.3.7 · `feat: add web env schema` ✅ done (`4903351`)
 Web's subset. Asserts that no secret-looking key is exposed under `NEXT_PUBLIC_` — a test, not a code review habit. [security]
 → **files** `apps/web/src/env.ts` · **verify** `pnpm test apps/web/src/env.test.ts` · **after** T0.3.4
 
-#### T0.3.8 · `feat: fail fast on invalid env at startup`
+#### T0.3.8 · `feat: fail fast on invalid env at startup` ✅ done (`3c79f5b`)
 A loader invoked as the first statement of each entrypoint. On failure it prints every missing or invalid key at once (not just the first) and exits non-zero. Never prints the *value* of a failing secret. [security]
 → **files** `apps/{api,worker}/src/main.ts`, `packages/contracts/src/env.ts` · **verify** running `@posta/api` with `DATABASE_URL` unset exits non-zero and names it · **after** T0.3.7
 
-#### T0.3.9 · `test: forbid literal domains in source`
+#### T0.3.9 · `test: forbid literal domains in source` ✅ done (`fbb98b1`)
 Greps `apps/` and `packages/` for `posta.lat` and `lbt.works`, excluding `.env.example`, `docs/` and `*.md`. Fails the build on a hit.
 → **files** `tests/conventions/no-literal-domain.test.ts` · **verify** `pnpm test tests/conventions` — passes clean, fails when a literal is planted · **after** T0.3.3
 
-#### T0.3.10 · `test: assert secrets never reach logs`
+#### T0.3.10 · `test: assert secrets never reach logs` ✅ done (`aa40208`)
 Drives the logger with a populated env and asserts no secret value appears in output, including on a thrown-error path. [security]
 → **files** `tests/conventions/no-secret-logging.test.ts` · **verify** `pnpm test tests/conventions/no-secret-logging.test.ts` · **after** T0.3.8
 
-#### T0.3.11 · `docs: add root README with setup steps`
+#### T0.3.11 · `docs: add root README with setup steps` ✅ done (`05ed041`)
 Clone → `pnpm install` → copy `.env.example` → `pnpm dev`. Includes `pnpm geo:fetch` to pull the DB-IP lite databases, since without those files the datacenter classification rule cannot fire. No signup and no licence key — that step exists only because the `.mmdb` files are git-ignored, not because they are gated.
 → **files** `README.md` · **verify** a clean clone followed literally reaches a running stack · **after** T0.4.7
 
@@ -188,35 +188,35 @@ Clone → `pnpm install` → copy `.env.example` → `pnpm dev`. Includes `pnpm 
 
 **Tasks:**
 
-#### T0.4.1 · `chore: add postgres service to docker-compose`
+#### T0.4.1 · `chore: add postgres service to docker-compose` ✅ done (`39898eb`)
 Postgres 16, named volume, credentials from `.env`, `pg_isready` healthcheck.
 → **files** `docker-compose.yml` · **verify** `docker compose up -d postgres` reaches `healthy` · **after** T0.1.2
 
-#### T0.4.2 · `chore: add redis service with volatile-lru`
+#### T0.4.2 · `chore: add redis service with volatile-lru` ✅ done (`6024ef7`)
 Redis 7 with an explicit `maxmemory` and `maxmemory-policy volatile-lru`, set via a mounted `redis.conf` rather than a CLI flag so the value is reviewable in a diff. [INV-7]
 → **files** `docker-compose.yml`, `docker/redis.conf` · **verify** `docker compose exec redis redis-cli config get maxmemory-policy` returns `volatile-lru` · **after** T0.4.1
 
-#### T0.4.3 · `chore: add minio service`
+#### T0.4.3 · `chore: add minio service` ✅ done (`d723809`)
 MinIO with the S3 API on 9000 and console on 9001, credentials matching `.env`.
 → **files** `docker-compose.yml` · **verify** `docker compose up -d minio` reaches `healthy` · **after** T0.4.2
 
-#### T0.4.4 · `chore: auto-create minio buckets on boot`
+#### T0.4.4 · `chore: auto-create minio buckets on boot` ✅ done (`5b63dc1`)
 A one-shot `mc` init container creating `posta-events` and `posta-avatars` if absent, so a fresh clone needs no manual console step.
 → **files** `docker-compose.yml`, `docker/minio-init.sh` · **verify** `docker compose up -d` then `mc ls` shows both buckets · **after** T0.4.3
 
-#### T0.4.5 · `chore: add healthchecks and startup ordering`
+#### T0.4.5 · `chore: add healthchecks and startup ordering` ✅ done (`4bbaa08`)
 `depends_on` with `condition: service_healthy` across all three, so apps wait instead of crash-looping into a restart backoff that looks like a code bug.
 → **files** `docker-compose.yml` · **verify** `docker compose up -d` — no service restarts during startup · **after** T0.4.4
 
-#### T0.4.6 · `chore: add pnpm dev orchestration`
+#### T0.4.6 · `chore: add pnpm dev orchestration` ✅ done (`939230d`)
 `pnpm dev` brings up compose, waits for health, then runs all apps in watch mode via turbo.
 → **files** `package.json`, `turbo.json` · **verify** `pnpm dev` from clean reaches all three apps serving · **after** T0.4.5
 
-#### T0.4.7 · `chore: add pnpm dev:reset`
+#### T0.4.7 · `chore: add pnpm dev:reset` ✅ done (`9d92e9f`)
 Tears down volumes and re-seeds. The escape hatch when local data drifts, so nobody debugs a stale-schema ghost.
 → **files** `package.json`, `scripts/dev-reset.sh` · **verify** `pnpm dev:reset` leaves an empty, migrated database · **after** T0.4.6
 
-#### T0.4.8 · `test: assert redis eviction policy is volatile-lru`
+#### T0.4.8 · `test: assert redis eviction policy is volatile-lru` ✅ done (`88816e3`)
 Connects to the running Redis and asserts the policy. Runs in CI too, so a provider default of `allkeys-lru` cannot slip through unnoticed. [INV-7]
 → **files** `tests/infra/redis-policy.test.ts` · **verify** `pnpm test tests/infra/redis-policy.test.ts` · **after** T0.4.2
 
@@ -236,27 +236,27 @@ Connects to the running Redis and asserts the policy. Runs in CI too, so a provi
 
 **Tasks:**
 
-#### T0.5.1 · `ci: add github actions workflow`
+#### T0.5.1 · `ci: add github actions workflow` ✅ done (`481e0ed`)
 Install → lint → typecheck → build on PR and push to main, with pnpm store and turbo caching keyed on the lockfile.
 → **files** `.github/workflows/ci.yml` · **verify** the workflow goes green on a PR · **after** T0.2.6
 
-#### T0.5.2 · `ci: add postgres and redis service containers`
+#### T0.5.2 · `ci: add postgres and redis service containers` ✅ done (`b9658ca`)
 Service containers so integration tests run against real datastores rather than mocks — the hot-path and idempotency tests in E2/E3 are meaningless otherwise.
 → **files** `.github/workflows/ci.yml` · **verify** a trivial integration test connecting to both passes in CI · **after** T0.5.1
 
-#### T0.5.3 · `ci: run the test suite with coverage`
+#### T0.5.3 · `ci: run the test suite with coverage` ✅ done (`5fb2f56`)
 Wire `pnpm test` with coverage reporting into the workflow. No threshold yet — that lands next, once there is code to measure.
 → **files** `.github/workflows/ci.yml`, `vitest.config.ts` · **verify** CI uploads a coverage summary · **after** T0.5.2
 
-#### T0.5.4 · `ci: enforce 80% coverage floor`
+#### T0.5.4 · `ci: enforce 80% coverage floor` ✅ done (`3973070`)
 Fails the build below 80% lines and branches.
 → **files** `vitest.config.ts` · **verify** artificially dropping coverage fails CI · **after** T0.5.3
 
-#### T0.5.5 · `ci: run dependency-cruiser in the pipeline`
+#### T0.5.5 · `ci: run dependency-cruiser in the pipeline` ✅ done (`83670e9`)
 The arrow rules from S0.2 only protect the architecture if CI runs them.
 → **files** `.github/workflows/ci.yml` · **verify** a PR planting a `web→core` import fails CI · **after** T0.5.4
 
-#### T0.5.7 · `chore: type-check test files, not just source`
+#### T0.5.7 · `chore: type-check test files, not just source` ✅ done (`355c59d`)
 Test files (`*.test.ts`) are currently invisible to every checker in the repo: the
 composite `pnpm typecheck` excludes them (`packages/contracts/tsconfig.json` — Vitest's
 ambient globals clash with the package's `node10` resolution), `vitest run` transpiles
@@ -324,57 +324,57 @@ The design resolved three contradictions. The docs still contained the losing si
 
 **Tasks:**
 
-#### T0.7.1 · `chore: add a shared .dockerignore`
+#### T0.7.1 · `chore: add a shared .dockerignore` ✅ done (`a927ecf`)
 Root `.dockerignore` excluding `node_modules`, `.next`, `dist`, `.turbo`, `.env*`, `.git`, `docs`, `*.mmdb`. The build context is the repo root for all three images, so without this every `docker build` uploads the entire workspace and busts the cache on any file change at all.
 → **files** `.dockerignore` · **verify** `docker build -f /dev/null . 2>&1 | head -1` reports a context under 5MB · **after** T0.4.7
 
-#### T0.7.2 · `chore: pin container base images by digest`
+#### T0.7.2 · `chore: pin container base images by digest` ✅ done (`2d045c9`)
 `docker/base-images.env` holding `NODE_BASE` and `NODE_RUNTIME_BASE` as `node:<major from .nvmrc>-alpine@sha256:…`, consumed by every Dockerfile via `ARG`. Plus `scripts/refresh-base-digests.sh` to re-resolve them deliberately. A floating tag means two builds of the same commit can differ, which turns "works on my machine" into a Kubernetes rollback.
 → **files** `docker/base-images.env`, `scripts/refresh-base-digests.sh` · **verify** `grep -c '@sha256:' docker/base-images.env` returns 2; `bash scripts/refresh-base-digests.sh --check` exits 0 · **after** T0.7.1
 
-#### T0.7.3 · `chore: produce a pruned per-app build context with turbo prune`
+#### T0.7.3 · `chore: produce a pruned per-app build context with turbo prune` ✅ done (`c83f718`)
 `scripts/docker-prune.sh <scope>` wrapping `pnpm turbo prune --scope=@posta/<app> --docker`, emitting `out/json` (manifests + pruned `pnpm-lock.yaml`) and `out/full` (sources). This is the hard part of Dockerising a pnpm monorepo: a naive `COPY . .` ships every workspace package, so touching a `web` component reinstalls the `api`'s dependencies. The pruned lockfile is what makes the deps layer stable.
 → **files** `scripts/docker-prune.sh`, `package.json` · **verify** `bash scripts/docker-prune.sh api` writes `out/json/apps/api/package.json` and `out/json/pnpm-lock.yaml`, and `out/json/apps/web` does **not** exist · **after** T0.7.2
 
-#### T0.7.4 · `chore: multi-stage Dockerfile for the api`
+#### T0.7.4 · `chore: multi-stage Dockerfile for the api` ✅ done (`8547144`)
 Four stages: `pruner` (runs T0.7.3's prune), `deps` (`pnpm install --frozen-lockfile` over `out/json` only), `builder` (`pnpm --filter @posta/api build`), `runner` (prod deps + `dist/` on the runtime base). Nothing from `builder` but `dist/` and `node_modules` crosses into `runner`.
 → **files** `apps/api/Dockerfile` · **verify** `docker build -f apps/api/Dockerfile .` succeeds, and a second build after touching `apps/web/src/app/page.tsx` reuses the cached `deps` layer · **after** T0.7.3
 
-#### T0.7.5 · `chore: multi-stage Dockerfile for the worker`
+#### T0.7.5 · `chore: multi-stage Dockerfile for the worker` ✅ done (`c9296fd`)
 Same four-stage shape as the api, scoped to `@posta/worker`. No HTTP port exposed beyond the health endpoint (E3) — the worker is a BullMQ consumer, and exposing a service port it does not serve invites a Kubernetes readiness probe pointed at nothing.
 → **files** `apps/worker/Dockerfile` · **verify** `docker build -f apps/worker/Dockerfile .` succeeds and `docker run --rm <img> node -e "process.exit(0)"` exits 0 · **after** T0.7.4
 
-#### T0.7.6 · `chore: multi-stage Dockerfile for the web app`
+#### T0.7.6 · `chore: multi-stage Dockerfile for the web app` ✅ done (`8584053`)
 Differs from the other two: set `output: 'standalone'` in `next.config.ts`, then copy only `.next/standalone`, `.next/static` and `public/` into the runtime stage. Without standalone the image carries the full workspace `node_modules` and lands several hundred MB heavier.
 → **files** `apps/web/Dockerfile`, `apps/web/next.config.ts` · **verify** `docker build -f apps/web/Dockerfile .` succeeds and `docker run --rm -p 3000:3000 <img>` serves `/` · **after** T0.7.5
 
-#### T0.7.7 · `chore: run every runtime stage as a non-root user` [security]
+#### T0.7.7 · `chore: run every runtime stage as a non-root user` [security] ✅ done (`c4c245f`)
 Add a `posta` user (uid 10001) in each runtime stage, `chown` the app directory, and `USER posta` before `CMD`. Kubernetes can enforce this with `runAsNonRoot`, but an image that only works as root fails that admission check at deploy time rather than here.
 → **files** `apps/{api,worker,web}/Dockerfile` · **verify** `docker run --rm <img> id -u` returns `10001` for all three · **after** T0.7.6
 
-#### T0.7.8 · `feat: shut down cleanly on SIGTERM in api and worker`
+#### T0.7.8 · `feat: shut down cleanly on SIGTERM in api and worker` ✅ done (`f294a61`)
 `app.enableShutdownHooks()` plus an explicit `SIGTERM` handler that stops accepting work, drains in-flight requests and closes the Redis and Postgres pools. Node as PID 1 does **not** get default signal handling, so without this every rolling deploy kills in-flight redirects at the 30s grace timeout.
 → **files** `apps/api/src/main.ts`, `apps/worker/src/main.ts` · **verify** `docker stop` on a running container exits within 5s, not at the 10s SIGKILL fallback · **after** T0.7.7
 
-#### T0.7.9 · `chore: add the DB-IP database download script`
+#### T0.7.9 · `chore: add the DB-IP database download script` ✅ done (`2c3c21f`)
 `scripts/fetch-geoip.sh` pulling `dbip-asn-lite` (~6MB) and `dbip-country-lite` from DB-IP's monthly free release into `data/geoip/`, exposed as `pnpm geo:fetch`. Both files are needed — the ASN database carries no country data. `docs/ops/geoip.md` records the monthly refresh cadence and the CC BY 4.0 attribution string the bio-page footer must carry (E8).
 → **files** `scripts/fetch-geoip.sh`, `package.json`, `docs/ops/geoip.md` · **verify** `pnpm geo:fetch` writes both `.mmdb` files and a reader opens each without error · **after** T0.7.8
 
-#### T0.7.10 · `chore: bake the DB-IP databases into the api image only` [INV-6]
+#### T0.7.10 · `chore: bake the DB-IP databases into the api image only` [INV-6] ✅ done (`d48a19b`)
 Run `fetch-geoip.sh` in the builder stage and `COPY` both `.mmdb` files into the **api** runtime stage at the paths the env schema expects (T0.3.5). The licence permits redistribution, so this replaces what would otherwise be an init container — the lookup reads a local file and the pod has no boot-time network dependency.
 
 **The worker image deliberately does not get them.** Geo lookup happens at capture, in the API, because that is the only instant the IP exists — invariant 6 drops it there and never queues it. A worker holding geo databases could only use them if someone first queued an IP, so their absence is a structural reminder that the worker has no business doing geolocation. This is also why T0.3.5 carries `GEOIP_DB_DIR` and T0.3.6 does not.
 → **files** `apps/api/Dockerfile` · **verify** `docker run --rm <api-img> ls /app/data/geoip` lists both files, and `docker run --rm <worker-img> ls /app/data/geoip` fails with no such directory · **after** T0.7.9
 
-#### T0.7.11 · `chore: build app images from docker-compose`
+#### T0.7.11 · `chore: build app images from docker-compose` ✅ done (`b1152bf`)
 Give `api`, `worker` and `web` `build:` blocks pointing at their Dockerfiles, alongside the existing Postgres/Redis/MinIO services. Tradeoff, on purpose: `pnpm dev` keeps running watch mode on the host because container rebuilds are too slow for an edit loop — compose-built images are the artifact CI and production use, and the thing you reach for when a bug smells environmental.
 → **files** `docker-compose.yml`, `package.json` · **verify** `docker compose up --build -d` reaches `healthy` on all six services · **after** T0.7.10
 
-#### T0.7.12 · `test: smoke-test that each built image starts and answers health`
+#### T0.7.12 · `test: smoke-test that each built image starts and answers health` ✅ done (`7d9053c`)
 Starts each image against the compose datastores and polls its health endpoint (defined in E2/E3) until ready or a 30s timeout. A green `docker build` proves the layers assembled, nothing more — a missing runtime dependency or a bad `CMD` only surfaces here.
 → **files** `tests/containers/image-smoke.test.ts` · **verify** `pnpm test tests/containers/image-smoke.test.ts` passes, and fails when `CMD` is pointed at a nonexistent entrypoint · **after** T0.7.11
 
-#### T0.7.13 · `test: enforce a per-image size budget`
+#### T0.7.13 · `test: enforce a per-image size budget` ✅ done (`35b94bb`)
 Reads `docker image inspect --format '{{.Size}}'` and fails above threshold: api 300MB, worker 300MB, web 250MB. Bloat is invisible until a rollout is slow — a stray `devDependency` in the runtime stage costs nothing locally and costs pull time on every node.
 → **files** `tests/containers/image-size.test.ts` · **verify** `pnpm test tests/containers/image-size.test.ts` passes; lowering a threshold by 1MB fails it · **after** T0.7.12
 
