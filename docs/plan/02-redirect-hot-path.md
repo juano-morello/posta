@@ -295,7 +295,7 @@ Extends the testcontainers helper from T1.1.2 with a Redis 7 container using the
 The single highest-value test in the epic. Points the BullMQ producer at a closed port after boot (and separately stops the Redis container outright), then asserts 50 requests all return 307 with the correct `Location`, that latency does not degrade past the budget, that one enqueue-failure log is emitted per request with no IP, and that `process.on('unhandledRejection')` fired zero times — a `void`ed promise with a missing `.catch()` is exactly how this invariant dies quietly.
 → **files** `apps/api/src/redirect/test/queue-down.test.ts` · **verify** `pnpm test queue-down.test.ts` asserts 50/50 responses are 307 with the right destination, zero 5xx, zero unhandled rejections, and that the process is still serving after the outage ends · **after** T2.6.1
 
-#### T2.6.3 · `test: no ip in the queued payload or logs, end to end` [INV-6][security]
+#### T2.6.3 · `test: no ip in the queued payload or logs, end to end` [INV-6][security] ✅ done (`199b1fa`)
 Complements the unit-level check in T2.3.8 by reading the **actual job data** off the queue: sends requests with `CF-Connecting-IP` and `X-Forwarded-For` set to distinctive values, drains the queue, and asserts the octets appear in no job, no log line and no queue key name — including runs where the geoip lookup and the enqueue both throw. Only the integration form can catch an IP smuggled in via a BullMQ job option or job id.
 → **files** `apps/api/src/redirect/test/no-ip.test.ts` · **verify** `pnpm test no-ip.test.ts` asserts the IP strings are absent from `JSON.stringify(job)` for every job, from captured logs, and from `KEYS *` output · **after** T2.6.2
 
