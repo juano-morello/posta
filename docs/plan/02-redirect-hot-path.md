@@ -323,7 +323,7 @@ One table, one job: assert the hot path answers 4xx and never 5xx, never reflect
 Warms the cache, then issues ≥1000 sequential requests against the harness, records per-request wall time, and **fails** when p95 ≥ `HOT_PATH_P95_BUDGET_MS` (15). Prints p50/p95/p99 and the miss/hit split so a regression report is readable. The measurement is loopback service time — it excludes the LATAM network leg the spec's 15 ms budget also covers, which means passing here is necessary and not sufficient; the deploy-time check belongs to E10.
 → **files** `apps/api/src/redirect/test/latency.test.ts` · **verify** `pnpm test latency.test.ts` fails when the budget env is set to 0.1 and passes at 15 on the current tree, printing all three percentiles · **after** T2.6.6
 
-#### T2.6.10 · `ci: run the hot-path invariant suite on every pr`
+#### T2.6.10 · `ci: run the hot-path invariant suite on every pr` ✅ done (`b141bda`)
 Adds a `hot-path` job to the workflow using the Postgres and Redis service containers from T0.5.2, running the S2.6 specs and failing the build on any of them. Without this the suite is documentation with extra steps — the invariants it guards are exactly the ones nobody re-runs by hand.
 → **files** `.github/workflows/ci.yml` · **verify** the job is green on a PR against the current tree, and goes red on a branch that moves the `queue.add` call above `res.redirect` · **after** T2.6.9, T0.5.2
 

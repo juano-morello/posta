@@ -106,3 +106,14 @@ Commit: 2ad7cae
 **Deviation from plan:** deliberately does NOT reuse hot-path-harness.ts (unlike every other S2.6 test) — this task needs direct access to the raw Express Application object and the exact function reference createRedirectMiddleware returns, neither exposed by HotPathHarness's return shape, and extending that shared file was explicitly ruled out to avoid colliding with T2.6.3's own concurrent, sanctioned harness edit in this same worktree. Built a minimal, self-contained Express+Nest composition instead, reusing the real production factories (createRedirectMiddleware, makeRequestTargetParser, makeNotFoundRenderer, counters) wired to local stubs — no real Postgres/Redis needed since this task's own acceptance criterion is about routing/ordering, not data resolution. Also verified empirically (not assumed) that express@5.2.1's router internals differ from Express 4 (`app.router.stack`, not `app._router`) before writing assertions against it.
 **Handed back to:** n/a — passed first time.
 Commit: 4daeb1b
+
+---
+
+## T2.6.10 · `b141bda` · 2026-07-26T17:02:39-03:00
+
+**Outcome:** done · verify passed. Re-verified myself via an isolated `git worktree add /tmp/verify-t2610 HEAD` (excluding T2.6.3's uncommitted in-progress no-ip.test.ts): `actionlint .github/workflows/ci.yml` clean; `pnpm exec turbo run build --filter=@posta/core` then `pnpm test apps/api/src/redirect/test/ --no-file-parallelism` → 8 files, 46 tests, all passed — matches implementer's own reported numbers exactly. Cleaned up the temp worktree after.
+**Findings surviving triage:** none.
+**Proof of failure (observed by implementer, consistent with T2.6.2's own earlier finding):** moved the enqueue/analytics block ahead of sendLinkRedirect with no local try/catch (falls through to the top-level safety-net catch, which only logs, never responds) → the exact job command genuinely failed with a 120s timeout on queue-down.test.ts. Reverted middleware.ts exactly (git diff confirmed empty), re-ran green.
+**Deviation from plan, disclosed in-file:** omitted the Postgres/Redis `services:` block the brief's wording literally asks for — the S2.6 harness boots its own testcontainers pair per file and never reads a services-block-backed DATABASE_URL/REDIS_URL, so the block would be inert YAML. Also found and fixed two real gaps by actually running the job (not just reading): (1) a missing `turbo run build --filter=@posta/core` step — a separate job has no shared disk with the main `ci` job's own typecheck-emits-dist side effect, so the suite would fail to resolve `@posta/contracts`/`@posta/core`; (2) `--no-file-parallelism` — running all S2.6 files concurrently caused an observed flake in queue-down.test.ts (51 vs 50 log lines) under container-boot contention; serialized, the same suite passed repeatably.
+**Handed back to:** n/a — passed first time.
+Commit: b141bda
