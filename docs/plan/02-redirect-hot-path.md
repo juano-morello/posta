@@ -291,7 +291,7 @@ Integration tests against real Postgres + Redis (testcontainers). Mocks would le
 Extends the testcontainers helper from T1.1.2 with a Redis 7 container using the same `docker/redis.conf` as compose (so `volatile-lru` holds in tests too, per T0.4.2), boots the real Express+Nest app on an ephemeral port with env pointed at both, seeds one tenant + handle + link, and returns `{ baseUrl, db, redis, queue, logs, stop }`. Every test in S2.6 reuses this one harness rather than each booting its own stack.
 → **files** `apps/api/src/redirect/test/hot-path-harness.ts` · `apps/api/src/redirect/test/hot-path-harness.test.ts` · **verify** `pnpm test hot-path-harness.test.ts` performs one request against the seeded link, asserts a 307 and exactly one job on the `events` queue, and that `stop()` releases both containers and the port · **after** T2.5.3, T1.1.2
 
-#### T2.6.2 · `test: redirect succeeds while the queue is down` [INV-1]
+#### T2.6.2 · `test: redirect succeeds while the queue is down` [INV-1] ✅ done (`2ad7cae`)
 The single highest-value test in the epic. Points the BullMQ producer at a closed port after boot (and separately stops the Redis container outright), then asserts 50 requests all return 307 with the correct `Location`, that latency does not degrade past the budget, that one enqueue-failure log is emitted per request with no IP, and that `process.on('unhandledRejection')` fired zero times — a `void`ed promise with a missing `.catch()` is exactly how this invariant dies quietly.
 → **files** `apps/api/src/redirect/test/queue-down.test.ts` · **verify** `pnpm test queue-down.test.ts` asserts 50/50 responses are 307 with the right destination, zero 5xx, zero unhandled rejections, and that the process is still serving after the outage ends · **after** T2.6.1
 
@@ -299,27 +299,27 @@ The single highest-value test in the epic. Points the BullMQ producer at a close
 Complements the unit-level check in T2.3.8 by reading the **actual job data** off the queue: sends requests with `CF-Connecting-IP` and `X-Forwarded-For` set to distinctive values, drains the queue, and asserts the octets appear in no job, no log line and no queue key name — including runs where the geoip lookup and the enqueue both throw. Only the integration form can catch an IP smuggled in via a BullMQ job option or job id.
 → **files** `apps/api/src/redirect/test/no-ip.test.ts` · **verify** `pnpm test no-ip.test.ts` asserts the IP strings are absent from `JSON.stringify(job)` for every job, from captured logs, and from `KEYS *` output · **after** T2.6.2
 
-#### T2.6.4 · `test: 307 never 301, and one stable event_id per request` [INV-3][INV-8]
+#### T2.6.4 · `test: 307 never 301, and one stable event_id per request` [INV-3][INV-8] ✅ done (`53bfd7b`)
 Asserts the status is exactly 307 on a cache hit, on a cache miss, on a `HEAD` request and on a request carrying a prefetch header — every path that could plausibly acquire its own response branch. Then asserts one request produces exactly one job whose `event_id` is a 26-char ULID, and that the id in the job byte-equals the one the middleware logged, proving it is assigned once at capture and never regenerated downstream.
 → **files** `apps/api/src/redirect/test/status-and-event-id.test.ts` · **verify** `pnpm test status-and-event-id.test.ts` asserts `=== 307` in all four cases and that 100 requests yield 100 jobs with 100 distinct 26-char ULIDs · **after** T2.6.1
 
-#### T2.6.5 · `test: reserved handles and paths never reach slug lookup`
+#### T2.6.5 · `test: reserved handles and paths never reach slug lookup` ✅ done (`bb5aa97`)
 Spies on the Redis client and the pg pool, then issues requests for all 11 reserved handles and for `/favicon.ico`, `/robots.txt` and `/.well-known/acme-challenge/x`. Asserts zero `GET link:*` and zero `SELECT ... FROM links` for every one — the acceptance criterion is about *not doing work*, so asserting the response alone would pass even if the lookup ran first and the answer was discarded.
 → **files** `apps/api/src/redirect/test/reserved.test.ts` · **verify** `pnpm test reserved.test.ts` asserts 14 requests produce zero link lookups and zero Postgres queries, all returning 404 · **after** T2.6.1
 
-#### T2.6.6 · `test: cache miss backfills and the second request is a hit`
+#### T2.6.6 · `test: cache miss backfills and the second request is a hit` ✅ done (`1549d96`)
 Flushes Redis, issues one request (asserting exactly one Postgres query and a `SETEX` with a TTL near 3600), then issues a second (asserting zero Postgres queries and the same destination). Also asserts the negative-cache path: an unknown slug requested 50 times produces one Postgres query and a tombstone with TTL ≤ 60.
 → **files** `apps/api/src/redirect/test/cache-backfill.test.ts` · **verify** `pnpm test cache-backfill.test.ts` asserts the query counts, the two TTL ranges, and that both requests return identical `Location` headers · **after** T2.6.1
 
-#### T2.6.7 · `test: the middleware is registered before the nest router` [INV-2]
+#### T2.6.7 · `test: the middleware is registered before the nest router` [INV-2] ✅ done (`4daeb1b`)
 Walks the Express instance's router stack and asserts the redirect layer's index is lower than Nest's router layer, then proves it behaviourally: a Nest controller registered at `/:slug` is never reached on a handle host. Also asserts `createRedirectMiddleware` is invoked exactly once per process, which is what "zero per-request instantiation" actually means in a form CI can check.
 → **files** `apps/api/src/redirect/test/middleware-order.test.ts` · **verify** `pnpm test middleware-order.test.ts` asserts the stack index ordering, that the colliding Nest route returns its body on `api.<domain>` but never on a handle host, and that the factory call count is 1 after 200 requests · **after** T2.6.1
 
-#### T2.6.8 · `test: hostile input suite for the hot path`
+#### T2.6.8 · `test: hostile input suite for the hot path` ✅ done (`93f6fe6`)
 One table, one job: assert the hot path answers 4xx and never 5xx, never reflects unescaped input, and never throws. Cases: XSS payload as slug, `../../etc/passwd`, `%2e%2e%2f` encoded traversal, a 4 KB slug, a null byte, a missing `Host` header, two `Host` headers, `Host` with a port, a punycode handle, an empty path, and a slug of only slashes.
 → **files** `apps/api/src/redirect/test/hostile-input.test.ts` · **verify** `pnpm test hostile-input.test.ts` asserts every case returns 400 or 404, zero 5xx, zero unhandled rejections, and that no response body contains the raw payload unescaped · **after** T2.6.1, T2.5.4
 
-#### T2.6.9 · `perf: assert p95 under 15ms on a cache hit`
+#### T2.6.9 · `perf: assert p95 under 15ms on a cache hit` ✅ done (`b51808c`)
 Warms the cache, then issues ≥1000 sequential requests against the harness, records per-request wall time, and **fails** when p95 ≥ `HOT_PATH_P95_BUDGET_MS` (15). Prints p50/p95/p99 and the miss/hit split so a regression report is readable. The measurement is loopback service time — it excludes the LATAM network leg the spec's 15 ms budget also covers, which means passing here is necessary and not sufficient; the deploy-time check belongs to E10.
 → **files** `apps/api/src/redirect/test/latency.test.ts` · **verify** `pnpm test latency.test.ts` fails when the budget env is set to 0.1 and passes at 15 on the current tree, printing all three percentiles · **after** T2.6.6
 
