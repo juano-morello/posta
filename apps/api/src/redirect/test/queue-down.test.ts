@@ -202,6 +202,29 @@ describe('redirect succeeds while the queue is down (T2.6.2) [INV-1]', () => {
     // round trip, or the first-of-day salt fetch, slow".
     const warmup = await requestSeededLink(harness.baseUrl);
     expect(warmup.status).toBe(307);
+
+    // [fix — genuine race, not container contention] `requestSeededLink`'s
+    // promise resolves once the CLIENT has the full HTTP response, but
+    // middleware.ts's own handleLinkTarget flushes that response (via
+    // sendLinkRedirect) BEFORE it `await`s getDailySalt() and calls
+    // enqueueCapture() — see this file's own header and middleware.ts's
+    // "the one await in this whole function that runs AFTER the response
+    // has already been flushed". getDailySalt's OWN first-ever call does a
+    // real SET+GET round trip against the Redis container (salt.ts), so
+    // the warmup's server-side capture pipeline can still be in flight
+    // (specifically, sitting on that round trip) after the line above
+    // returns. Without waiting for it here, that lingering continuation
+    // can still call enqueueCapture() AFTER either `it` below disconnects
+    // the queue/Redis — producing an (N+1)-th "Enqueue failed" log line
+    // attributed to a request neither `it` ever issued (observed directly:
+    // `expected 51 to be 50`, the assertion always short-circuiting within
+    // ~100ms, well inside 5s deadline, meaning 51 lines already existed
+    // the FIRST time this poll looked). Every fault-recovery check in this
+    // same file (`waitForMoreWaitingJobs`) already waits for the real side
+    // effect rather than trusting the client-side response alone; this
+    // applies the identical discipline to the warmup, closing the one gap.
+    const warmedUp = await waitForMoreWaitingJobs(harness, 0);
+    expect(warmedUp).toBeGreaterThan(0);
   }, CONTAINER_TEST_TIMEOUT_MS);
 
   afterAll(async () => {
