@@ -459,17 +459,45 @@ jobs:
   # green job beats a faster, intermittently red one for a suite whose
   # whole purpose is to be trusted without anyone re-running it by hand.
   #
-  # Scoped to apps/api/src/redirect/test/ specifically, not the whole
-  # apps/api/src/redirect/ directory: that wider directory also holds the
-  # older S2.1-S2.5 unit tests (host.test.ts, resolve-link.test.ts,
-  # ordering.test.ts, ...) and the T2.4.3 ordering suite that already
-  # asserts `res.end` strictly precedes `queue.add` at the unit level —
-  # all of it already exercised by the `ci` job's own "Test (with
-  # coverage)" step (its `default` project's include glob already matches
-  # `apps/**/*.test.ts`). Running it again here would be redundant, not a
-  # gap this job needs to close; `apps/api/src/redirect/test/` holds
-  # exactly the 7 (soon 9) S2.6 integration files built across
-  # T2.6.1-T2.6.9, each reusing the one real harness described above.
+  # Scoped to apps/api/src/redirect/test/ (the 7-9 S2.6 integration files,
+  # T2.6.1-T2.6.9, each reusing the one real harness described above) PLUS
+  # exactly one named file living outside it,
+  # apps/api/src/redirect/ordering.test.ts — not the whole
+  # apps/api/src/redirect/ directory. The rest of that wider directory
+  # (host.test.ts, resolve-link.test.ts, capture.test.ts, ...) is the
+  # older S2.1-S2.5 unit suite, already exercised by the `ci` job's own
+  # "Test (with coverage)" step (its `default` project's include glob
+  # already matches `apps/**/*.test.ts`) — running it again here would be
+  # redundant, not a gap this job needs to close. Measured both ways
+  # locally from the same clean tree: the whole directory is 28 files /
+  # 350 tests, ~54s; this job's actual scope below is 10 files / 60
+  # tests, ~32s — widening to the whole directory would cost ~75% more
+  # wall-clock time here for zero net new coverage (every one of those
+  # extra 18 files already runs, and already gates, in the `ci` job).
+  #
+  # [T2.6.10, second pass] `ordering.test.ts` IS pulled in by name,
+  # deliberately, even though the paragraph above just argued against its
+  # siblings. This job's own plan verify line
+  # (docs/plan/02-redirect-hot-path.md) promises it "goes red on a branch
+  # that moves the `queue.add` call above `res.redirect`" — and the FIRST
+  # pass of this task shipped that promise unverified. Checked
+  # empirically: the literal single-change regression (move the
+  # analytics/enqueue block — try/catch and fire-and-forget `.catch()`
+  # both left intact — above `sendLinkRedirect`, nothing else touched)
+  # left this job's test/-only scope GREEN, 9/9 files, 52/52 tests. The
+  # ONLY spec anywhere in this repo that actually catches that exact
+  # reorder is ordering.test.ts's own "the res.end timestamp strictly
+  # precedes the first queue.add call" assertion (T2.4.3) — and that file
+  # sat one level above this job's old scope, in
+  # apps/api/src/redirect/ directly, so this job never ran it and the
+  # regression sailed through. Naming it here closes that gap the
+  # cheapest way available: one explicit file, not a 75%-slower directory
+  # widen that would re-run 18 files this job has no business owning. See
+  # docs/plan/IMPLEMENTATION-NOTES.md's T2.6.10 entry for the full
+  # before/after proof (the RED assertion text, and the confirmed
+  # byte-identical revert of middleware.ts after). Do NOT "tidy" this back
+  # down to a bare `apps/api/src/redirect/test/` — that silently reopens
+  # the exact hole this comment exists to keep closed.
   hot-path:
     name: Hot path invariant suite (S2.6)
     runs-on: ubuntu-latest
@@ -521,6 +549,11 @@ jobs:
       # No DATABASE_URL/REDIS_URL env needed here, unlike the `ci` job
       # above — see this job's own header for why: every S2.6 spec boots
       # its own real Postgres+Redis testcontainers pair and points itself
-      # at it, over the runner's own Docker daemon.
+      # at it, over the runner's own Docker daemon. `ordering.test.ts`
+      # (added second pass, see this job's own header comment) needs
+      # neither — it drives a real Express+http server directly, no
+      # container of its own, so appending it here adds no new
+      # infrastructure requirement, only ~2s of wall-clock (32s vs 30s
+      # measured locally, test/ alone vs test/ + this file).
       - name: Hot path invariant suite (S2.6)
-        run: pnpm test apps/api/src/redirect/test/ --no-file-parallelism
+        run: pnpm test apps/api/src/redirect/test/ apps/api/src/redirect/ordering.test.ts --no-file-parallelism
