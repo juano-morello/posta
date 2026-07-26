@@ -287,7 +287,7 @@ Integration tests against real Postgres + Redis (testcontainers). Mocks would le
 
 **Tasks:**
 
-#### T2.6.1 · `test: hot-path integration harness with postgres and redis`
+#### T2.6.1 · `test: hot-path integration harness with postgres and redis` ✅ done (`8e01215`)
 Extends the testcontainers helper from T1.1.2 with a Redis 7 container using the same `docker/redis.conf` as compose (so `volatile-lru` holds in tests too, per T0.4.2), boots the real Express+Nest app on an ephemeral port with env pointed at both, seeds one tenant + handle + link, and returns `{ baseUrl, db, redis, queue, logs, stop }`. Every test in S2.6 reuses this one harness rather than each booting its own stack.
 → **files** `apps/api/src/redirect/test/hot-path-harness.ts` · `apps/api/src/redirect/test/hot-path-harness.test.ts` · **verify** `pnpm test hot-path-harness.test.ts` performs one request against the seeded link, asserts a 307 and exactly one job on the `events` queue, and that `stop()` releases both containers and the port · **after** T2.5.3, T1.1.2
 
