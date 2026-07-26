@@ -224,17 +224,27 @@ Validation on write (T1.1.11) is not enough: the value reaching `res.redirect` m
 
 ---
 
-## S2.5 — 404 (the one HTML the API renders)
+## S2.5 — 404 (the one HTML the API renders) ✅ done 2026-07-26
 
 **As a** visitor **I want** a branded error **so that** a dead link still feels like the product.
 
 **Acceptance:**
-- [ ] Terminal shell: `~/posta $ cd /<slug>` → `error: no existe ese link`, blinking lime cursor
-- [ ] Dark island styling in all cases — it is never themed (DESIGN.md §1)
-- [ ] Static template string, inlined CSS, no framework, no build step, no runtime deps
-- [ ] Status 404, `Cache-Control: no-store`
-- [ ] Quiet link back to Posta
-- [ ] The reflected `<slug>` is **HTML-escaped** — it is attacker-controlled input
+- [x] Terminal shell: `~/posta $ cd /<slug>` → `error: no existe ese link`, blinking lime cursor
+- [x] Dark island styling in all cases — it is never themed (DESIGN.md §1)
+- [x] Static template string, inlined CSS, no framework, no build step, no runtime deps
+- [x] Status 404, `Cache-Control: no-store`
+- [x] Quiet link back to Posta
+- [x] The reflected `<slug>` is **HTML-escaped** — it is attacker-controlled input
+
+> **Hardening added after the story's own review fan-out (2026-07-26), beyond the four tasks below.**
+>
+> `sendNotFound` (middleware.ts) — the single chokepoint all nine terminal 404 call sites pass through — also sets `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'` and `X-Content-Type-Options: nosniff` (`c23f798`, `09f589f`). Neither header had any other source in `apps/api`: there is no helmet and no blanket header middleware.
+>
+> `frame-ancestors` is listed explicitly because it is **not** a fetch directive under CSP3 and does **not** fall back to `default-src` — without it, `default-src 'none'` left the page framable cross-origin. `X-Frame-Options: DENY` was considered and declined (redundant on every non-EOL browser since CSP2; the page has one link, no forms, no authenticated action); the reasoning is recorded at the constant so it is not silently re-litigated.
+>
+> Both headers are deliberately **absent from the 307 path** — no body to constrain, no content type to sniff, so they would be pure per-click overhead on the one path that runs on every click [INV-2]. `not-found-routing.test.ts` asserts both halves: present on every terminal 404, absent on the 307.
+>
+> Also corrected in `a93ca9f`: two comments that claimed more than the code does. `escapeHtml`'s output clamp is **not** entity-aware — it protects surrogate pairs only — so mixed-width entities can truncate mid-entity (`"'".repeat(63) + '<<'` ends in a dangling `&l`). Security review verified empirically with jsdom/parse5 that this parses as inert text against the real template, which has exactly one interpolation site in text context followed by static `</p>`. **That safety belongs to the template's shape, not to the escaper** — a future second interpolation point after the first cannot assume it. Separately, `isReservedPath` matches `/.well-known/` with a bare `startsWith` and validates nothing after it, so `reserved-path` reflects attacker-controlled markup exactly as `invalid-path` does; the two share one case block, which is why one test covers both.
 
 **Tasks:**
 
