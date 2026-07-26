@@ -10,7 +10,7 @@ import type Redis from 'ioredis';
 import { Registry } from 'prom-client';
 import { makeUrlBuilders, resolveReservedHandles, zCsvList } from '@posta/contracts';
 import type { CaptureEvent } from '@posta/contracts';
-import { bioPages, newId, createDailySalt, type DbClient } from '@posta/core';
+import { bioPages, newId, createDailySalt, type DbClient, type LookupNetwork } from '@posta/core';
 import {
   startPgContainer,
   startRedisContainer,
@@ -61,6 +61,18 @@ import { createResolveTenant } from '../resolve-tenant';
 // already avoid by stubbing this same dependency. Every OTHER dependency
 // here is real: real Postgres, real Redis, the real cache/tombstone
 // ladders, a real daily salt, and a real BullMQ producer.
+//
+// [T2.6.3] `lookupNetwork` IS one lever a caller can override —
+// {@link StartHotPathHarnessOptions.lookupNetwork} — mirroring `pool`'s
+// own "expose the thing `db` doesn't cover" precedent (this file's own
+// `HotPathHarness` doc comment). This is the ONE seam no-ip.test.ts needs
+// to prove the capture pipeline's own try/catch (middleware.ts's
+// `handleLinkTarget`) never leaks the client IP when the geoip lookup
+// itself throws — a property this harness cannot exercise with a FIXED
+// stub that only ever returns `{ asn: null, country: null }`. Optional and
+// defaulting to that exact fixed stub, so every existing caller
+// (hot-path-harness.test.ts and every other S2.6 file) keeps calling
+// `startHotPathHarness()` with zero arguments and zero behavior change.
 //
 // Env: every config knob the redirect composition below actually reads
 // is set on `process.env` first and read back through it (see `setEnv`),
@@ -124,6 +136,20 @@ function createEnvSetter(): { setEnv(name: string, value: string): string; resto
       }
     },
   };
+}
+
+/**
+ * [T2.6.3] Optional overrides for {@link startHotPathHarness}. Additive —
+ * every field is optional and defaults to this harness's own pre-existing
+ * behavior, so no existing call site (which all call
+ * `startHotPathHarness()` with zero arguments) needs to change.
+ */
+export interface StartHotPathHarnessOptions {
+  /** Overrides the fixed `() => ({ asn: null, country: null })` stub (see
+   * this file's own header) — e.g. a stub that throws, for a test proving
+   * the capture pipeline's own try/catch degrades safely with no IP leak
+   * when the geoip lookup fails. Defaults to the fixed stub when omitted. */
+  readonly lookupNetwork?: LookupNetwork;
 }
 
 export interface HotPathHarness {
@@ -220,8 +246,14 @@ async function seedHarnessData(
  * returned handle's lifecycle: always call `stop()` (typically from an
  * `afterAll`), or both containers and the listening port outlive the
  * test run.
+ *
+ * `options.lookupNetwork` (T2.6.3) defaults to the fixed
+ * `() => ({ asn: null, country: null })` stub every existing caller
+ * already gets — see {@link StartHotPathHarnessOptions}.
  */
-export async function startHotPathHarness(): Promise<HotPathHarness> {
+export async function startHotPathHarness(
+  options: StartHotPathHarnessOptions = {},
+): Promise<HotPathHarness> {
   const [pg, redis] = await Promise.all([startPgContainer(), startRedisContainer()]);
 
   const { tenantId, linkId } = await seedHarnessData(pg);
@@ -260,8 +292,10 @@ export async function startHotPathHarness(): Promise<HotPathHarness> {
   // See this file's own header for why this is a stub, not
   // createNetworkLookup(openGeoDatabases(...)) — the real reader depends
   // on a git-ignored, fetched-on-demand asset this harness must not
-  // require just to boot.
-  const lookupNetwork = () => ({ asn: null, country: null });
+  // require just to boot. `options.lookupNetwork` (T2.6.3) overrides it
+  // when a caller supplies one; every existing caller omits it and gets
+  // this exact fixed stub, unchanged.
+  const lookupNetwork: LookupNetwork = options.lookupNetwork ?? (() => ({ asn: null, country: null }));
   const getDailySalt = createDailySalt({ redis: redis.client, logger });
 
   const eventsQueue = createEventsQueue(redis.url);
