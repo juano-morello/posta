@@ -179,6 +179,61 @@ describe('makeUrlBuilders', () => {
       // has no handle — same as the no-dot apex case above.
       expect(parseHandleFromHost('example.test.')).toBeUndefined();
     });
+
+    describe('charset and length bound [security, S2.1 story-review batch]', () => {
+      // Before this fix, parseHandleFromHost applied NO charset or length
+      // check at all — only "non-empty" and "single label". Since this
+      // function runs on an unauthenticated public endpoint's Host header,
+      // that meant an attacker fully controlled the returned "handle"
+      // string: any charset, any length up to Node's own header ceiling.
+      // These cases pin the fix; every one of them was previously accepted.
+
+      it('returns undefined for a label over the 63-char DNS label limit', () => {
+        // RFC 1035 §3.1. 64 chars — one over the ceiling.
+        const tooLong = 'a'.repeat(64);
+        expect(parseHandleFromHost(`${tooLong}.example.test`)).toBeUndefined();
+      });
+
+      it('accepts a label at exactly the 63-char DNS label limit', () => {
+        // The boundary itself must still work — this is a ceiling, not an
+        // off-by-one trap for a legitimate 63-char handle.
+        const atLimit = `a${'b'.repeat(61)}c`; // 63 chars, valid charset
+        expect(atLimit).toHaveLength(63);
+        expect(parseHandleFromHost(`${atLimit}.example.test`)).toBe(atLimit);
+      });
+
+      it('returns undefined for a label containing a colon outside the port position', () => {
+        // stripPort only strips a trailing `:<digits>` suffix on the WHOLE
+        // host; a colon that lands inside the label itself (because it is
+        // followed by non-digit characters, e.g. more host) survives
+        // stripPort and must still be rejected by the charset check.
+        expect(parseHandleFromHost('ab:cd.example.test')).toBeUndefined();
+      });
+
+      it('returns undefined for a label containing a space', () => {
+        expect(parseHandleFromHost('ab cd.example.test')).toBeUndefined();
+      });
+
+      it('returns undefined for a label containing an emoji', () => {
+        expect(parseHandleFromHost('😀.example.test')).toBeUndefined();
+      });
+
+      it('returns undefined for a label with a leading hyphen', () => {
+        expect(parseHandleFromHost('-abc.example.test')).toBeUndefined();
+      });
+
+      it('returns undefined for a label with a trailing hyphen', () => {
+        expect(parseHandleFromHost('abc-.example.test')).toBeUndefined();
+      });
+
+      it('returns undefined for an 8000-character label (the flood-vector repro)', () => {
+        // The exact shape of the finding's own repro: an attacker-sized
+        // Host header, bounded only by Node's ~16 KB header ceiling before
+        // this fix — now rejected immediately by the length check.
+        const hostile = 'a'.repeat(8000);
+        expect(parseHandleFromHost(`${hostile}.example.test`)).toBeUndefined();
+      });
+    });
   });
 });
 

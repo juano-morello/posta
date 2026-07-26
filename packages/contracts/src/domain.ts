@@ -75,6 +75,23 @@ export interface UrlBuilders {
 // top of this.
 const HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
+// [security, S2.1 story-review batch] RFC 1035 §3.1's DNS label limit —
+// 63 octets max. Enforced HERE, inside parseHandleFromHost, not only in
+// assertClaimableHandle below: parseHandleFromHost runs on every
+// incoming request's Host header, unauthenticated, and until this fix it
+// applied no charset or length bound at all — only "non-empty" and
+// "single label". An attacker fully controls a Host header, so that gap
+// let an arbitrary-charset, arbitrarily-long string (bounded only by
+// Node's ~16 KB header ceiling) flow out of this function as a "handle"
+// into two real call sites: T2.1.5's handle-root alarm, which logs
+// `target.handle` verbatim at error level on every hit (an unbounded
+// string there is a log-flood vector that can bury a genuine
+// misconfiguration incident), and T2.2.2's handleKey(handle), which
+// builds a Redis key directly from it. Fixing the charset/length gate
+// here, at the one function every caller already goes through, closes
+// both without a second copy of either rule.
+const HANDLE_MAX_LENGTH = 63;
+
 function normalizeLabel(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -205,7 +222,15 @@ export function makeUrlBuilders(config: DomainConfig): UrlBuilders {
       if (!host.endsWith(domainSuffix)) return undefined; // not our domain at all
 
       const label = host.slice(0, -domainSuffix.length);
-      if (label.length === 0 || label.includes('.')) return undefined; // empty or multi-level
+      // Length checked BEFORE the regex test, cheaply (a `.length` read),
+      // so an attacker-sized Host header never even reaches HANDLE_PATTERN
+      // — this function runs on every request. Note this single check also
+      // covers "empty" (length 0) and "multi-level" (a literal '.' in
+      // `label`, e.g. "a.b" for a.b.<domain>, is > 0 chars but fails
+      // HANDLE_PATTERN below since '.' is outside its charset) — both of
+      // which used to be their own separate checks here.
+      if (label.length === 0 || label.length > HANDLE_MAX_LENGTH) return undefined;
+      if (!HANDLE_PATTERN.test(label)) return undefined;
       if (isReservedSubdomain(label)) return undefined; // app./api.
 
       return label;

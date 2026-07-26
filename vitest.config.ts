@@ -87,13 +87,73 @@ export default defineConfig({
           // configDefaults.exclude must be spread explicitly — setting
           // `exclude` replaces Vitest's own node_modules/.git defaults
           // rather than adding to them.
-          exclude: [...configDefaults.exclude, 'tests/containers/**', 'packages/core/**'],
+          exclude: [
+            ...configDefaults.exclude,
+            'tests/containers/**',
+            'packages/core/**',
+            'apps/api/src/redirect/test/**',
+          ],
         },
       },
       {
         test: {
           name: 'containers',
           include: ['tests/containers/**/*.test.ts'],
+          fileParallelism: false,
+        },
+      },
+      // 'redirect-hot-path' project — the S2.6 invariant suite
+      // (T2.6.1-T2.6.9, apps/api/src/redirect/test/**) shares this
+      // directory's ONE startHotPathHarness() factory, and every file in
+      // it boots its own Postgres+Redis testcontainers pair PLUS a full
+      // Nest/Express app. Because 'default' excludes this same glob (just
+      // above), this project is the ONLY one that ever runs these files —
+      // .github/workflows/ci.yml's main `ci` job must name it explicitly
+      // (`--project redirect-hot-path`) alongside default/web/core, or the
+      // whole suite silently stops running (and stops contributing
+      // coverage) in that job, even though nothing about the exclude above
+      // announces that dependency. Investigated a reported flake here
+      // (queue-down.test.ts's mechanism-1 assertion, `expected 51 to be
+      // 50`) and found a genuine race INSIDE that file, now fixed at its
+      // source: its `beforeAll` warmup request awaited only the client's
+      // HTTP response, not the server's own fire-and-forget capture
+      // continuation (middleware.ts flushes the redirect BEFORE it awaits
+      // getDailySalt()/calls enqueueCapture() — T2.4.3's own ordering).
+      // getDailySalt's first-ever call does a real Redis round trip
+      // (salt.ts), so under contention that continuation could still be
+      // in flight when the very next `it` disconnected the queue,
+      // producing an (N+1)-th "Enqueue failed" log line from a request
+      // neither `it` ever issued. queue-down.test.ts's own `beforeAll` now
+      // waits for that warmup's job to actually land in the queue before
+      // returning — the same "wait for the real side effect" discipline
+      // every recovery check in that file already used.
+      //
+      // Fixing that one race does not rule out this DIRECTORY'S other
+      // stated risk: several files booting Postgres+Redis pairs
+      // concurrently is genuine resource contention (CPU/Docker-daemon
+      // pressure stretching every timing-sensitive assertion in this
+      // suite, not just queue-down.test.ts's own), and two files
+      // (queue-down.test.ts, no-ip.test.ts) deliberately disconnect ioredis
+      // clients as part of their own fault injection. `fileParallelism:
+      // false` here is the SAME defense 'containers' above already takes
+      // for its own concurrent-boot risk (docker compose build racing on
+      // shared image tags) — applied here as a deliberate safety net
+      // alongside the real fix, not instead of it, so a DIFFERENT latent
+      // timing sensitivity in this same directory fails loudly in
+      // isolation rather than intermittently under load. Measured cost
+      // (three back-to-back local runs each way, Docker otherwise idle):
+      // a full `pnpm test` averages ~62-65s with this group at default
+      // parallelism versus ~75-77s serialized — roughly +12s, this
+      // directory's own 9 files' containers booting one-after-another
+      // instead of overlapping. (One early measurement read +107s; that
+      // run immediately followed dozens of manual repro runs in the same
+      // session and is attributable to Docker/testcontainers-ryuk still
+      // reaping leftover containers, not to this setting itself — the
+      // steady-state delta above is the one to trust.)
+      {
+        test: {
+          name: 'redirect-hot-path',
+          include: ['apps/api/src/redirect/test/**/*.test.ts'],
           fileParallelism: false,
         },
       },

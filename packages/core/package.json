@@ -17,7 +17,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -b tsconfig.json",
     "db:generate": "dotenv -e ../../.env -- drizzle-kit generate",
     "db:migrate": "dotenv -e ../../.env -- drizzle-kit migrate",
     "migrate": "dotenv -e ../../.env -- node dist/db/migrate.js",
@@ -31,11 +31,14 @@
     "@posta/contracts": "workspace:*",
     "better-auth": "^1.6.24",
     "drizzle-orm": "^0.45.2",
+    "ioredis": "^5.11.1",
+    "maxmind": "^5.0.6",
     "pg": "^8.22.0",
     "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.0.4",
+    "@testcontainers/redis": "^12.0.4",
     "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "5.9.3"

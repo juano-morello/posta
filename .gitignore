@@ -62,3 +62,11 @@ tmp/
 
 # SDD scratch (briefs, reports, review packages)
 .superpowers/
+
+# Serena's per-project config. Ships its own .gitignore covering /cache and
+# /project.local.yml, and its project.yml is designed to be versioned — but
+# project.yml's `project_name` is generated from the CHECKOUT directory, so
+# every .claude/worktrees/* worktree writes a different value into it. In a
+# repo that uses worktrees routinely that is pure churn on a file no shared
+# setting depends on, so it is ignored wholesale rather than committed.
+.serena/

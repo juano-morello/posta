@@ -8,3 +8,10 @@
 // in E1-E4" to reuse — this subpath is what makes that true for OTHER
 // packages'/apps' test files, not just packages/core's own.
 export * from './pg-container';
+// T2.3.6 (S2.3 fan-out fix) — withPinnedTz, promoted here so apps/api's
+// visitor-hash.test.ts (T2.3.9) and packages/core's own redis test files
+// (keys.test.ts, salt.test.ts) share ONE definition instead of a
+// cross-package copy silently drifting out of sync with it. See
+// ./pinned-tz.ts's own header for the fuller history.
+export * from './pinned-tz';
+export * from './redis-container';

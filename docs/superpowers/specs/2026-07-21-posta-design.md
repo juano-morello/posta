@@ -175,7 +175,15 @@ Datacenter-origin traffic is one of the strongest bot signals, and detecting bot
 
 ### 5.3 visitor_hash and the daily salt
 
-`visitor_hash = sha256(ip + user_agent + daily_salt)`, truncated to 32 chars. The salt lives in Redis at `salt:YYYY-MM-DD`, generated on first use with a TTL of 48h.
+`visitor_hash = sha256(ip + NUL + user_agent + NUL + daily_salt)`, truncated to 32 chars. The salt lives in Redis at `salt:YYYY-MM-DD`, generated on first use with a TTL of 48h.
+
+**Amended 2026-07-25 (T2.3.7).** This originally specified bare concatenation, `sha256(ip + user_agent + daily_salt)`. That is ambiguous at the field boundaries: `ip="1.2.3.4"` with `user_agent="Ax"` and `ip="1.2.3.4A"` with `user_agent="x"` concatenate to the same string and therefore hash identically, collapsing two distinct visitors into one bucket. A `NUL` (`\0`) delimiter between fields removes the ambiguity.
+
+`NUL` is a safe choice here rather than an arbitrary one, and it was verified rather than assumed: RFC 7230 excludes control characters from header field values, and Node's HTTP parser rejects a header containing a literal `NUL` with `400 Bad Request` before application code runs — confirmed empirically over a raw socket against this app's own server primitive, with no `--insecure-http-parser` anywhere in the repo. The salt cannot contain one either, being `randomBytes(32).toString('hex')`. So no field feeding the hash can carry the delimiter and reopen the collision.
+
+Two properties make this deviation free rather than risky. **Nothing ever recomputes a `visitor_hash`** — the raw IP is never stored (invariant 6), so there is no second implementation anywhere that could drift from this one, and no replay path needs to reproduce it. And **the change is not a weakening**: truncating a SHA-256 to 128 bits leaves birthday collisions ~50% likely only past ~2^64 distinct hashes per salt-day, orders of magnitude beyond any realistic volume, and the construction stays irreversible while the salt is secret regardless of the delimiter.
+
+The residual assumption is worth stating plainly, because it is external: the delimiter's safety rests on the HTTP parser rejecting `NUL`, not on anything asserted inside the hashing code. Swapping the HTTP layer, enabling `--insecure-http-parser`, or reusing the hash helper on a non-header-sourced string would silently retire that guarantee.
 
 **Consequence, accepted deliberately:** rotating the salt daily means yesterday's hashes cannot be linked to today's. This is the privacy property working as designed — linkability is bounded to 24 hours. It also means **there is no cross-day unique-visitor metric, ever.** The UI must say "únicos hoy" and must never imply a longer window.
 

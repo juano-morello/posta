@@ -1,10 +1,31 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import express from 'express';
 import type { Request, Response } from 'express';
-import { formatEnvFailures, loadEnv } from '@posta/contracts';
+import { formatEnvFailures, loadEnv, makeUrlBuilders, resolveReservedHandles } from '@posta/contracts';
+import {
+  createDailySalt,
+  createDbClient,
+  createNetworkLookup,
+  getRedis,
+  openGeoDatabases,
+} from '@posta/core';
 import { AppModule } from './app.module';
 import { apiEnvSchema } from './env';
+import { createEnqueueCapture, createEnqueueDroppedCounter, createEventsQueue } from './redirect/enqueue';
+import { makeRequestTargetParser } from './redirect/host';
+import {
+  consoleErrorLogger,
+  createHandleRootHitsCounter,
+  createOpenRedirectRejectedCounter,
+  createRedirectMiddleware,
+} from './redirect/middleware';
+import { makeNotFoundRenderer } from './redirect/not-found';
+import { consoleWarnLogger } from './redirect/resolve-redis';
+import { resolveLink } from './redirect/resolve-link';
+import { createResolveTenant } from './redirect/resolve-tenant';
 
 // T0.3.8 — fail fast on invalid env (S0.3). The very first thing this
 // process does, before NestFactory.create or anything else: validate
@@ -21,12 +42,122 @@ if (!envResult.ok) {
 const env = envResult.data;
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // T2.1.4 [INV-2] — the redirect hot path must never pay for Nest's
+  // DI/controller ceremony, so it cannot be a Nest middleware/guard: it
+  // has to be mounted on the raw Express instance BEFORE Nest's router
+  // exists at all. That means construction order is inverted from the
+  // pre-E2 version of this file (which let NestFactory.create build its
+  // own Express instance internally): build `server` ourselves first,
+  // mount the redirect middleware on it, and only THEN hand it to
+  // NestFactory.create via ExpressAdapter. Ordering by construction — the
+  // redirect middleware physically cannot run after a router that does
+  // not exist yet when `server.use()` below executes — rather than by
+  // hoping `app.use()` on a Nest-created instance happens to run first.
+  //
+  // makeUrlBuilders + resolveReservedHandles + makeRequestTargetParser +
+  // createHandleRootHitsCounter are each called exactly ONCE, right here,
+  // from already-validated env — never inside the returned middleware
+  // handler, which is what keeps the hot path free of per-request
+  // allocation. No registry override is passed, so the counter registers
+  // against prom-client's own default registry (matches
+  // createDefaultPartitionRowsGauge's production call in the worker).
+  const server = express();
+
+  const urls = makeUrlBuilders({
+    domain: env.POSTA_LINK_DOMAIN,
+    protocol: env.POSTA_PROTOCOL,
+    appSubdomain: env.POSTA_APP_SUBDOMAIN,
+    apiSubdomain: env.POSTA_API_SUBDOMAIN,
+  });
+  const parseRequestTarget = makeRequestTargetParser({
+    urls,
+    reservedHandles: resolveReservedHandles(env.POSTA_RESERVED_HANDLES),
+  });
+  const handleRootHitsCounter = createHandleRootHitsCounter();
+  // T2.4.5 [security] — same "no registry override, prom-client's own
+  // shared default" treatment as handleRootHitsCounter above. Called
+  // exactly once, here, at boot.
+  const openRedirectRejectedCounter = createOpenRedirectRejectedCounter();
+  // T2.5.3 — the branded 404 (not-found.ts), built once here over the
+  // SAME `urls` every other boot-time dependency above shares — never
+  // reconstructed per request.
+  const renderNotFound = makeNotFoundRenderer({ urls });
+
+  // T2.4.3 [INV-1][INV-2] — the redirect hot path's remaining boot-time
+  // dependencies: Postgres, the shared cache Redis client, the GeoIP
+  // reader pair, the daily salt manager, and the BullMQ producer. Every
+  // one of these is resolved exactly ONCE, here, before server.use() ever
+  // mounts the middleware that closes over them — see
+  // resolveTenant/resolveLink/lookupNetwork/getDailySalt/enqueueCapture's
+  // own doc comments (middleware.ts's RedirectMiddlewareDeps) for why
+  // each is shaped as a closure built at boot rather than constructed
+  // per request.
+  //
+  // `getRedis()` is the ONE shared cache client both the handle tier
+  // (resolveTenant) and the link tier (resolveLink) read/write — the hot
+  // link/salt cache, per CLAUDE.md. The BullMQ producer below gets its
+  // OWN dedicated connection instead (createEventsQueue's own doc comment
+  // explains why: the cache's fail-fast timeouts are wrong for a durable
+  // queue write, and sharing one socket would let load on one path stall
+  // the other).
+  const dbClient = createDbClient({ connectionString: env.DATABASE_URL });
+  const redis = getRedis({ url: env.REDIS_URL });
+  const geoDatabases = openGeoDatabases({ dbDir: env.GEOIP_DB_DIR });
+
+  const resolveTenant = createResolveTenant({
+    db: dbClient.db,
+    redis,
+    logger: consoleWarnLogger,
+    timeoutMs: env.REDIS_LOOKUP_TIMEOUT_MS,
+  });
+  // A thin closure over resolve-link.ts's resolveLink(tenant, slug, deps)
+  // — middleware.ts's RedirectMiddlewareDeps only ever sees the
+  // 2-argument shape; db/redis/logger/timeoutMs/cacheTtlSeconds are
+  // partially applied here, once, exactly like createResolveTenant above.
+  const resolveLinkForRedirect = (tenantId: string, slug: string) =>
+    resolveLink(tenantId, slug, {
+      db: dbClient.db,
+      redis,
+      logger: consoleWarnLogger,
+      timeoutMs: env.REDIS_LOOKUP_TIMEOUT_MS,
+      cacheTtlSeconds: env.LINK_CACHE_TTL_SECONDS,
+    });
+  const lookupNetwork = createNetworkLookup(geoDatabases);
+  const getDailySalt = createDailySalt({ redis, logger: consoleErrorLogger });
+
+  const eventsQueue = createEventsQueue(env.REDIS_URL);
+  const enqueueDroppedCounter = createEnqueueDroppedCounter();
+  const enqueueCapture = createEnqueueCapture({
+    queue: eventsQueue,
+    droppedCounter: enqueueDroppedCounter,
+    maxInflight: env.MAX_INFLIGHT_ENQUEUES,
+  });
+
+  server.use(
+    createRedirectMiddleware({
+      parseRequestTarget,
+      logger: consoleErrorLogger,
+      handleRootHitsCounter,
+      resolveTenant,
+      resolveLink: resolveLinkForRedirect,
+      lookupNetwork,
+      getDailySalt,
+      enqueueCapture,
+      openRedirectRejectedCounter,
+      renderNotFound,
+    }),
+  );
+
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule,
+    new ExpressAdapter(server),
+  );
 
   // Mounted directly on the underlying HTTP adapter, ahead of the Nest
-  // router. The redirect middleware E2 adds will mount the same way, so
-  // the hot path never pays for Nest's controller/DI ceremony — this
-  // health route is the first thing to use that pattern.
+  // router. The redirect middleware above mounts the same way, one level
+  // lower still (on `server` itself, before Nest ever sees it) — this
+  // health route was the first thing to use that pattern; T2.1.4 pushed
+  // it one step further.
   app.use('/health', (_req: Request, res: Response) => {
     res.status(200).send('ok');
   });

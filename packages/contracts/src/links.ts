@@ -23,7 +23,15 @@ const DESTINATION_PROTOCOL_PATTERN = /^https?$/;
 const DESTINATION_MAX_LENGTH = 2048;
 const TITLE_MAX_LENGTH = 200;
 
-const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTINATION_MAX_LENGTH);
+// Exported (T2.2.1) so packages/contracts/src/cache.ts's CachedLinkSchema
+// can validate a Redis-sourced `destination` against this EXACT schema
+// object, not a second hand-copied rule. A Redis value is untrusted the
+// moment anything else can write to that instance — a cache-read copy of
+// this validator that drifted from the write-time one (e.g. missing the
+// length bound, or a looser protocol pattern) would mean the write path
+// rejects `javascript:` while the cache-read path serves it, which is an
+// open redirect with a TTL.
+export const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTINATION_MAX_LENGTH);
 
 // Lowercase alnum + dash only ([a-z0-9-], no underscore — must match S5.3
 // exactly), 1-64 chars, no leading or trailing hyphen. The optional
@@ -31,6 +39,29 @@ const zDestination = z.url({ protocol: DESTINATION_PROTOCOL_PATTERN }).max(DESTI
 // alphanumeric endpoints, so a 1-char slug (just the first alternative)
 // and a 64-char slug (1 + 62 + 1) are both valid, 65 is not.
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
+
+/** The slug length ceiling SLUG_PATTERN's own shape already encodes. */
+export const SLUG_MAX_LENGTH = 64;
+
+/**
+ * T2.1.2 — the same slug rule zSlug enforces at creation time, exposed
+ * as a plain predicate for the redirect hot path.
+ *
+ * The hot path needs to reject a structurally impossible slug (a 4 KB
+ * path, an encoded traversal, an uppercase form) BEFORE spending a Redis
+ * GET and a Postgres query discovering it could never have existed. Doing
+ * that with a second copy of the pattern is exactly the drift this
+ * module's other comments warn about — it would show up as a link E5
+ * happily creates and the redirect path then refuses to serve. Sharing
+ * SLUG_PATTERN and SLUG_MAX_LENGTH between the two is what makes
+ * "creatable" and "reachable" the same predicate; slug-shape.test.ts
+ * asserts the two agree over a table rather than trusting that by eye.
+ */
+export function isValidSlug(slug: string): boolean {
+  if (slug.length < 1 || slug.length > SLUG_MAX_LENGTH) return false;
+  if (!SLUG_PATTERN.test(slug)) return false;
+  return !RESERVED_PATHS.includes(`/${slug}`);
+}
 
 // Reserved paths are checked by IMPORTING RESERVED_PATHS (T0.3.4), never
 // by inlining a second copy of the forbidden list — a second copy is

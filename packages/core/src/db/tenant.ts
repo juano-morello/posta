@@ -1,6 +1,7 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { PgColumn } from 'drizzle-orm/pg-core';
+import type { CachedLink } from '@posta/contracts';
 import { bioLinks, bioPages } from '../schema/bio';
 import { domains } from '../schema/domains';
 import { links } from '../schema/links';
@@ -149,5 +150,100 @@ export function forTenant(db: NodePgDatabase, tenantId: string) {
     bioPages: scopedBioPages(db, tenantId),
     bioLinks: scopedBioLinks(db, tenantId),
     domains: scopedDomains(db, tenantId),
+  };
+}
+
+// T2.2.2 — resolveTenantByHandle is the ONE tenant-owned-table query in
+// this module that does NOT go through forTenant(), and deliberately so:
+// forTenant(tenantId) requires already KNOWING the tenant, and this is
+// how the redirect hot path (apps/api/src/redirect/resolve.ts)
+// discovers it in the first place, from a request's Host header. There
+// is no tenant to scope this query BY — "which tenant owns this handle"
+// is definitionally a lookup across every tenant's bio_pages rows, keyed
+// on the one column (`handle`) that is GLOBALLY unique (T1.1.6), unlike
+// `links.slug`, which is only unique per tenant. It is the
+// chicken-and-egg case tenant-scope.test.ts's own header comment
+// anticipates: "the ONE legitimate place a tenant-owned table is queried
+// directly" is forTenant() for every OTHER access pattern, and this
+// function for the one query that cannot possibly be tenant-scoped.
+// T1.1.10's static scanner excludes this file by path for exactly this
+// reason — everywhere else, `db.select().from(bioPages)` is a bypass;
+// here, it is the only shape this query could ever take.
+//
+// Deliberately thin: no caching, no memoization, no error translation.
+// apps/api/src/redirect/resolve.ts layers a process-local memo and a
+// Redis cache in FRONT of this — this function is the plain, uncached
+// Postgres tier at the bottom of that ladder, called only on a miss in
+// both of the faster tiers.
+/**
+ * Resolves the `tenant_id` that owns `handle`, or `null` if no
+ * `bio_pages` row has that exact handle. Exact match only — `handle` is
+ * compared as-is, with no case-folding — so a request for a handle that
+ * differs only by case from a real one correctly misses rather than
+ * silently resolving to the wrong tenant.
+ */
+export async function resolveTenantByHandle(
+  db: NodePgDatabase,
+  handle: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ tenantId: bioPages.tenantId })
+    .from(bioPages)
+    .where(eq(bioPages.handle, handle));
+
+  return row?.tenantId ?? null;
+}
+
+// T2.2.4 — the redirect hot path's Postgres fallback tier for the LINK
+// cache: apps/api/src/redirect/resolve.ts's lookupCachedLink (T2.2.3)
+// checks Redis first; this is what it falls back to on a miss. Placed
+// here, next to resolveTenantByHandle, for the same reason that function
+// is: `apps/api` has no direct dependency on `drizzle-orm` (only
+// `@posta/core` does — see resolveTenantByHandle's own decisions, and
+// T2.2.2's report), so the query itself — unlike the caching ladder
+// wrapped around it — cannot be built in resolve.ts. This function stays
+// the plain, uncached Postgres tier; resolve.ts's own
+// `resolveLinkFromDb` wraps it in this file's dependency-injection shape.
+//
+// Unlike resolveTenantByHandle, this query IS tenant-scoped — the
+// tenant_id is already known by the time this tier runs (T2.2.2's
+// resolveTenant already resolved it from the handle) — so it goes
+// through forTenant(), never a hand-written `eq(links.tenantId, ...)`.
+// Two tenants can each own the slug `promo` on their own subdomains
+// (invariant 9's per-tenant UNIQUE constraint), so forgetting the tenant
+// scope here would serve one tenant's destination under another's
+// handle — forTenant() makes that scope unconditional, not something a
+// reviewer has to remember.
+//
+// `archived_at IS NULL` is part of the WHERE clause, not a filter
+// applied to the fetched row in JS: a user who archives a link has
+// revoked it, and "resolves to nothing" has to be a property of the
+// query itself, not of code a later refactor could drop.
+export async function resolveLinkBySlug(
+  db: NodePgDatabase,
+  tenantId: string,
+  slug: string,
+): Promise<CachedLink | null> {
+  const [row] = await forTenant(db, tenantId).links.select(
+    and(eq(links.slug, slug), isNull(links.archivedAt)),
+  );
+
+  if (!row) return null;
+
+  // Narrowed to exactly the three fields the redirect hot path (and
+  // T2.2.5's Redis backfill after it) needs — the CachedLink wire shape
+  // (@posta/contracts), the SAME shape lookupCachedLink returns on a
+  // cache HIT, so a caller layering "cache, then this" never has to
+  // reshape one tier's result to match the other's. `title`,
+  // `createdAt`, `updatedAt` and `archivedAt` are never copied out:
+  // forTenant().links.select() has no column-projection parameter today
+  // (only `links`'s two other consumers — T1.1.9's own tests — read the
+  // full row), so the fetch itself is unavoidably `SELECT *`, but
+  // nothing beyond `id`/`tenantId`/`destination` ever leaves this
+  // function.
+  return {
+    link_id: row.id,
+    tenant_id: row.tenantId,
+    destination: row.destination,
   };
 }

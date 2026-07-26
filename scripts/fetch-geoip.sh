@@ -112,6 +112,36 @@ for db in "${DATABASES[@]}"; do
   fetch_one "$db"
 done
 
+# Integrity verification (T2.3.3): DB-IP's free "lite" databases have NO
+# published checksum, signature, or hash of any kind — checked 2026-07-24
+# against https://download.db-ip.com/free/ (redirects 302 to the marketing
+# page, not a browsable index) and https://db-ip.com/db/lite.php (the lite
+# download page, no mention of checksums/hashes anywhere); direct probes for
+# a <file>.mmdb.gz.sha256, .sha256sum, .md5, .sig, .asc sibling, and for a
+# CHECKSUMS/checksums.txt manifest in the same directory, all 404 while the
+# .mmdb.gz itself 200s. This is unlike MaxMind, which does publish a sha256
+# next to GeoLite2 downloads. There is nothing to fetch and compare here.
+#
+# What actually verifies the download, in the absence of a publisher
+# checksum: HTTPS transport (TLS to the DB-IP-owned domain rules out a
+# plain on-path tamper) plus, below, confirming the extracted file is a
+# well-formed MMDB the `maxmind` reader can open. That is a VALIDITY check
+# (catches truncation/corruption) — it is NOT an INTEGRITY check against
+# DB-IP's original bytes. A MITM'd or compromised download that still
+# produces a well-formed MMDB with altered data would pass silently.
+# Residual risk if that happens: wrong ASN/country data degrades
+# classification quality (rule 6, "the raw IP is never stored" — geo/ASN
+# enrichment happens once, at capture), not code execution — this file is
+# read-only input to the `maxmind` parser and is never executed.
+#
+# Pinning a hash of the CURRENTLY released file was considered and
+# rejected: DB-IP re-releases both files monthly and this script always
+# fetches "whatever month is current" (see the year-month fallback above),
+# so a pinned hash would go stale on next month's release and turn into
+# recurring breakage this script would have to un-pin every month anyway —
+# worse than having no pin at all. Revisit only if DB-IP starts publishing
+# checksums, or if a signed/hashed mirror becomes available.
+#
 # A missing/corrupt file must fail loudly here, at fetch time — not later,
 # silently, as an API that emits asn:null on every event once it can't open
 # a bad GEOIP_DB_DIR file (see .env.example's GEOIP section). `maxmind`'s
@@ -123,13 +153,27 @@ done
 # (`openSync` is deliberately disabled and throws as of v5) and not worth
 # an event-loop round trip inside a shell script's verification step.
 echo "fetch-geoip: verifying both files with a real MMDB reader (maxmind)..."
-node -e "
+# [security-reviewer, S2.3 fan-out, LOW] OUT_DIR is passed through the
+# environment (OUT_DIR="$OUT_DIR" prefixing this one command — a temporary
+# env var for the node child process only, not a persistent export) and
+# read back via process.env.OUT_DIR inside the script, rather than
+# bash-interpolated straight into the JS string literal below. Bash
+# substitutes a `${OUT_DIR}` interpolation BEFORE node ever parses the
+# string, so a value containing a single quote (GEOIP_DB_DIR is an
+# operator-controlled deploy-time env var, not attacker input, but "a
+# config value can become executable code" is a bad shape to leave lying
+# around regardless of who controls it today) would close the JS string
+# literal early and inject arbitrary JS into this node -e call. Going
+# through the environment removes the interpolation entirely instead of
+# trying to escape it.
+OUT_DIR="$OUT_DIR" node -e "
 const { Reader } = require('maxmind');
 const fs = require('fs');
 const path = require('path');
+const outDir = process.env.OUT_DIR;
 const files = ['dbip-asn-lite.mmdb', 'dbip-country-lite.mmdb'];
 for (const file of files) {
-  const dbPath = path.join('${OUT_DIR}', file);
+  const dbPath = path.join(outDir, file);
   const reader = new Reader(fs.readFileSync(dbPath));
   console.log('fetch-geoip: ' + file + ' opened OK (databaseType=' + reader.metadata.databaseType + ')');
 }

@@ -9,6 +9,10 @@
 // this is the one place that has to change as E1 adds the db seam, the
 // schema, and the tenant-scoped repository helper.
 export * from './db';
+// T2.3.4 — the GeoIP loader seam (geoip/loader.ts), same barrel pattern
+// as db/redis above.
+export * from './geoip';
+export * from './redis';
 export * from './ulid';
 // T1.5.5 — the first consumer that needs schema TABLE OBJECTS through
 // the barrel, not just the db seam: packages/core/scripts/seed.ts runs
