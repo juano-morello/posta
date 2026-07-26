@@ -60,9 +60,9 @@ import {
 const PORT_SUFFIX_UNKNOWN_SLUG = 'hostile-input-nonexistent-slug';
 const UNREGISTERED_PUNYCODE_HANDLE = 'xn--unregistered-punycode';
 // RFC 2606 §2 reserves `.invalid` for exactly this: a domain guaranteed to
-// never resolve to anything real. Not one of the two domains
-// tests/conventions/no-literal-domain.test.ts forbids (posta.lat,
-// lbt.works) — see that file for the exact allowlist.
+// never resolve to anything real. This constant is deliberately not one of
+// the domains tests/conventions/no-literal-domain.test.ts forbids — see
+// that file for the exact forbidden list.
 const FOREIGN_HOST = 'attacker.invalid';
 const XSS_PAYLOAD = '<script>alert(1)</script>';
 const TRAVERSAL_PATH = '../../etc/passwd';
