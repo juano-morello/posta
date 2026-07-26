@@ -198,15 +198,15 @@ The response half of the middleware: `res.setHeader('Cache-Control', 'no-store')
 `enqueue.ts` creates the `events` Queue once at boot and exports `enqueueCapture(payload)` with `removeOnComplete` / `removeOnFail` set so the producer cannot grow Redis unboundedly. An in-flight counter capped at `MAX_INFLIGHT_ENQUEUES` (default 1000) drops and counts instead of accumulating promises — a stalled queue must cost events, never the process. Dropped events increment `posta_enqueue_dropped_total`.
 → **files** `apps/api/src/redirect/enqueue.ts` · `apps/api/src/redirect/enqueue.test.ts` · **verify** `pnpm test redirect/enqueue.test.ts` with a stub whose `add` never settles asserts the 1001st call returns synchronously, the dropped counter reads 1, and in-flight never exceeds 1000 · **after** T2.3.1, T2.1.3
 
-#### T2.4.3 · `feat: enqueue after the response is flushed` [INV-1]
+#### T2.4.3 · `feat: enqueue after the response is flushed` [INV-1] ✅ done (`709183e`)
 Ordering is the invariant: resolve → build payload → `res.redirect(307, …)` → **then** `void enqueueCapture(payload).catch(logEnqueueFailure)`. No `await` sits between request entry and `res.redirect` other than the resolution lookup. Enqueue-then-redirect is a promise; redirect-then-enqueue is a guarantee, and the difference is invisible until the queue is slow.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/ordering.test.ts` · **verify** `pnpm test redirect/ordering.test.ts` records a timeline and asserts the `res.end` timestamp strictly precedes the first `queue.add` call, and that a `queue.add` returning a promise that rejects after 500 ms still leaves a 307 delivered in under 15 ms · **after** T2.4.1, T2.4.2
 
-#### T2.4.4 · `feat: structured enqueue-failure logging without ip or secrets` [security]
+#### T2.4.4 · `feat: structured enqueue-failure logging without ip or secrets` [security] ✅ done (`cd7cb39`)
 `logEnqueueFailure(err, ctx)` logs `event_id`, `tenant_id`, `slug`, error name and message, and nothing else — never the payload, never the request, and never a connection string. `REDIS_URL` carries a password and ioredis embeds it in connection error messages, so the message is passed through a redactor before it is written.
 → **files** `apps/api/src/redirect/enqueue.ts` · `apps/api/src/redirect/enqueue-logging.test.ts` · **verify** `pnpm test redirect/enqueue-logging.test.ts` forces a failure whose message embeds `redis://user:s3cret@host:6379` and asserts the log contains `event_id`, contains no `s3cret`, and contains no capture-signal values · **after** T2.4.3, T0.3.10
 
-#### T2.4.5 · `feat: read-time open-redirect guard on the resolved destination` [security]
+#### T2.4.5 · `feat: read-time open-redirect guard on the resolved destination` [security] ✅ done (`716b0eb`)
 Validation on write (T1.1.11) is not enough: the value reaching `res.redirect` may have come from Redis, which is a second writer. A destination failing the absolute-`http(s)` check is refused — 404 via S2.5, an `error` log naming `link_id` and the rejected scheme, and no `Location` header at all. Cheap on the hot path (one regex), and the alternative is shipping an open redirect the moment a cache entry is poisoned.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/open-redirect.test.ts` · **verify** `pnpm test redirect/open-redirect.test.ts` plants `javascript:alert(1)`, `//evil.com`, `data:text/html,x` and `/relative` directly into Redis and then directly into Postgres, asserting 404, no `Location`, and one `error` log for each of the eight cases · **after** T2.4.1, T1.1.11
 
@@ -238,19 +238,19 @@ Validation on write (T1.1.11) is not enough: the value reaching `res.redirect` m
 
 **Tasks:**
 
-#### T2.5.1 · `feat: html escape helper for the 404 page` [security]
+#### T2.5.1 · `feat: html escape helper for the 404 page` [security] ✅ done (`0b1c6ce`)
 `escapeHtml(s)` escaping `&`, `<`, `>`, `"`, `'` and `/`, plus a length clamp so a 4 KB slug cannot inflate the response. Its own module and its own test because it is the single control standing between attacker-controlled path input and an HTML document — the one place in this epic where a one-character mistake is a stored-XSS-shaped bug.
 → **files** `apps/api/src/redirect/escape-html.ts` · `apps/api/src/redirect/escape-html.test.ts` · **verify** `pnpm test redirect/escape-html.test.ts` is table-driven over `</script>`, `"><img src=x onerror=alert(1)>`, `'; alert(1); //`, `&amp;` (asserting double-escaping), a 10 KB string (asserting the clamp) and multibyte input · **after** —
 
-#### T2.5.2 · `feat: inline 404 template, dark island, terminal shell`
+#### T2.5.2 · `feat: inline 404 template, dark island, terminal shell` ✅ done (`2ed5cd3`)
 `renderNotFound(slug)` returns a complete HTML document as a template string: inline `<style>`, no framework, no build step, no runtime dependency, no external request of any kind. Dark island tokens from DESIGN.md §1 are written as literal hex here because this file deliberately cannot reach the token pipeline — it must render when everything else is down. Terminal shell `~/posta $ cd /<slug>` over `error: no existe ese link`, blinking lime cursor via a CSS `steps()` animation, and a quiet link home built with `buildAppUrl()` (T0.3.3) so no literal domain appears.
 → **files** `apps/api/src/redirect/not-found.ts` · `apps/api/src/redirect/not-found.test.ts` · **verify** `pnpm test redirect/not-found.test.ts` snapshots the output and asserts it contains no `<script>`, no `http` URL other than the one built from env, no `src=`/`href=` to an external host, and is under 4 KB · **after** T2.5.1
 
-#### T2.5.3 · `feat: serve the 404 for unknown handle, unknown slug and reserved paths`
+#### T2.5.3 · `feat: serve the 404 for unknown handle, unknown slug and reserved paths` ✅ done (`41efc93`)
 Wires `renderNotFound` into every terminal branch of the middleware — unknown handle, unknown slug, archived link, reserved path, handle-root, rejected destination — with status 404, `Content-Type: text/html; charset=utf-8` and `Cache-Control: no-store`. A 404 **never enqueues**: there is no `link_id` to attach, and `events.link_id` is `NOT NULL` by design (T1.2.2), so a 404 event has nowhere to go and no meaning if it did.
 → **files** `apps/api/src/redirect/middleware.ts` · `apps/api/src/redirect/not-found-routing.test.ts` · **verify** `pnpm test redirect/not-found-routing.test.ts` asserts all six branches return 404 with the rendered body and the right headers, and that `queue.add` was called zero times across all of them · **after** T2.5.2, T2.4.5
 
-#### T2.5.4 · `test: a hostile slug cannot inject html into the 404` [security]
+#### T2.5.4 · `test: a hostile slug cannot inject html into the 404` [security] ✅ done (`3111fa1`)
 End-to-end through the real route rather than against `renderNotFound` directly, because the risk is a future refactor that reflects the raw `req.path` somewhere the escaper does not cover. Payloads: `<script>alert(1)</script>`, `"><svg onload=alert(1)>`, `%3Cscript%3E` (asserting the decoded form is escaped too), a null byte, and a 4 KB slug.
 → **files** `apps/api/src/redirect/not-found-xss.test.ts` · **verify** `pnpm test redirect/not-found-xss.test.ts` parses each response body and asserts zero `script` elements and zero `on*` attributes originating from the payload, and that the raw payload string never appears unescaped · **after** T2.5.3
 
