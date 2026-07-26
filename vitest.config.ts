@@ -106,7 +106,13 @@ export default defineConfig({
       // (T2.6.1-T2.6.9, apps/api/src/redirect/test/**) shares this
       // directory's ONE startHotPathHarness() factory, and every file in
       // it boots its own Postgres+Redis testcontainers pair PLUS a full
-      // Nest/Express app. Investigated a reported flake here
+      // Nest/Express app. Because 'default' excludes this same glob (just
+      // above), this project is the ONLY one that ever runs these files —
+      // .github/workflows/ci.yml's main `ci` job must name it explicitly
+      // (`--project redirect-hot-path`) alongside default/web/core, or the
+      // whole suite silently stops running (and stops contributing
+      // coverage) in that job, even though nothing about the exclude above
+      // announces that dependency. Investigated a reported flake here
       // (queue-down.test.ts's mechanism-1 assertion, `expected 51 to be
       // 50`) and found a genuine race INSIDE that file, now fixed at its
       // source: its `beforeAll` warmup request awaited only the client's

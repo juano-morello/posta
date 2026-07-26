@@ -221,8 +221,20 @@ jobs:
       # postgres:// service above. All three projects' coverage still
       # computes/gates at 80% together — the container-build tests never
       # contributed application-source coverage in the first place.
+      #
+      # --project redirect-hot-path: vitest.config.ts excludes
+      # apps/api/src/redirect/test/** from `default` (its own project block
+      # above says why: fileParallelism: false there, to keep the
+      # queue-down.test.ts flake fixed), so leaving it unnamed here means
+      # this step silently runs NONE of the S2.6 suite and reports 0%
+      # coverage for hot-path-harness.ts despite the dedicated `hot-path`
+      # job below exercising it on every PR — the gate still holds (that
+      # job is the real correctness check), only this step's OWN coverage
+      # artifact was silently understating things. redirect-hot-path's
+      # fileParallelism: false is structural in vitest.config.ts, not a CLI
+      # flag, so naming the project here does not reintroduce that flake.
       - name: Test (with coverage)
-        run: pnpm test --project default --project web --project core --coverage
+        run: pnpm test --project default --project web --project core --project redirect-hot-path --coverage
 
       - name: Upload coverage summary
         if: always()
