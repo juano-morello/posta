@@ -12,7 +12,22 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"],
+  // T2.6.1 — "src/**/test/**" excludes shared integration-test
+  // infrastructure (e.g. redirect/test/hot-path-harness.ts) alongside the
+  // existing "*.test.ts" exclude. Both exist for the SAME reason:
+  // resolve-test-support.ts's own header comment explains that a helper
+  // file NOT named "*.test.ts" is swept into this production build under
+  // node10 module resolution, which cannot see `@posta/core/testing`'s
+  // package.json "exports" subpath at all — only *.test.ts files (excluded
+  // above, and separately type-checked under the root tsconfig.test.json's
+  // "bundler" resolution) can safely import it today. hot-path-harness.ts
+  // is the first file that must actually CALL startPgContainer/
+  // startRedisContainer (not just reference their types), so it cannot
+  // dodge the problem the way resolve-test-support.ts does (by never
+  // importing the runtime functions at all) — excluding its whole "test/"
+  // directory from this build is what keeps it resolvable, and also keeps
+  // testcontainers-only test infrastructure out of the production dist.
+  "exclude": ["src/**/*.test.ts", "src/**/test/**"],
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/contracts" }
