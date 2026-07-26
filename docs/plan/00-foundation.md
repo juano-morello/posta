@@ -407,8 +407,17 @@ Starts each image against the compose datastores and polls its health endpoint (
 Reads `docker image inspect --format '{{.Size}}'` and fails above threshold: api 300MB, worker 300MB, web 250MB. Bloat is invisible until a rollout is slow — a stray `devDependency` in the runtime stage costs nothing locally and costs pull time on every node.
 → **files** `tests/containers/image-size.test.ts` · **verify** `pnpm test tests/containers/image-size.test.ts` passes; lowering a threshold by 1MB fails it · **after** T0.7.12
 
-#### T0.7.14 · `ci: build and push all three images tagged with the git sha` ⛔ blocked
+#### T0.7.14 · `ci: build and push all three images tagged with the git sha` ✅ done (`8cd6a5f`)
 Buildx job on push to main: build `api`, `worker`, `web`, run the smoke and size tests against them, then push as `<registry>/posta-<app>:<sha>` with a GitHub Actions layer cache. `latest` may move as a convenience tag, never as the only one — a deploy pinned to `latest` cannot be rolled back to a known artifact.
 
-**Blocked for the same underlying reason as T0.5.6:** no container registry is configured, and no git remote exists for this repo — "a merge to main pushes three digests" cannot literally happen yet. `images.yml` is written correct-by-construction (valid YAML — checked with `actionlint` — real action versions, the right trigger, buildx + a GHA layer cache, registry parameterized via a `vars.REGISTRY` placeholder so the provider stays unchosen) and its build/smoke/size steps run for real value today; only the login/push steps are gated inert behind `REGISTRY` being set.
+**Unblocked and verified 2026-07-26.** Both original blockers are gone: a remote exists, and GHCR was chosen as the registry (`vars.REGISTRY = ghcr.io/juano-morello`, decision recorded in CLAUDE.md). Auth uses the Actions-minted `GITHUB_TOKEN` with `packages: write` rather than stored credentials, so there is nothing to rotate. `latest` is gated to `refs/heads/main` so it can never move from a feature branch; the sha tag is unconditional.
+
+Three things had to be fixed before the verify could pass, all of which had been failing silently on every prior merge:
+1. **Size** — api was 661MB and worker 656MB against a 300MB budget, so the job died at the size gate before reaching its push steps (`598a62f`). Cause was `better-auth`'s resolved optional peers being recorded as `optionalDependencies` and installed by `--prod`.
+2. **A stale CI-only `.env`** — the heredoc in `images.yml` had not been updated since 2026-07-22 while `apps/api` gained three required vars, so the api container exited on its own env gate and the smoke test could only report "exited before /health ever answered" (`8cd6a5f`).
+3. **A race in the smoke test's `beforeAll`** — `compose wait minio-init` intermittently finds "no containers for project", proven by the same commit failing on attempt 1 and passing on attempt 2 of run `30223649872`. Tracked separately; it makes this job flaky, not wrong.
+
+**Verify satisfied literally.** Run `30223649872` published three digests tagged with `git rev-parse HEAD` (`0f735763e2e8fa4a6c7520ae05f419284c71c36c`): `posta-api@sha256:243646bc…`, `posta-worker@sha256:e8513d5f…`, `posta-web@sha256:741fee32…`, each also tagged `latest`.
+
+> **Open decision, not a blocker.** GHCR creates a new package as **private** even from a public repo. Until the three are flipped to public, any Kubernetes cluster pulling them needs an `imagePullSecret` — which reintroduces exactly the long-lived credential that choosing `GITHUB_TOKEN` avoided. Now actionable, since the packages exist.
 → **files** `.github/workflows/images.yml` · **verify** a merge to main pushes three digests whose tags match `git rev-parse HEAD` · **after** T0.7.13
