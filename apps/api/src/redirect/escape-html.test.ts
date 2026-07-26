@@ -84,11 +84,48 @@ describe('escapeHtml — length clamp', () => {
     // already exceeds 384, so the output clamp is still what ultimately
     // governs here; only the intermediate allocation size changed.
     expect(result.length).toBeLessThanOrEqual(MAX_ESCAPED_HTML_LENGTH);
-    // Every character that survived the clamp is still a whole, valid
-    // entity rather than a truncated fragment like "&l" — a result whose
-    // length isn't a clean multiple of 4 would mean the clamp cut
-    // through an entity rather than around it.
+    // [S2.5 fan-out review, corrected] Every character that survived the
+    // clamp is still a whole, valid entity here — but that is a property
+    // of THIS input's uniform expansion width ('<' -> '&lt;', always 4
+    // chars), not a guarantee escapeHtml makes in general. The clamp
+    // (truncateAtCodePointBoundary, escape-html.ts) is a flat code-point
+    // cut with zero entity-boundary awareness — it only ever protects a
+    // surrogate PAIR from being split, nothing about where an entity
+    // starts or ends. A result whose length happens to be a clean
+    // multiple of 4 here is simply what a same-width-entity input
+    // produces; see the mixed-entity-width case directly below for the
+    // input where it is NOT true, and why that is still safe.
     expect(result).toBe('&lt;'.repeat(result.length / 4));
+  });
+
+  // [S2.5 fan-out review] The test above's "clean multiple of 4" observation
+  // does not generalize — demonstrated here, not merely asserted, with the
+  // exact construction the security review used to prove it: 63 quote
+  // characters (each escaping to the WIDER 6-char '&#x27;') followed by
+  // two '<' characters (each escaping to '&lt;'). 63*6 = 378 raw escaped
+  // chars before either '<' is even reached; the first '<' fits whole
+  // (378-382), but the second only has 384-382 = 2 of its 4 escaped
+  // characters left before MAX_ESCAPED_HTML_LENGTH cuts it off — landing
+  // exactly on the dangling fragment "&l" the earlier test's comment used
+  // as its counterexample.
+  it('can truncate MID-entity once two different entity widths are mixed — real behavior, not a bug', () => {
+    const mixedWidthInput = "'".repeat(63) + '<<';
+
+    const result = escapeHtml(mixedWidthInput);
+
+    expect(result.length).toBe(MAX_ESCAPED_HTML_LENGTH);
+    expect(result).toBe(`${'&#x27;'.repeat(63)}&lt;&l`);
+    // [security review] This dangling fragment is NOT exploitable in
+    // this document: HTML tokenization reads raw input left-to-right and
+    // never re-scans its own decoded output, so a decoded '<' appearing
+    // this late in the page has no unescaped '>' or attacker-controlled
+    // markup after it (only the template's own static, trusted HTML) to
+    // complete a tag with. That safety belongs to not-found.ts's TEMPLATE
+    // shape — exactly one interpolation site, nothing attacker-controlled
+    // downstream of it — not to this escaper; a future template with a
+    // second interpolation point after this one could not rely on the
+    // same reasoning. See not-found-xss.test.ts for the end-to-end proof
+    // against the real template.
   });
 
   it('leaves content under both the input and output bounds untouched', () => {

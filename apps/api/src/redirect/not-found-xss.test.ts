@@ -101,18 +101,33 @@ import type { ResolveTenant } from './resolve-tenant';
 // attempted to treat the payload as a slug lookup), and a companion test
 // showing an ordinary, charset-valid, attacker-CHOSEN slug DOES reach
 // the 'link' branch's own decoded-slug reflection and is protected by
-// the exact same `escapeHtml` pipeline there. 'reserved-path' is not
-// tested separately from 'invalid-path': middleware.ts's own switch
-// statement handles both kinds with the identical `sendNotFound(res,
-// renderNotFound, describeRequestedPath(req.path))` call (same case
-// block, same code) — a second test would exercise nothing 'invalid-path'
-// doesn't already, which is exactly the "looks thorough, cannot fail"
-// shape this epic's own review process has already flagged once
-// (not-found.test.ts's own fix-round comment). 'handle-root' and
-// 'reserved-handle' are skipped for the same reason from the other
-// direction: both always reflect a fixed empty string (middleware.ts,
-// decision 2 of T2.5.3's own dispatch) — there is no attacker-controlled
-// CONTENT in that value to attack.
+// the exact same `escapeHtml` pipeline there.
+//
+// [S2.5 fan-out review, corrected] 'reserved-path' is NOT tested
+// separately from 'invalid-path' — but NOT because 'invalid-path' is the
+// only branch that ever reflects attacker-controlled markup, which an
+// earlier version of this comment (and a prior review) implied. It is
+// not: `isReservedPath` (packages/contracts/src/reserved.ts) matches
+// `RESERVED_PATH_PREFIXES` (`/.well-known/`) with a plain `startsWith` on
+// a lowercased copy and validates nothing about what follows that prefix
+// — so `/.well-known/<script>alert(1)</script>` classifies as
+// 'reserved-path', not 'invalid-path', and reflects that exact payload
+// identically. BOTH branches carry attacker-controlled markup; they are
+// deliberately merged into one `case 'reserved-path': case 'invalid-path':`
+// block in middleware.ts precisely so that fact never has to be
+// rediscovered branch-by-branch — same code, same
+// `describeRequestedPath(req.path)` call, same `escapeHtml` guarantee,
+// for both. A test exercising `/.well-known/<script>...</script>`
+// separately would prove nothing the `/<script>...</script>` payload
+// already tested above doesn't — the "looks thorough, cannot fail" shape
+// this epic's own review process has already flagged once
+// (not-found.test.ts's own fix-round comment) — because the identical
+// line of code answers both inputs. 'handle-root' and 'reserved-handle'
+// are skipped for a genuinely different reason: both always reflect a
+// fixed empty string (middleware.ts, decision 2 of T2.5.3's own
+// dispatch) — there is no attacker-controlled CONTENT in that value to
+// attack, unlike 'reserved-path'/'invalid-path', which both carry the
+// real, attacker-influenced request path.
 
 const DOMAIN = 'example.test';
 const HANDLE = 'juano';
