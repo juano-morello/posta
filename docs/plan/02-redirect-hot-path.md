@@ -268,22 +268,28 @@ End-to-end through the real route rather than against `renderNotFound` directly,
 
 ---
 
-## S2.6 — The invariant suite
+## S2.6 — The invariant suite ✅ done 2026-07-26
 
 **As a** maintainer **I want** the invariants tested, not documented **so that** a future refactor cannot quietly break the product's core promise.
 
 Integration tests against real Postgres + Redis (testcontainers). Mocks would let every one of these pass while the real thing is broken.
 
 **Acceptance:**
-- [ ] **Redirect succeeds while the queue is down** — stop Redis's queue, assert 307 with correct destination [INV-1]
-- [ ] **No IP in the queued payload**, in logs, or in any error path [INV-6]
-- [ ] **307 not 301**, asserted on status code [INV-3]
-- [ ] **`event_id` stable** — one request produces exactly one ULID, carried through unchanged [INV-8]
-- [ ] **Latency budget** — p95 under 15 ms on cache hit, measured over ≥1000 local requests
-- [ ] **No DI on the hot path** — a test asserts the middleware is registered before the Nest router [INV-2]
-- [ ] Cache-miss path: resolves from Postgres, backfills, second request hits cache
-- [ ] Reserved handles and paths never reach slug lookup
-- [ ] Hostile input: XSS in slug, path traversal, absurdly long slugs, missing `Host`
+- [x] **Redirect succeeds while the queue is down** — stop Redis's queue, assert 307 with correct destination [INV-1] — T2.6.2, both outage modes
+- [x] **No IP in the queued payload**, in logs, or in any error path [INV-6] — T2.6.3, reading real job data off the queue
+- [x] **307 not 301**, asserted on status code [INV-3] — T2.6.4
+- [x] **`event_id` stable** — one request produces exactly one ULID, carried through unchanged [INV-8] — T2.6.4
+- [x] **Latency budget** — p95 under 15 ms on cache hit, measured over ≥1000 local requests — T2.6.9, observed p50≈0.29ms p95≈0.46ms p99≈0.6ms
+- [x] **No DI on the hot path** — a test asserts the middleware is registered before the Nest router [INV-2] — T2.6.7
+- [x] Cache-miss path: resolves from Postgres, backfills, second request hits cache — T2.6.6
+- [x] Reserved handles and paths never reach slug lookup — T2.6.5, asserting zero lookups, not just the 404
+- [x] Hostile input: XSS in slug, path traversal, absurdly long slugs, missing `Host` — T2.6.8, 14 cases
+
+> **How these were proven, and one gap that was found and closed.** Every task here guards code that ALREADY satisfied its invariant, so a correct test passes on its first run and proves nothing. Each was therefore required to demonstrate it can fail: break the production code in the exact way the invariant forbids, observe red, revert exactly, confirm green — with `git diff` on the production file confirmed empty before commit. `docs/plan/IMPLEMENTATION-NOTES.md` records each proof.
+>
+> That discipline caught a real hole. T2.6.10's own verify promises the CI job "goes red on a branch that moves the `queue.add` call above `res.redirect`". It did not: the literal single-change reorder, with the existing try/catch and fire-and-forget `.catch()` intact, left the job green — only a compound regression that also stripped those safety nets produced a failure. `ordering.test.ts` (T2.4.3) does catch it, but sat outside the job's scoped path. Closed in `64445a3` by adding that one file to the job, chosen over widening to the whole directory on measured evidence (32s vs 53s for no new coverage).
+>
+> `visitor_hash` reversibility rests on Redis access control rather than on code — the salt is `randomBytes(32)`, daily-rotated, never logged or exposed, so the property holds, but it is an infrastructure assumption and belongs in E10's hardening, not here.
 
 **Tasks:**
 
