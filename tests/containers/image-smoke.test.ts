@@ -33,6 +33,15 @@ const HEALTH_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 500;
 const TEST_TIMEOUT_MS = HEALTH_TIMEOUT_MS + 15_000;
 
+// How often/long waitForMinioInitExit (below) polls docker inspect for the
+// bootstrap container's final state. Distinct from POLL_INTERVAL_MS, which
+// polls an HTTP health endpoint on a long-running service — this instead
+// polls a one-shot container's exit code, and does so much faster because
+// the bootstrap (an `mc alias set` + two `mc mb`) completes in well under a
+// second, not the tens of seconds a service takes to become healthy.
+const MINIO_INIT_POLL_INTERVAL_MS = 200;
+const MINIO_INIT_TIMEOUT_MS = 30_000;
+
 interface ImageSpec {
   service: string;
   containerPort: number;
@@ -165,14 +174,74 @@ async function smokeTestImage(spec: ImageSpec, overrideCommand?: string[]): Prom
   }
 }
 
-beforeAll(() => {
+/** Waits for the one-shot `minio-init` bootstrap container (docker-compose.yml)
+ * to exit, then asserts it exited 0 — never lets a real bootstrap failure
+ * pass silently.
+ *
+ * Deliberately does NOT use `docker compose wait`: that command lists only
+ * RUNNING containers (docker/compose's `Wait` calls `ContainerList` with
+ * `all=false`), so if minio-init — a script that completes in well under a
+ * second — has already exited by the time `wait` runs its query, the
+ * container is invisible to that query and `wait` fails with "no containers
+ * for project", regardless of whether the bootstrap actually succeeded.
+ * Confirmed directly against the installed docker compose: calling
+ * `docker compose wait minio-init` after the container had already exited
+ * reproduces that exact error every time — it is not a hypothetical, it is
+ * the mechanism behind the observed CI flake.
+ *
+ * (A single `docker compose up -d --wait postgres redis minio minio-init`
+ * looks like the obvious atomic fix, but was verified NOT to work here: the
+ * `--wait` flag only treats a one-shot container's own exit as success when
+ * some OTHER selected service depends on it via `condition:
+ * service_completed_successfully` — and api/worker, which declare that
+ * dependency, are not part of this selection. Without them, `--wait` applies
+ * its default "running or healthy" condition to minio-init, sees it exited,
+ * and fails the whole command even on a clean exit 0.)
+ *
+ * Polling `docker inspect` by a container ID captured right after `up -d`
+ * has no such race: the container is never removed (`restart: "no"`, no
+ * `--rm`), so inspect finds it whether it is still running or has already
+ * exited — "already exited" is the expected/common case here, not a
+ * fallback. This only reports success once the real exit code is read as 0;
+ * a genuine bootstrap failure still throws with that exit code and the
+ * container's own logs. */
+async function waitForMinioInitExit(timeoutMs = MINIO_INIT_TIMEOUT_MS): Promise<void> {
+  const containerId = runDocker(['compose', 'ps', '-a', '-q', 'minio-init']);
+  if (!containerId) {
+    throw new Error('"docker compose ps -a -q minio-init" produced no container id');
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [status, exitCode] = runDocker([
+      'inspect',
+      '--format',
+      '{{.State.Status}} {{.State.ExitCode}}',
+      containerId,
+    ]).split(' ');
+
+    if (status === 'exited') {
+      if (exitCode !== '0') {
+        const logs = spawnSync('docker', ['logs', containerId], { encoding: 'utf8' }).stdout;
+        throw new Error(`minio-init exited with code ${exitCode} — bucket bootstrap failed:\n${logs}`);
+      }
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, MINIO_INIT_POLL_INTERVAL_MS));
+  }
+
+  throw new Error(`minio-init did not exit within ${timeoutMs}ms`);
+}
+
+beforeAll(async () => {
   // Same sequence `pnpm dev` (T0.4.6) and `dev:reset` (T0.4.7) use: bring
   // the three datastores up and wait for the bucket-bootstrap one-shot to
   // finish, so api/worker/minio-dependent boot below doesn't race infra
   // that's "up" but not yet accepting connections.
   runDocker(['compose', 'up', '-d', '--wait', 'postgres', 'redis', 'minio']);
   runDocker(['compose', 'up', '-d', 'minio-init']);
-  runDocker(['compose', 'wait', 'minio-init']);
+  await waitForMinioInitExit();
 
   // Ensures the three app images actually exist and are current. This
   // test must be runnable on its own (`pnpm test
