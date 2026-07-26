@@ -197,14 +197,39 @@ afterEach(async () => {
   await Promise.all(openServers.splice(0).map((server) => server.close()));
 });
 
-/** Every 404 assertion in this file shares this shape: status, both
+// [S2.5 fan-out review, MEDIUM, defence in depth] The two hardening
+// headers every terminal 404 must carry, asserted here as literals rather
+// than imported from middleware.ts on purpose: importing the constant
+// under test would make this assertion tautological — it would keep
+// passing if someone widened the policy to `default-src *`, which is
+// exactly the regression worth catching.
+//
+// `default-src 'none'` costs this document nothing functionally:
+// not-found.ts's own T2.5.2 invariant is that it has ZERO external
+// dependencies by design (no script, style, image, font or fetch of any
+// kind, enforced by that file's own src/href-parsing test). The CSP is
+// therefore pure backstop should the escaper (T2.5.1) or the template
+// (T2.5.2) ever regress. `style-src 'unsafe-inline'` is the single
+// exception, matching the template's own one `<style>` block —
+// tightening it to a nonce or hash would require per-request template
+// generation, which not-found.ts's header comment explicitly rules out.
+const EXPECTED_NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'";
+
+/** Every 404 assertion in this file shares this shape: status, all four
  * headers, the exact rendered body for the value this task decided that
  * branch reflects, and — checked PER branch, never in aggregate, per the
  * dispatch's own instruction — that queue.add() was never called. A fixed
  * 50ms grace period (mirroring ordering.test.ts's identical "a 404 path
  * enqueues nothing at all" case) gives a wrongly-added fire-and-forget
  * continuation a moment it would need if one were ever mistakenly wired
- * to one of these branches, before asserting it never ran. */
+ * to one of these branches, before asserting it never ran.
+ *
+ * [S2.5 fan-out review] The CSP and nosniff assertions live in this
+ * SHARED helper, not in one representative test, for the same reason
+ * sendNotFound is a single chokepoint in middleware.ts: a header set on
+ * eight branches and forgotten on the ninth is precisely the failure this
+ * shape exists to make impossible. Every branch below proves it
+ * independently. */
 async function expectBrandedNotFound(
   server: TestServer,
   host: string,
@@ -216,6 +241,8 @@ async function expectBrandedNotFound(
   expect(response.status).toBe(404);
   expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
   expect(response.headers['cache-control']).toBe('no-store');
+  expect(response.headers['content-security-policy']).toBe(EXPECTED_NOT_FOUND_CSP);
+  expect(response.headers['x-content-type-options']).toBe('nosniff');
   expect(response.body).toBe(renderNotFound(expectedSlug));
 
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -290,6 +317,28 @@ describe('additional terminal branches this task also wires (not named by the br
     openServers.push(server);
 
     await expectBrandedNotFound(server, `${HANDLE}.${DOMAIN}`, `/${KNOWN_SLUG}`, KNOWN_SLUG);
+  });
+});
+
+describe('the hardening headers are scoped to the 404, never the hot path', () => {
+  // [S2.5 fan-out review] The negative half of the decision above, tested
+  // rather than only commented. A 307 has no body for a CSP to constrain
+  // and a `Location`-only response has no content type to sniff, so both
+  // headers would be pure per-click overhead on the ONE path that runs on
+  // every single redirect — INV-2's "the redirect route is lean". Without
+  // this test, a later "set security headers globally" refactor (helmet,
+  // or a blanket app.use) would silently land them on the hot path and
+  // nothing would object.
+  it('a successful 307 carries neither the CSP nor nosniff', async () => {
+    const server = await buildServer();
+    openServers.push(server);
+
+    const response = await requestPath(server.port, `${HANDLE}.${DOMAIN}`, `/${KNOWN_SLUG}`);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.location).toBe(DESTINATION);
+    expect(response.headers['content-security-policy']).toBeUndefined();
+    expect(response.headers['x-content-type-options']).toBeUndefined();
   });
 });
 

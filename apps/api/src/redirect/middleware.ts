@@ -228,14 +228,50 @@ export interface RedirectMiddlewareDeps {
   readonly renderNotFound: RenderNotFound;
 }
 
+// [S2.5 fan-out review, MEDIUM, defence in depth] Set on the 404 and
+// deliberately NOWHERE else. Neither header has another source anywhere in
+// apps/api — there is no helmet and no blanket header middleware — so this
+// is the only place either one is decided.
+//
+// `default-src 'none'` costs this document nothing functionally, because
+// not-found.ts's own T2.5.2 invariant is that it has ZERO external
+// dependencies by design: no script, style, image, font or fetch of any
+// kind, enforced by that file's own src/href-parsing test. The policy is
+// therefore pure backstop — it buys nothing today and everything on the
+// day the escaper (T2.5.1) or the template (T2.5.2) regresses.
+// `style-src 'unsafe-inline'` is the single exception, matching the
+// template's own one `<style>` block; tightening it to a nonce or hash
+// would require generating the template per request, which not-found.ts's
+// header comment explicitly rules out (it must render as a static string,
+// with no build step, when everything else is down).
+//
+// The paired `X-Content-Type-Options: nosniff` is not exploitable here
+// specifically — `Content-Type` on this response is a fixed correct
+// literal, never derived from anything attacker-controlled, so there is no
+// sniffable ambiguity to get wrong — but it is one header on a
+// non-hot path, and it removes the question rather than leaving it to be
+// re-answered by whoever reads this next.
+//
+// Neither is set on the 307 path (sendLinkRedirect, ./redirect-response.ts):
+// that response has no body for a CSP to constrain and no content type to
+// sniff, so both would be pure per-click overhead on the one path that runs
+// on every single click — INV-2, the redirect route is lean.
+// not-found-routing.test.ts asserts both halves: present on all nine
+// terminal 404 branches, absent on the 307.
+const NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'";
+
 /**
  * Terminal 404 shape for EVERY branch the redirect path ever answers with
  * a 404 (i.e. everything except a real 'link' hit's own 307) — the ONLY
  * call site that finalizes a non-307 response anywhere in this file.
  * Replaces the bare `res.status(404).end()` every one of these branches
  * used to send with S2.5's branded document (T2.5.2) — status and
- * `Cache-Control` are unchanged from before T2.5.3; the body and
- * `Content-Type` are new. `slug` is whatever the CALLER decided this
+ * `Cache-Control` are unchanged from before T2.5.3; the body,
+ * `Content-Type` and the two hardening headers ({@link NOT_FOUND_CSP}) are
+ * new. Setting them here, in the chokepoint every terminal 404 already
+ * passes through, is the same argument that made this function exist: one
+ * place that cannot set a header on eight branches and forget it on the
+ * ninth. `slug` is whatever the CALLER decided this
  * branch should reflect (see this function's call sites, and the file
  * header's own note on `handleLinkTarget`'s branches) — always the RAW,
  * unescaped value: renderNotFound (not-found.ts) runs it through
@@ -253,6 +289,8 @@ export interface RedirectMiddlewareDeps {
 function sendNotFound(res: Response, renderNotFound: RenderNotFound, slug: string): void {
   res.set('Cache-Control', 'no-store');
   res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Content-Security-Policy', NOT_FOUND_CSP);
+  res.set('X-Content-Type-Options', 'nosniff');
   res.status(404).end(renderNotFound(slug));
 }
 
