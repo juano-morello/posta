@@ -213,7 +213,11 @@ afterEach(async () => {
 // exception, matching the template's own one `<style>` block —
 // tightening it to a nonce or hash would require per-request template
 // generation, which not-found.ts's header comment explicitly rules out.
-const EXPECTED_NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'";
+// `frame-ancestors 'none'` closes a follow-up finding: `default-src` is a
+// fetch directive under CSP3 and does NOT govern framing, so without an
+// explicit `frame-ancestors` this document could be embedded in a
+// cross-origin iframe despite the `'none'` above.
+const EXPECTED_NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
 
 /** Every 404 assertion in this file shares this shape: status, all four
  * headers, the exact rendered body for the value this task decided that

@@ -244,6 +244,16 @@ export interface RedirectMiddlewareDeps {
 // would require generating the template per request, which not-found.ts's
 // header comment explicitly rules out (it must render as a static string,
 // with no build step, when everything else is down).
+// `frame-ancestors 'none'` [security-review follow-up, LOW-MEDIUM,
+// accepted] closes a gap `default-src` does NOT: per CSP3, `frame-ancestors`
+// is not a fetch directive and does not fall back to `default-src`, so
+// without this directive `default-src 'none'` does nothing to stop this
+// document from being framed cross-origin. Deliberately NOT paired with an
+// `X-Frame-Options: DENY` header — `frame-ancestors` alone has been
+// supported by every non-EOL browser since CSP2 (~2015), and this page has
+// exactly one interactive element (a "volver a posta" link), no forms and
+// no authenticated action for a clickjack to target, so a second
+// permanently-maintained header buys nothing here.
 //
 // The paired `X-Content-Type-Options: nosniff` is not exploitable here
 // specifically — `Content-Type` on this response is a fixed correct
@@ -258,7 +268,7 @@ export interface RedirectMiddlewareDeps {
 // on every single click — INV-2, the redirect route is lean.
 // not-found-routing.test.ts asserts both halves: present on all nine
 // terminal 404 branches, absent on the 307.
-const NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'";
+const NOT_FOUND_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
 
 /**
  * Terminal 404 shape for EVERY branch the redirect path ever answers with
