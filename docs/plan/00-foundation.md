@@ -269,8 +269,37 @@ so `core`/`api`/`worker` inherit the pattern instead of each copying the exclude
 **before** E1 adds the first tests beside `core`'s source.
 → **files** `tsconfig.*` (a test variant), each package's tsconfig, `package.json` · **verify** a deliberate type error planted in a `*.test.ts` fails `pnpm typecheck` · **after** T0.5.4
 
-#### T0.5.6 · `chore: enable branch protection on main` ⛔ blocked
-Require CI green and no direct pushes. **Blocked until a remote exists** — the repo is local-only today. Pair with the first `git push -u`.
+#### T0.5.6 · `chore: enable branch protection on main` ✅ done 2026-07-26
+Require CI green and no direct pushes. Unblocked once `juano-morello/posta` existed.
+Stamped with a date rather than a sha because this task has no implementation
+commit — its "files" are GitHub settings, applied via
+`PUT /repos/juano-morello/posta/branches/main/protection`. What is recorded here
+*is* the artifact, so it needs to be exact:
+
+- `required_status_checks.strict: true`, `contexts:` `Install, lint, typecheck, test, build` · `Visual regression (gallery + primitives)` · `Migrate from empty`
+- `enforce_admins: true`
+- `required_pull_request_reviews: null`
+- `restrictions: null`
+- `allow_force_pushes: false`, `allow_deletions: false`
+
+The three contexts are exactly `ci.yml`'s three job names — all of which trigger on
+`pull_request` with no path filter and no job-level `if:`, verified against the checks
+that actually reported on PR #2's head. `images.yml`'s `Build, smoke+size test, and push`
+is deliberately **not** required: it triggers on `push` to main only, so requiring it
+would leave every PR waiting on a check that can never report.
+
+Two settings are judgement calls, recorded so nobody "fixes" them later:
+
+- **`enforce_admins: true`** — the verify criterion is that a *direct push is rejected*, and it has to mean everyone. Left false, the repo owner (the only human here) keeps pushing straight to main and the criterion is met on paper only.
+- **`required_pull_request_reviews: null`** — the brief asks for CI green and no direct pushes, nothing about review. This is a solo-maintainer repo: requiring an approving review would deadlock every PR, since the author cannot approve their own and there is no second account. Revisit if a second maintainer ever appears.
+
+Caveat on the verification: `git push --dry-run origin <temp>:main` **cannot** prove this.
+`--dry-run` stops before sending the ref update, so GitHub's pre-receive hook — where
+branch protection is enforced — never runs; it reported `ac17eb5..318dd92 → main` and
+exited 0 against a fully protected branch. Proving the rejection behaviourally requires a
+real push attempt to main, which is out of bounds here. What is verified is the applied
+configuration, read back from the API: `branches/main` → `protected: true`, and the
+protection object returning the six settings above verbatim.
 → **files** *(GitHub settings, not the repo)* · **verify** a direct push to main is rejected · **after** T0.5.5
 
 ---
