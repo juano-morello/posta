@@ -6,18 +6,20 @@ name: Images
 # it to the registry ahead of review would be backwards.
 #
 # ############################################################################
-# BLOCKED as of this writing (S0.7, T0.7.14 / see docs/plan/00-foundation.md's
-# S0.7 status, and T0.5.6 which is blocked for the identical underlying
-# reason): there is no container registry configured for this project, and
-# no git remote for this repo — "a merge to main pushes three digests"
-# literally cannot happen yet. This file is written correct-by-construction
-# (valid YAML, real published action versions, the right trigger, buildx +
-# a GitHub Actions layer cache, a SHA tag that is never the ONLY tag) so it
-# is ready the moment REGISTRY is configured — but it has never actually
-# run a real push, and nothing here should be read as a claim that it has.
-# The build + smoke + size steps below DO run for real value even before a
-# registry exists (they gate main on the same real images T0.7.12/13
-# already test); only the login/push steps are inert until REGISTRY is set.
+# The registry is GHCR — `vars.REGISTRY` is `ghcr.io/<owner>` (CLAUDE.md
+# decision log, 2026-07-26). Being the same-org registry, it authenticates
+# with the GITHUB_TOKEN Actions mints per run, so there is no long-lived
+# registry credential anywhere in this repo and no REGISTRY_USERNAME /
+# REGISTRY_PASSWORD secret to create. `packages: write` below is what makes
+# that token able to push; without it the push 403s.
+#
+# STILL UNPROVEN (S0.7, T0.7.14 / see docs/plan/00-foundation.md): this file
+# has never completed a real push. T0.7.14 stays blocked until a merge to
+# main actually produces three digests — nothing here should be read as a
+# claim that it already has. The build + smoke + size steps DO run for real
+# value regardless (they gate main on the same real images T0.7.12/13
+# already test); the login/push steps stay inert on any checkout where
+# REGISTRY is unset, e.g. a fork.
 # ############################################################################
 on:
   push:
@@ -32,16 +34,16 @@ concurrency:
 
 permissions:
   contents: read
-  # Only exercised once REGISTRY points at ghcr.io (a same-org registry
-  # authenticates via GITHUB_TOKEN); harmless for any other registry,
-  # which would use REGISTRY_USERNAME/REGISTRY_PASSWORD secrets instead.
+  # The GHCR push credential itself: this is what the per-run GITHUB_TOKEN
+  # needs to write packages. Drop it and every push below 403s.
   packages: write
 
 env:
-  # The cloud/registry provider is deliberately unchosen (CLAUDE.md) — this
-  # binds it late, via a plain repository/organization variable, never a
-  # hardcoded host. Empty by default, which is exactly why every push-side
-  # step below is gated on it being non-empty rather than assuming it's set.
+  # The registry host stays bound late, via a plain repository/organization
+  # variable, never a hardcoded host — repointing it is a settings change,
+  # not a code change. Empty on any checkout that hasn't set it (a fork),
+  # which is exactly why every push-side step below is gated on it being
+  # non-empty rather than assuming it's set.
   REGISTRY: ${{ vars.REGISTRY }}
 
 jobs:
@@ -137,16 +139,21 @@ jobs:
       - name: Enforce image size budgets
         run: pnpm test tests/containers/image-size.test.ts
 
-      # From here on: BLOCKED (see this file's header) until REGISTRY is
-      # configured — every step below is a no-op `if:` short-circuit
-      # otherwise, never a step that runs and silently fails or fakes success.
+      # From here on: everything is gated on REGISTRY being non-empty, so a
+      # checkout without it (a fork) short-circuits to a no-op `if:`, never
+      # a step that runs and silently fails or fakes success.
       - name: Log in to the registry
         if: ${{ env.REGISTRY != '' }}
         uses: docker/login-action@v4
         with:
+          # REGISTRY carries the owner path too (`ghcr.io/<owner>`); docker
+          # login keeps only the host, so one variable serves both this and
+          # the image refs below.
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+          # GHCR takes the token Actions mints for this run — scoped to this
+          # repo, expires with the job, nothing long-lived to rotate or leak.
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Re-invokes buildx per app, this time with `cache-from`/`cache-to:
       # type=gha`. That cache persists ACROSS workflow runs, not within this
@@ -158,9 +165,16 @@ jobs:
       # genuinely rebuilds from scratch here. Either way the pushed image is
       # the same correct artifact the tests above already exercised — the
       # cache only changes how long getting there takes, never what gets
-      # pushed. `latest` moves as a convenience tag; the SHA tag is what a
-      # rollback actually pins to — never publish only the former (plan: "a
-      # deploy pinned to latest cannot be rolled back").
+      # pushed.
+      #
+      # Tagging: the SHA tag is unconditional — it is the one a rollback can
+      # actually pin to (plan: "a deploy pinned to `latest` cannot be rolled
+      # back to a known artifact"). `latest` is only a convenience pointer,
+      # so it moves on main and nowhere else; off main the expression yields
+      # an empty line, which the action's tag-list parser discards. The
+      # trigger is main-only today, so that guard never fires in practice —
+      # it exists so widening the trigger later can't quietly start moving
+      # `latest` from a branch build.
       - name: Push api image
         if: ${{ env.REGISTRY != '' }}
         uses: docker/build-push-action@v7
@@ -170,7 +184,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/posta-api:${{ github.sha }}
-            ${{ env.REGISTRY }}/posta-api:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}/posta-api:latest', env.REGISTRY) || '' }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
@@ -183,7 +197,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/posta-worker:${{ github.sha }}
-            ${{ env.REGISTRY }}/posta-worker:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}/posta-worker:latest', env.REGISTRY) || '' }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
 
@@ -196,6 +210,6 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/posta-web:${{ github.sha }}
-            ${{ env.REGISTRY }}/posta-web:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}/posta-web:latest', env.REGISTRY) || '' }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
