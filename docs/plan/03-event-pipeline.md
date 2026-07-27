@@ -100,7 +100,7 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 A committed fixture of ~40 real `{ user_agent, referer, destination }` triples with their expected enrichment output — desktop and mobile browsers, all six in-app webviews, the LATAM Android long tail, and deliberately malformed entries. **This is not the classification corpus** (spec §7.2, which belongs to E4): it asserts descriptive fields only, with no expected verdict column anywhere in the file. Reused end-to-end by T3.5.5.
 → **files** `packages/core/src/enrichment/fixtures/ua-corpus.json` · `packages/core/src/enrichment/corpus.test.ts` · **verify** `pnpm test corpus.test.ts` runs `enrich()` over every fixture and asserts the expected output, plus asserts the fixture file contains no key matching `verdict|classification|is_bot|is_human` · **after** T3.2.5
 
-#### T3.2.7 · `test: forbid verdict vocabulary in the enrichment and worker source` [INV-4]
+#### T3.2.7 · `test: forbid verdict vocabulary in the enrichment and worker source` [INV-4] ✅ done (`18dc248`)
 Scans `packages/core/src/enrichment/**` and `apps/worker/src/**` for `is_bot`, `isBot`, `is_human`, `isHuman`, `classification`, `verdict`, `humano`, `unfurler` and `prefetch` used as an assigned value, and fails naming the file and line. T1.2.5 proves there is nowhere to *store* a verdict; this proves nobody computed one on the way there.
 → **files** `apps/worker/src/no-verdict.test.ts` · **verify** `pnpm test no-verdict.test.ts` passes on the current tree and fails with file:line against an inline fixture containing `const isBot = ua.includes('bot')` · **after** T3.2.6
 
