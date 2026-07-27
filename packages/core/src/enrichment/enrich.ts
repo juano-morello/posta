@@ -31,10 +31,11 @@ import type { UaDeviceType } from './ua';
 // This file's own scope (packages/core/src/enrichment/ only — no DB, no
 // cache, no link lookup) means enrich() cannot go fetch that destination
 // itself; it has to stay pure and receive it from the caller. That caller
-// is T3.3.2's flushBatch(events), which — per its own plan description —
-// already resolves each event's destination via a link cache/DB read keyed
-// by link_id before calling enrich(). So the destination is available at
-// the call site; it just doesn't live on CaptureEvent.
+// is T3.3.2's flushBatch(events), which resolves each event's destination
+// via a batched link lookup keyed by link_id before calling enrich() — an
+// implementation decision T3.3.2 made to close a gap the plan text didn't
+// specify. So the destination is available at the call site; it just
+// doesn't live on CaptureEvent.
 //
 // EnrichmentInput is therefore Pick<CaptureEvent, 'user_agent' | 'referer'>
 // plus a `destination` field, NOT the full CaptureEvent plus one. Picking
