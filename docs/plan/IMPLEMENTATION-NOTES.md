@@ -435,3 +435,26 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Deviation from plan:** file list expanded beyond the plan's stated two (`flush.ts`, `r2-put.test.ts`) to include the DI/env wiring knock-on above — necessary because `r2Client`/`r2Bucket` became required construction inputs for the one production call site (`app.module.ts`) and every test that boots the real `AppModule.forRoot()`.
 
 **Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.4 · `da8a8da` · 2026-07-27T20:34:38-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test poison-dlq.test.ts` — 4/4 pass (real Postgres testcontainer, real Redis testcontainer, real MinIO)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test split-retry.test.ts dlq.service.test.ts` — 21/21 pass, no regression
+
+**Landed concurrently with T3.4.4** in the same worktree — `poison-dlq.test.ts` calls `createFlushBatch({ db, r2Client, r2Bucket })`, so it structurally depends on T3.4.4's extended `flush.ts` signature. Committed second, immediately after T3.4.4, for exactly that reason; both were independently verified against the combined tree before either was staged.
+
+**Judgment calls reviewed and accepted (both flagged as open design gaps in the brief, resolved by the implementer):**
+1. **`SplitRetryResult.poisonEvents` reshaped** from `readonly CaptureEvent[]` to `readonly PoisonedEvent[]` (`{ event, error }`), preserving the original `Error` object (never reduced to a string) so a real Postgres error's own `.code` (the SQLSTATE) survives to the caller. `attemptBatch` itself still never branches on error type — only decides retry/split/poison from attempt count and sub-batch size.
+2. **`DlqReason` extended** with a third variant, `'flush-poison'`, plus a new `sqlstate: string | null` field on `EventsDlqJobPayload` (populated via a new `extractSqlState()` helper that walks a bounded 5-link `Error.cause` chain — required because drizzle-orm 0.45.2 wraps the real `pg.DatabaseError` in its own `DrizzleQueryError` via `cause` rather than copying `.code` onto itself; verified against installed source, confirmed by a real SQLSTATE 22003 surfacing in the test).
+3. **Wiring left undone, correctly scoped:** `retryWithSplit`/`flush.ts` still don't call `sendPoisonEventsToDlq` — the new exported function is a pure composition step (built around a narrow `PoisonDlqSink` structural interface, zero adapter code needed for a real `DlqService`) for whichever later task wires it into the accumulator's flush path. `app.module.ts` was correctly NOT touched, per the explicit stop-and-flag instruction in the brief.
+4. **`SplitRetryResult`'s `originalJobId`/`attemptsMade` stand-ins:** the flush's own `batch_id` and the `maxAttemptsPerBatch` value used, both documented as deliberate substitutes for BullMQ-job-shaped fields that don't exist at the flush level.
+5. **Real SQLSTATE reproduced deterministically:** `events.asn` is a plain Postgres `integer` with no app-level upper bound in `CaptureEventSchema` — `Number.MAX_SAFE_INTEGER` reliably triggers SQLSTATE 22003 ("integer out of range") on real Postgres, used instead of a synthetic/mocked error.
+
+**Findings surviving triage:** none.
+
+**Handed back to:** n/a. Note for whoever picks up the eventual accumulator-flush wiring task: `sendPoisonEventsToDlq` and `PoisonDlqSink` are ready to compose in, unused until then.
