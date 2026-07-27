@@ -24,7 +24,10 @@ afterEach(() => {
 
 describe('BatchAccumulator — count trigger (T3.3.1 verify: 100th event)', () => {
   it('flushes at the 100th event immediately, with zero timer elapsed', () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 100,
       batchIntervalMs: 2000,
@@ -47,7 +50,10 @@ describe('BatchAccumulator — count trigger (T3.3.1 verify: 100th event)', () =
   });
 
   it('a count-triggered flush cancels its own interval timer — a later batch is not flushed early by the stale timer', async () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 2,
       batchIntervalMs: 2000,
@@ -71,7 +77,10 @@ describe('BatchAccumulator — count trigger (T3.3.1 verify: 100th event)', () =
 
 describe('BatchAccumulator — interval trigger (T3.3.1 verify: 99 events at exactly 2000ms)', () => {
   it('flushes 99 events at exactly 2000ms when the count threshold (100) is never reached', async () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 100,
       batchIntervalMs: 2000,
@@ -97,6 +106,8 @@ describe('BatchAccumulator — in-flight flush safety (T3.3.1 verify)', () => {
   it('routes events added during an in-flight flush into the NEXT batch, none lost or duplicated', async () => {
     let resolveFirstFlush: (() => void) | undefined;
     const flush = vi.fn((_events: readonly string[], _batchId: string): Promise<void> => {
+      void _events;
+      void _batchId;
       if (flush.mock.calls.length === 1) {
         return new Promise<void>((resolve) => {
           resolveFirstFlush = resolve;
@@ -144,7 +155,10 @@ describe('BatchAccumulator — in-flight flush safety (T3.3.1 verify)', () => {
 
 describe('BatchAccumulator — batch_id stability (T3.3.1 verify)', () => {
   it('mints one batch_id per batch, shared by every event in that batch, and a new id for the next batch', () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 3,
       batchIntervalMs: 2000,
@@ -172,7 +186,10 @@ describe('BatchAccumulator — batch_id stability (T3.3.1 verify)', () => {
 
 describe('BatchAccumulator — flushNow()', () => {
   it('manually flushes the current batch, awaiting the callback before resolving', async () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 100,
       batchIntervalMs: 2000,
@@ -191,7 +208,10 @@ describe('BatchAccumulator — flushNow()', () => {
   });
 
   it('is a no-op that resolves immediately when the batch is empty', async () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 100,
       batchIntervalMs: 2000,
@@ -203,7 +223,10 @@ describe('BatchAccumulator — flushNow()', () => {
   });
 
   it('cancels the pending interval timer, so it never fires again for an already-flushed batch', async () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 100,
       batchIntervalMs: 2000,
@@ -220,6 +243,8 @@ describe('BatchAccumulator — flushNow()', () => {
   it('propagates a flush failure to its own caller, in addition to logging it', async () => {
     const flushError = new Error('r2 unavailable');
     const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
       throw flushError;
     });
     const errorSpy = vi.fn();
@@ -240,7 +265,10 @@ describe('BatchAccumulator — flushNow()', () => {
 
 describe('BatchAccumulator — size()', () => {
   it('reflects only the current open batch: 0 before any add, growing with each add, reset after a flush', () => {
-    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {});
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+    });
     const accumulator = new BatchAccumulator<string>({
       batchSize: 3,
       batchIntervalMs: 2000,
@@ -261,6 +289,8 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
   it('logs a count-triggered flush failure without throwing out of add()', async () => {
     const flushError = new Error('write failed');
     const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
       throw flushError;
     });
     const errorSpy = vi.fn();
@@ -285,6 +315,8 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
   it('logs an interval-triggered flush failure without an unhandled rejection', async () => {
     const flushError = new Error('r2 timeout');
     const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
       throw flushError;
     });
     const errorSpy = vi.fn();
@@ -308,6 +340,8 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
   it('defaults to consoleErrorLogger (writes to console.error) when no logger is injected', async () => {
     const flushError = new Error('boom');
     const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
       throw flushError;
     });
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -328,8 +362,73 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
   });
 });
 
+describe('BatchAccumulator — a throwing logger never masks the original flush error (fix-forward, silent-failure review)', () => {
+  it('flushNow() propagates the ORIGINAL flush error, not the logger\'s, when the logger itself throws', async () => {
+    const flushError = new Error('r2 unavailable');
+    const loggerError = new Error('logger transport down');
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+      throw flushError;
+    });
+    const logger: BatchAccumulatorLogger = {
+      error: () => {
+        throw loggerError;
+      },
+    };
+    const accumulator = new BatchAccumulator<string>({
+      batchSize: 100,
+      batchIntervalMs: 2000,
+      flush,
+      logger,
+    });
+
+    accumulator.add('a');
+
+    // The caller must see flushError (the real cause), never loggerError
+    // (a side effect of trying to report it).
+    await expect(accumulator.flushNow()).rejects.toBe(flushError);
+  });
+
+  it('the count-trigger fire-and-forget path survives a throwing logger with no unhandled rejection, and accepts a new batch afterward', async () => {
+    const flushError = new Error('write failed');
+    const loggerError = new Error('logger transport down');
+    const flush = vi.fn(async (_events: readonly string[], _batchId: string) => {
+      void _events;
+      void _batchId;
+      throw flushError;
+    });
+    const logger: BatchAccumulatorLogger = {
+      error: () => {
+        throw loggerError;
+      },
+    };
+    const accumulator = new BatchAccumulator<string>({
+      batchSize: 1,
+      batchIntervalMs: 2000,
+      flush,
+      logger,
+    });
+
+    // add() itself must not throw — even though BOTH the flush callback
+    // AND the logger it reports through reject/throw.
+    expect(() => accumulator.add('a')).not.toThrow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The accumulator must still be usable: a fresh batch opens and
+    // flushes normally afterward, proving the compounding failure above
+    // left no internal state corrupted.
+    accumulator.add('b');
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(flush.mock.calls[1]![0]).toEqual(['b']);
+  });
+});
+
 describe('BatchAccumulator — constructor validation', () => {
-  const noopFlush = async (_events: readonly string[], _batchId: string): Promise<void> => {};
+  const noopFlush = async (_events: readonly string[], _batchId: string): Promise<void> => {
+    void _events;
+    void _batchId;
+  };
 
   it.each([0, -1, 1.5, Number.NaN])(
     'throws on a non-positive-integer batchSize: %j',

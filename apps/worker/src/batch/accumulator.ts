@@ -66,7 +66,7 @@ export interface BatchAccumulatorLogger {
   error(message: string, meta?: Record<string, unknown>): void;
 }
 
-/** Production default — writes to stdout via `console.error`, mirroring
+/** Production default — writes to stderr via `console.error`, mirroring
  * the identical `consoleErrorLogger` both files named above already
  * export, as a separate instance rather than a shared import since none
  * of the three have any other reason to depend on each other. */
@@ -242,16 +242,34 @@ export class BatchAccumulator<T> {
    * what differs per trigger is only whether the caller (`add()`'s
    * fire-and-forget catch vs. `flushNow()`'s bare `await`) additionally
    * propagates or swallows the rethrow.
+   *
+   * [fix-forward, silent-failure review] The logger call itself is
+   * wrapped in its own try/catch: a THROWING logger (unusual for the
+   * default console.error-based consoleErrorLogger, but not impossible
+   * for a future real logger integration or a misbehaving injected one)
+   * must never replace the original flush error with its own — that
+   * would propagate out of this method as the logger's exception, hit
+   * add()'s/the interval timer's fire-and-forget `.catch(() => {})`
+   * (which assumes the failure was already logged by the time it gets
+   * there), and the batch's events would be gone with zero log line and
+   * zero trace of why. The ORIGINAL `error` is always rethrown below
+   * regardless of whether logging itself succeeded.
    */
   private async runFlush(events: readonly T[], batchId: string): Promise<void> {
     try {
       await this.flush(events, batchId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `BatchAccumulator flush failed for batch ${batchId} (${events.length} event(s)): ${message}`,
-        { batchId, eventCount: events.length },
-      );
+      try {
+        this.logger.error(
+          `BatchAccumulator flush failed for batch ${batchId} (${events.length} event(s)): ${message}`,
+          { batchId, eventCount: events.length },
+        );
+      } catch {
+        // The logger itself failed — nothing further to do about that
+        // here, but the ORIGINAL flush error below must still propagate
+        // regardless (see this method's own header).
+      }
       throw error;
     }
   }
