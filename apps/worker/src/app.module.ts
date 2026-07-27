@@ -1,16 +1,34 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE } from '@posta/core';
+import { createDbClient, EVENTS_DLQ_QUEUE, EVENTS_QUEUE, type DbClient } from '@posta/core';
+import type { CaptureEvent } from '@posta/contracts';
+import { BatchAccumulator, type BatchFlushCallback } from './batch/accumulator';
+import { createFlushBatch } from './batch/flush';
 import {
+  AccumulatingEventSink,
+  BATCH_ACCUMULATOR,
   consoleErrorLogger,
   EVENT_SINK,
   EVENTS_CONSUMER_LOGGER,
   EventsConsumer,
-  NoopEventSink,
   type EventSink,
   type EventsConsumerLogger,
 } from './consumer/events.consumer';
 import { DlqService } from './consumer/dlq.service';
+import {
+  consoleErrorLogger as shutdownConsoleErrorLogger,
+  SHUTDOWN_LOGGER,
+  SHUTDOWN_TIMEOUT_MS,
+  ShutdownService,
+  type ShutdownLogger,
+} from './consumer/shutdown';
+
+/** The DI token the worker's real Postgres `DbClient` (packages/core's
+ * `createDbClient`, T1.1.1) is registered under — internal to this
+ * module, not part of `AppModuleConfig`: nothing outside `forRoot()`
+ * needs to override or reach past the `BatchAccumulator` it feeds
+ * `createFlushBatch({ db })`. */
+const DB_CLIENT = Symbol('DB_CLIENT');
 
 // T3.1.2 [E3, S3.1] — establishes the worker's BullMQ ROOT CONNECTION so
 // T3.1.3 (the consumer, a `@Processor`/`WorkerHost` class with tuned
@@ -64,12 +82,47 @@ export interface AppModuleConfig {
    * `env.REDIS_URL`, passed through, never re-read from process.env
    * here. */
   readonly redisUrl: string;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.DATABASE_URL_WORKER` (the writer role, CLAUDE.md), passed
+   * through the same "validate once, pass down" discipline as
+   * `redisUrl`. Feeds `createDbClient()` (packages/core, T1.1.1), which
+   * backs both the production `flushBatch` (below) and, transitively,
+   * `AccumulatingEventSink`/`ShutdownService`'s shared
+   * `BatchAccumulator`. */
+  readonly databaseUrl: string;
+  /** [T3.1.6] Overrides `createDbClient()`'s own `max` — production
+   * (main.ts) leaves this unset and relies on `createDbClient`'s
+   * documented `process.env.DB_POOL_MAX` fallback (already set in
+   * .env.example/docker-compose/k8s manifests for real deployments).
+   * shutdown.test.ts passes a small explicit value instead, matching
+   * `packages/core/src/test/pg-container.ts`'s own `CONTAINER_POOL_MAX`
+   * precedent — vitest's own test process never loads `.env`, and unlike
+   * CI's dedicated `migrate-from-empty` job, the main `ci` job that runs
+   * `pnpm test` never sets `DB_POOL_MAX` either. */
+  readonly dbPoolMax?: number;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.EVENT_BATCH_SIZE`/`env.EVENT_BATCH_INTERVAL_MS`, passed through
+   * to the production `BatchAccumulator<CaptureEvent>` this module now
+   * constructs. */
+  readonly batchSize: number;
+  readonly batchIntervalMs: number;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.SHUTDOWN_TIMEOUT_MS`, passed through to `ShutdownService`. */
+  readonly shutdownTimeoutMs: number;
+  /** [T3.1.6] Overrides the flush callback the production
+   * `BatchAccumulator<CaptureEvent>` uses. Defaults to
+   * `createFlushBatch({ db })` (against the real `databaseUrl` above)
+   * when omitted — production (main.ts) never sets this.
+   * shutdown.test.ts substitutes a controllable delay to prove the
+   * `SHUTDOWN_TIMEOUT_MS` bound without needing a genuinely wedged
+   * Postgres write. */
+  readonly flush?: BatchFlushCallback<CaptureEvent>;
   /** Overrides the `EVENT_SINK` DI token `EventsConsumer` injects.
-   * Defaults to `NoopEventSink` when omitted — production (main.ts)
-   * never sets this. events.consumer.test.ts passes its own observing
-   * sink here to assert what the consumer actually decoded, against a
-   * real testcontainers Redis, with no database involved (T3.3.1 lands
-   * the real accumulator sink later). */
+   * Defaults to `AccumulatingEventSink` (T3.1.6) when omitted —
+   * production (main.ts) never sets this. events.consumer.test.ts and
+   * dlq.service.test.ts pass their own observing sink here to assert
+   * what the consumer actually decoded, against a real testcontainers
+   * Redis, with no database involved. */
   readonly eventSink?: EventSink;
   /** Overrides the `EVENTS_CONSUMER_LOGGER` DI token `EventsConsumer`
    * injects. Defaults to `consoleErrorLogger` when omitted — same
@@ -77,6 +130,12 @@ export interface AppModuleConfig {
    * substitutes a spy through the real production DI wiring rather than
    * a parallel one. */
   readonly logger?: EventsConsumerLogger;
+  /** [T3.1.6] Overrides the `SHUTDOWN_LOGGER` DI token `ShutdownService`
+   * injects. Defaults to shutdown.ts's own `consoleErrorLogger` when
+   * omitted — same override shape as `logger` above: shutdown.test.ts
+   * substitutes a spy to assert the `SHUTDOWN_TIMEOUT_MS` timeout path
+   * actually logs. */
+  readonly shutdownLogger?: ShutdownLogger;
 }
 
 @Module({})
@@ -129,8 +188,82 @@ export class AppModule {
         // wiring end to end, same "real BullMQ, no mocks" discipline as
         // the rest of this module.
         DlqService,
-        { provide: EVENT_SINK, useValue: config.eventSink ?? new NoopEventSink() },
+        // T3.1.6 — the worker's real Postgres connection, constructed
+        // exactly once per booted app (Nest providers are singletons by
+        // default within a module), from the already-validated
+        // `databaseUrl`/`dbPoolMax` above. Nothing outside this factory
+        // ever calls `process.env` for it.
+        {
+          provide: DB_CLIENT,
+          useFactory: (): DbClient => {
+            // `exactOptionalPropertyTypes: true` (tsconfig.base.json)
+            // treats an explicit `max: undefined` property as distinct
+            // from an OMITTED `max` key — `DbClientOptions.max` is typed
+            // `max?: number`, not `max?: number | undefined`, so the
+            // object literal must genuinely leave the key out when
+            // `config.dbPoolMax` is unset, not merely set it to
+            // `undefined`. The conditional spread below is what makes
+            // "unset dbPoolMax" behave exactly like "key never
+            // mentioned", so createDbClient's own resolvePoolMax()
+            // still falls through to its `process.env.DB_POOL_MAX`
+            // fallback (this file's own header, `dbPoolMax`'s doc
+            // comment) rather than seeing a `max` key present at all.
+            const client = createDbClient({
+              connectionString: config.databaseUrl,
+              ...(config.dbPoolMax !== undefined ? { max: config.dbPoolMax } : {}),
+            });
+            // [defensive, T3.1.6] A long-lived worker pool must never let
+            // an IDLE pooled connection's backend-side error (a network
+            // blip, a Postgres restart) become an uncaught exception —
+            // `pg`'s Pool forwards a client's own 'error' event onto the
+            // Pool itself (installed `pg-pool` source), and an 'error'
+            // event with zero listeners throws synchronously in Node
+            // (EventEmitter's own documented behavior). The affected
+            // client is already removed from the pool by `pg-pool`
+            // itself before this fires — there is nothing to do here
+            // besides make sure the failure stays VISIBLE instead of
+            // silently swallowed or crashing the process. Deliberately
+            // separate from ShutdownService's own scope (shutdown.ts's
+            // header) — this guards the LIVE process, not shutdown.
+            client.pool.on('error', (error: Error) => {
+              console.error('Worker Postgres pool reported an idle-connection error', {
+                message: error.message,
+              });
+            });
+            return client;
+          },
+        },
+        // T3.1.6 — the shared `BatchAccumulator<CaptureEvent>`: exactly
+        // ONE instance, injected into BOTH `AccumulatingEventSink`
+        // (feeds it via `add()`) and `ShutdownService` (drains it via
+        // `flushNow()` on SIGTERM) through the same `BATCH_ACCUMULATOR`
+        // token — see events.consumer.ts's own header for why that
+        // sharing is load-bearing, not incidental. `config.flush`
+        // overrides the callback entirely (shutdown.test.ts's wedged-flush
+        // scenario); production falls back to the real
+        // `createFlushBatch({ db })` (T3.3.2) against the DbClient above.
+        {
+          provide: BATCH_ACCUMULATOR,
+          useFactory: (dbClient: DbClient): BatchAccumulator<CaptureEvent> => {
+            const flush = config.flush ?? createFlushBatch({ db: dbClient.db });
+            return new BatchAccumulator<CaptureEvent>({
+              batchSize: config.batchSize,
+              batchIntervalMs: config.batchIntervalMs,
+              flush,
+            });
+          },
+          inject: [DB_CLIENT],
+        },
+        {
+          provide: EVENT_SINK,
+          useFactory: (accumulator: BatchAccumulator<CaptureEvent>): EventSink =>
+            config.eventSink ?? new AccumulatingEventSink(accumulator),
+          inject: [BATCH_ACCUMULATOR],
+        },
         { provide: EVENTS_CONSUMER_LOGGER, useValue: config.logger ?? consoleErrorLogger },
+        { provide: SHUTDOWN_TIMEOUT_MS, useValue: config.shutdownTimeoutMs },
+        { provide: SHUTDOWN_LOGGER, useValue: config.shutdownLogger ?? shutdownConsoleErrorLogger },
+        ShutdownService,
       ],
     };
   }

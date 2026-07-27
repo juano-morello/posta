@@ -24,8 +24,25 @@ async function bootstrap(): Promise<void> {
   // is a DynamicModule factory rather than a bare `@Module({})`: the
   // module needs the already-validated REDIS_URL passed in, not a second
   // read of process.env.
+  //
+  // [T3.1.6] databaseUrl/batchSize/batchIntervalMs/shutdownTimeoutMs are
+  // the SAME "validate once here, pass down" discipline as redisUrl —
+  // env.DATABASE_URL_WORKER (the writer role), env.EVENT_BATCH_SIZE/
+  // env.EVENT_BATCH_INTERVAL_MS (S3.3's batching knobs), and
+  // env.SHUTDOWN_TIMEOUT_MS (this task) are each read from process.env
+  // exactly once, right here, and nowhere deeper in the app. `dbPoolMax`
+  // and every `AppModuleConfig` override (`flush`/`eventSink`/`logger`/
+  // `shutdownLogger`) are deliberately left unset — production relies on
+  // `createDbClient`'s own `DB_POOL_MAX` env fallback and every other
+  // component's real default (app.module.ts's own header explains each).
   const app = await NestFactory.create<NestExpressApplication>(
-    AppModule.forRoot({ redisUrl: env.REDIS_URL }),
+    AppModule.forRoot({
+      redisUrl: env.REDIS_URL,
+      databaseUrl: env.DATABASE_URL_WORKER,
+      batchSize: env.EVENT_BATCH_SIZE,
+      batchIntervalMs: env.EVENT_BATCH_INTERVAL_MS,
+      shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+    }),
   );
 
   // The worker is a BullMQ consumer with no routed API of its own — this

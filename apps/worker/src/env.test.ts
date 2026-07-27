@@ -27,6 +27,7 @@ const VALID_WORKER_ENV: Record<string, string> = {
   LOG_LEVEL: 'info',
   EVENT_BATCH_SIZE: '100',
   EVENT_BATCH_INTERVAL_MS: '2000',
+  SHUTDOWN_TIMEOUT_MS: '30000',
 };
 
 describe('workerEnvSchema', () => {
@@ -36,12 +37,19 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('coerces WORKER_PORT, EVENT_BATCH_SIZE and EVENT_BATCH_INTERVAL_MS to numbers', () => {
+  it('coerces WORKER_PORT, EVENT_BATCH_SIZE, EVENT_BATCH_INTERVAL_MS and SHUTDOWN_TIMEOUT_MS to numbers', () => {
     const result = workerEnvSchema.parse(VALID_WORKER_ENV);
 
     expect(result.WORKER_PORT).toBe(3002);
     expect(result.EVENT_BATCH_SIZE).toBe(100);
     expect(result.EVENT_BATCH_INTERVAL_MS).toBe(2000);
+    expect(result.SHUTDOWN_TIMEOUT_MS).toBe(30000);
+  });
+
+  it('rejects SHUTDOWN_TIMEOUT_MS that is not a positive integer', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, SHUTDOWN_TIMEOUT_MS: '0' });
+
+    expect(result.success).toBe(false);
   });
 
   it('accepts an empty R2_ENDPOINT (production leaves it empty to use the R2 default)', () => {

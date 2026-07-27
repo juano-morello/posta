@@ -54,6 +54,23 @@ export const workerEnvSchema = z.object({
   // Postgres error the next time a batch actually fills.
   EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(500),
   EVENT_BATCH_INTERVAL_MS: z.coerce.number().int().positive(),
+
+  // T3.1.6 [S3.1] — bounds ShutdownService's onModuleDestroy() (apps/
+  // worker/src/consumer/shutdown.ts): on SIGTERM it pauses the BullMQ
+  // worker (awaiting whatever job is already in flight) and calls
+  // BatchAccumulator.flushNow() — both steps raced against this many
+  // milliseconds, so a genuinely wedged Postgres/R2 write cannot block a
+  // rollout forever. .env.example's default (30000) is not arbitrary: it
+  // matches docs/plan/10-deploy-operate.md's T10.5.5, which pairs it with
+  // `terminationGracePeriodSeconds: 60` on the worker's k8s Deployment —
+  // 30s comfortably covers a real flush of up to EVENT_BATCH_SIZE's own
+  // ceiling (500 rows, one INSERT + one SELECT) against Postgres, plus
+  // headroom for R2 once T3.4.3 lands, while leaving the OTHER 30s of the
+  // grace period for `process.exit(0)` itself and Kubernetes' own SIGKILL
+  // margin — a `SHUTDOWN_TIMEOUT_MS` raised without raising the grace
+  // period to match is exactly the drift T10.5.6's own infra test
+  // (`tests/infra/grace-period.test.ts`) exists to catch.
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive(),
 });
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

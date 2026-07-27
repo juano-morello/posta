@@ -4,6 +4,7 @@ import type { Job } from 'bullmq';
 import { z } from 'zod';
 import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, eventJobSchema } from '@posta/core';
 import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
+import { BatchAccumulator } from '../batch/accumulator';
 import { DlqService, toDlqIssues } from './dlq.service';
 
 // T3.1.3 [E3, S3.1] — the BullMQ CONSUMER half of the redirect hot
@@ -187,14 +188,51 @@ export const EVENTS_CONSUMER_LOGGER = Symbol('EVENTS_CONSUMER_LOGGER');
  */
 export type { EventsDlqJobPayload } from './dlq.service';
 
-/** The default `EventSink` — does nothing. Production wiring
- * (app.module.ts) uses this until T3.3.1 provides a real one; tests pass
- * their own substitute instead via `AppModuleConfig.eventSink`. */
+/** The default `EventSink` — does nothing. Used only as a fallback inside
+ * `AppModuleConfig.eventSink`'s own default expression (app.module.ts) for
+ * tests that want a sink with zero side effects; production wiring uses
+ * `AccumulatingEventSink` (below) instead, now that T3.3.1's accumulator
+ * and T3.3.2's flushBatch both exist for it to sit in front of. */
 @Injectable()
 export class NoopEventSink implements EventSink {
   async handle(_event: CaptureEvent): Promise<void> {
     // Intentionally empty — see this file's own header.
     void _event;
+  }
+}
+
+/** The DI token `AppModule.forRoot()` (app.module.ts, T3.1.6) registers
+ * the shared `BatchAccumulator<CaptureEvent>` instance under — a Symbol,
+ * same discipline as `EVENT_SINK`/`EVENTS_CONSUMER_LOGGER` above. Exactly
+ * ONE accumulator instance exists per booted app: this token is how BOTH
+ * `AccumulatingEventSink` (below, feeds it via `add()`) and
+ * `ShutdownService` (../consumer/shutdown.ts, drains it via `flushNow()`
+ * on SIGTERM) inject the SAME instance rather than two independently
+ * constructed ones that could silently drift apart. */
+export const BATCH_ACCUMULATOR = Symbol('BATCH_ACCUMULATOR');
+
+/** T3.1.6 [E3, S3.1] — the real production `EventSink`: forwards every
+ * decoded `CaptureEvent` straight into the shared `BatchAccumulator`,
+ * which itself flushes to Postgres (T3.3.2's `flushBatch`, via
+ * `createFlushBatch`) on whichever of its own two triggers fires first,
+ * or on a manual `flushNow()` at shutdown. `handle()` can never reject:
+ * `BatchAccumulator.add()` is fully synchronous and, per that class's own
+ * header, never throws and never propagates a flush failure back to its
+ * caller — a triggered flush's own rejection is caught and logged
+ * INSIDE the accumulator, never here. `EventsConsumer.process()`'s
+ * try/catch around `sink.handle()` therefore exists for some OTHER
+ * sink's future failure mode, not this one — this sink's own jobs always
+ * reach BullMQ's 'completed' state, which is exactly what lets
+ * shutdown.test.ts wait on `job.getState() === 'completed'` as its signal
+ * that an event has genuinely been accumulated, not merely enqueued. */
+@Injectable()
+export class AccumulatingEventSink implements EventSink {
+  constructor(
+    @Inject(BATCH_ACCUMULATOR) private readonly accumulator: BatchAccumulator<CaptureEvent>,
+  ) {}
+
+  async handle(event: CaptureEvent): Promise<void> {
+    this.accumulator.add(event);
   }
 }
 

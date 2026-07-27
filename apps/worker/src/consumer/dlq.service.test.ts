@@ -40,6 +40,41 @@ import type { EventsConsumerLogger, EventSink } from './events.consumer';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
+// [T3.1.6] AppModule.forRoot() now always provisions a real Postgres
+// DbClient + BatchAccumulator (app.module.ts) — even here, where every
+// test overrides `eventSink`, so that wiring is provisioned but never
+// actually queried. This placeholder connection string only has to
+// satisfy createDbClient()'s own construction-time validation (a
+// non-empty string): `pg.Pool` never connects eagerly (a real TCP
+// connect happens lazily, on first query), and no query is ever issued
+// against it in this file. batchSize/batchIntervalMs/shutdownTimeoutMs
+// are similarly unused placeholders — nothing here ever fills a batch or
+// triggers a shutdown.
+//
+// `dbPoolMax` is NOT optional here despite being optional on
+// `AppModuleConfig` itself: leaving it unset makes createDbClient() fall
+// through to reading `process.env.DB_POOL_MAX` (db/client.ts's own
+// resolvePoolMax()) — unset both in a plain local shell and, per this
+// comment's own earlier note, in CI's main `pnpm test` job — and THAT
+// throws synchronously inside `DB_CLIENT`'s `useFactory`. Critically,
+// that throw never becomes an ordinary rejected promise this file's own
+// try/finally could catch: `NestFactory.createApplicationContext()`
+// defaults to `abortOnError: true` (verified against the installed
+// @nestjs/core@11.1.28 source, nest-factory.js's own
+// `handleInitializationError()`), which calls `process.abort()` on ANY
+// DI provider construction failure before the error is ever rethrown —
+// a hard process crash (observed as vitest's forked worker exiting
+// unexpectedly, not a normal failing assertion), not something a test's
+// own `catch`/`finally` ever gets a chance to run against.
+const UNUSED_DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
+const UNUSED_ACCUMULATOR_CONFIG = {
+  databaseUrl: UNUSED_DATABASE_URL,
+  dbPoolMax: 5,
+  batchSize: 100,
+  batchIntervalMs: 2_000,
+  shutdownTimeoutMs: 5_000,
+};
+
 function buildCaptureEvent(overrides: Partial<CaptureEvent> = {}): CaptureEvent {
   return {
     event_id: newId(),
@@ -239,7 +274,7 @@ describe('EventsConsumer — attempts-exhausted routes to the DLQ (real BullMQ, 
     let app: INestApplicationContext | undefined;
     try {
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       const event = buildCaptureEvent();
@@ -305,7 +340,7 @@ describe('EventsConsumer — attempts-exhausted routes to the DLQ (real BullMQ, 
     let app: INestApplicationContext | undefined;
     try {
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       const event = buildCaptureEvent();

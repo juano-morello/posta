@@ -32,6 +32,27 @@ import {
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
+// [T3.1.6] AppModule.forRoot() now always provisions a real Postgres
+// DbClient + BatchAccumulator (app.module.ts) — even here, where every
+// test overrides `eventSink`, so that wiring is provisioned but never
+// actually queried. Same placeholder-config precedent as
+// dlq.service.test.ts's own UNUSED_ACCUMULATOR_CONFIG (see that file for
+// the full rationale, including why `dbPoolMax` must be set explicitly —
+// leaving it unset makes createDbClient() read `process.env.DB_POOL_MAX`,
+// unset here, and NestFactory's default `abortOnError: true` turns that
+// into a hard `process.abort()` instead of a catchable rejection): this
+// connection string only has to satisfy createDbClient()'s own
+// construction-time validation (a non-empty string) — `pg.Pool` never
+// connects eagerly — and no query is ever issued against it in this file.
+const UNUSED_DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
+const UNUSED_ACCUMULATOR_CONFIG = {
+  databaseUrl: UNUSED_DATABASE_URL,
+  dbPoolMax: 5,
+  batchSize: 100,
+  batchIntervalMs: 2_000,
+  shutdownTimeoutMs: 5_000,
+};
+
 function buildCaptureEvent(overrides: Partial<CaptureEvent> = {}): CaptureEvent {
   return {
     event_id: newId(),
@@ -86,7 +107,7 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     let app: INestApplicationContext | undefined;
     try {
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       const events = Array.from({ length: 20 }, (_unused, index) =>
@@ -146,7 +167,7 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     let app: INestApplicationContext | undefined;
     try {
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       // `ip` is not a key eventJobSchema (.strict()) allows — invariant 6's
@@ -194,7 +215,7 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     let app: INestApplicationContext | undefined;
     try {
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       const event = buildCaptureEvent();
@@ -299,7 +320,7 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
       await dlqQueue.obliterate({ force: true });
 
       app = await NestFactory.createApplicationContext(
-        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger }),
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger, ...UNUSED_ACCUMULATOR_CONFIG }),
       );
 
       // No `defaultJobOptions` — a single attempt, same as the test above,
