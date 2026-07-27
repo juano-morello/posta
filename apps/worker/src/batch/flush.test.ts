@@ -1,7 +1,16 @@
 import path from 'node:path';
+import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { Pool, QueryResult } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { links, newId, runSqlMigrations, user } from '@posta/core';
+import {
+  createR2Client,
+  eventBatchKey,
+  links,
+  newId,
+  runSqlMigrations,
+  user,
+  type R2ClientConfig,
+} from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { createFlushBatch, type FlushBatch, type FlushBatchLogger } from './flush';
@@ -28,12 +37,32 @@ import { createFlushBatch, type FlushBatch, type FlushBatchLogger } from './flus
 // `it()` below only asserts against state already captured there, so
 // none of them depend on declaration order or on each other, even
 // though they share one expensive testcontainers Postgres boot.
+//
+// [T3.4.4] flushBatch now also PUTs to R2 on every flush (see flush.ts's
+// own header) — createFlushBatch's `r2Client`/`r2Bucket` are REQUIRED
+// options as of that task, so this suite's own assertions (still entirely
+// about the POSTGRES side — see file header above) now need a real R2
+// client too, or every flushBatch() call below would reject before ever
+// reaching the SELECT/INSERT this file actually tests. `REAL_R2_CONFIG`
+// mirrors packages/core/src/r2/client.test.ts's own `REAL_CONFIG`
+// (same local-dev-only MinIO root credentials, already in .env.example).
+// Both flushes of `events100` are given the SAME explicit `batchId` —
+// `eventBatchKey`'s own idempotency property (retrying the same batch_id
+// overwrites the same R2 key rather than duplicating an object) means
+// this needs only ONE key tracked for cleanup, not two.
 const CONTAINER_TEST_TIMEOUT_MS = 120_000;
 const MIGRATIONS_DIR = path.join(
   path.dirname(require.resolve('@posta/core/package.json')),
   'migrations',
   'sql',
 );
+
+const REAL_R2_CONFIG: R2ClientConfig = {
+  endpoint: 'http://localhost:9000',
+  accessKeyId: 'posta-local-dev',
+  secretAccessKey: 'posta-local-dev-secret',
+  bucket: 'posta-events',
+};
 
 // The real, verified `events` column count — schema/events.ts (T1.2.4)
 // and packages/core/src/r2/ndjson.ts (T3.4.2) both independently state
@@ -226,6 +255,8 @@ async function fetchEventEnrichment(
 
 describe('createFlushBatch / flushBatch (T3.3.2)', () => {
   let handle: PgContainerHandle;
+  let r2Client: ReturnType<typeof createR2Client>;
+  const r2CreatedKeys: string[] = [];
 
   let profile0EventId: string; // desktop Chrome + Instagram referer, resolvable destination
   let profile1EventId: string; // Instagram in-app UA, no referer
@@ -246,6 +277,7 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
   beforeAll(async () => {
     handle = await startPgContainer();
     await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
+    r2Client = createR2Client(REAL_R2_CONFIG);
 
     const tenantA = await seedTenant(handle);
     const tenantB = await seedTenant(handle);
@@ -330,18 +362,29 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
     profile5EventId = events100[5]!.event_id;
 
     const flushLogger = makeRecordingLogger();
-    const flushBatch: FlushBatch = createFlushBatch({ db: handle.db, logger: flushLogger });
+    const flushBatch: FlushBatch = createFlushBatch({
+      db: handle.db,
+      r2Client,
+      r2Bucket: REAL_R2_CONFIG.bucket,
+      logger: flushLogger,
+    });
     const querySpy = spyOnPoolQueries(handle.pool);
+
+    // Same explicit batchId for both flushes of events100 below — see
+    // this file's own header (T3.4.4 addendum) for why that means only
+    // ONE R2 key needs tracking for cleanup, not two.
+    const events100BatchId = newId();
+    r2CreatedKeys.push(eventBatchKey(events100BatchId, events100[0]!.occurred_at));
 
     querySpy.reset();
     flushLogger.reset();
-    await flushBatch(events100);
+    await flushBatch(events100, events100BatchId);
     firstFlushCalls = [...querySpy.calls];
     firstFlushLoggerCalls = [...flushLogger.calls];
 
     querySpy.reset();
     flushLogger.reset();
-    await flushBatch(events100); // [INV-8] the SAME batch, again
+    await flushBatch(events100, events100BatchId); // [INV-8] the SAME batch, again
     secondFlushCalls = [...querySpy.calls];
     secondFlushLoggerCalls = [...flushLogger.calls];
 
@@ -360,6 +403,14 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
   }, CONTAINER_TEST_TIMEOUT_MS);
 
   afterAll(async () => {
+    if (r2CreatedKeys.length > 0) {
+      await Promise.all(
+        r2CreatedKeys.splice(0).map((key) =>
+          r2Client.send(new DeleteObjectCommand({ Bucket: REAL_R2_CONFIG.bucket, Key: key })),
+        ),
+      );
+    }
+    r2Client.destroy();
     await handle.stop();
   }, CONTAINER_TEST_TIMEOUT_MS);
 
@@ -426,10 +477,12 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
     const tenant = await seedTenant(handle);
     const link = await seedLink(handle, tenant, 'clean', 'https://clean.example.com/ok');
     const logger = makeRecordingLogger();
-    const flush = createFlushBatch({ db: handle.db, logger });
+    const flush = createFlushBatch({ db: handle.db, r2Client, r2Bucket: REAL_R2_CONFIG.bucket, logger });
     const cleanEvent = buildCaptureEvent({ tenant_id: tenant, link_id: link, slug: 'clean' });
+    const batchId = newId();
+    r2CreatedKeys.push(eventBatchKey(batchId, cleanEvent.occurred_at));
 
-    await flush([cleanEvent]);
+    await flush([cleanEvent], batchId);
 
     expect(logger.calls).toHaveLength(0);
   });
@@ -437,10 +490,12 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
   it('defaults to consoleErrorLogger (writes to console.error) when no logger is injected', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      const flush = createFlushBatch({ db: handle.db });
+      const flush = createFlushBatch({ db: handle.db, r2Client, r2Bucket: REAL_R2_CONFIG.bucket });
       const orphanEvent = buildCaptureEvent({}); // random tenant_id/link_id, never seeded -> not-found
+      const batchId = newId();
+      r2CreatedKeys.push(eventBatchKey(batchId, orphanEvent.occurred_at));
 
-      await flush([orphanEvent]);
+      await flush([orphanEvent], batchId);
 
       expect(consoleSpy).toHaveBeenCalledTimes(1);
     } finally {

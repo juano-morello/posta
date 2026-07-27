@@ -66,6 +66,15 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 // a hard process crash (observed as vitest's forked worker exiting
 // unexpectedly, not a normal failing assertion), not something a test's
 // own `catch`/`finally` ever gets a chance to run against.
+// [T3.4.4] `flush` is now ALSO required here for the identical reason
+// `dbPoolMax` is above: `BATCH_ACCUMULATOR`'s useFactory builds a real
+// `createFlushBatch({ r2Client, r2Bucket, ... })` whenever `config.flush`
+// is absent, which needs real `r2*` config this file has no reason to
+// carry (every test here overrides `eventSink`, so the accumulator this
+// callback would be attached to is provisioned but never driven) — a
+// bare no-op sidesteps that construction entirely, matching
+// health.controller.test.ts's own identical "always succeeds instantly,
+// nothing here ever really flushes" precedent.
 const UNUSED_DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
 const UNUSED_ACCUMULATOR_CONFIG = {
   databaseUrl: UNUSED_DATABASE_URL,
@@ -73,6 +82,7 @@ const UNUSED_ACCUMULATOR_CONFIG = {
   batchSize: 100,
   batchIntervalMs: 2_000,
   shutdownTimeoutMs: 5_000,
+  flush: async (): Promise<void> => {},
 };
 
 function buildCaptureEvent(overrides: Partial<CaptureEvent> = {}): CaptureEvent {

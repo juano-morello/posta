@@ -1,8 +1,12 @@
+import { PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { CaptureEvent } from '@posta/contracts';
 import {
   enrich,
+  eventBatchKey,
   insertEventsBatch,
+  newId,
   resolveDestinationsByLinkIds,
+  serializeBatch,
   type DbClient,
   type LoggedEvent,
   type LinkDestinationLookup,
@@ -70,9 +74,57 @@ import {
 // LoggedEvent (packages/core/src/r2/ndjson.ts, T3.4.2) already names
 // this exact merged shape and this file (T3.3.2) as the sibling task
 // that assembles it; reusing it here (rather than inventing a second,
-// unnamed "enriched event" shape) is what lets a later task
-// (R2's own write, T3.4.3) hand this same array straight to
+// unnamed "enriched event" shape) is what lets this same task compose
+// R2's own write (below) by handing that same array straight to
 // serializeBatch() without redoing enrichment.
+//
+// T3.4.4 [E3, S3.4][INV-7] — ONE R2 PUT PER FLUSH, NEVER PER EVENT.
+// flushBatch now composes the three T3.4.1-T3.4.3 pieces
+// (createR2Client, serializeBatch, eventBatchKey — all already built,
+// this task only wires them in) alongside the Postgres write above: the
+// SAME `loggedEvents` array (LoggedEvent[], the merged CaptureEvent &
+// EnrichmentResult shape) that already feeds `toNewEventRow` also feeds
+// `serializeBatch`, and the WHOLE serialized batch goes out as a single
+// `PutObjectCommand` — R2 bills per PUT, so one object per click would be
+// real money at any volume, quite apart from turning a 10k-event burst
+// into 10k round trips. `r2Client` is threaded in via
+// `CreateFlushBatchOptions` (below), constructed ONCE at boot by
+// whoever wires this up (createR2Client's own header — never
+// per-request, never per-batch), matching `db`'s identical
+// closed-over-not-reconstructed treatment.
+//
+// batchId — WHERE THE R2 KEY'S STABILITY ACTUALLY COMES FROM: eventBatchKey
+// needs an opaque `batchId` to key the object with (packages/core/src/r2/
+// keys.ts's own header: "every retry of the same batch PUTs to the same
+// key"). BatchAccumulator (T3.3.1) already mints exactly this id once, when
+// a batch opens, and its own header already names this file as the
+// consumer that keys the R2 object off it — so `flushBatch`'s own second
+// parameter is `batchId`, structurally the SAME shape accumulator.ts's
+// `BatchFlushCallback<CaptureEvent>` already expects it to accept. It stays
+// OPTIONAL, defaulting to a freshly minted `newId()` when omitted, rather
+// than required: this task does not wire flushBatch into BatchAccumulator
+// (that wiring, and threading a batch's own id through
+// apps/worker/src/batch/split-retry.ts's retry loop so a RETRY of the same
+// batch reuses the same key, are both later tasks' jobs, deliberately out
+// of this one's scope) — an optional default keeps every existing caller
+// (flush.test.ts, split-retry.ts's `flushBatch(events)`, both call with one
+// argument) compiling unchanged, while a caller that DOES have a real
+// batch_id (the eventual BatchAccumulator wiring) gets the idempotent-key
+// property this parameter exists for. Known, narrow consequence recorded
+// here rather than silently: until that wiring lands, a batch retried
+// through `retryWithSplit` (which never passes `batchId`) mints a NEW
+// R2 key per attempt rather than overwriting the same one — duplicate
+// objects holding identical data, not data loss, and not this task's to
+// fix.
+//
+// Order between the R2 PUT and the Postgres INSERT is NOT coupled here —
+// they run concurrently (`Promise.all`) and either can settle first.
+// Coupling them (no Postgres commit if the R2 PUT failed) is T3.4.6's job
+// by name, not this one's; a real PUT failure still rejects the whole
+// `flushBatch` call (propagating to BatchAccumulator's own
+// already-established failure/retry path) rather than being swallowed
+// into a silent no-op — R2 does not become optional just because nothing
+// yet couples it to the Postgres commit (invariant 7).
 
 /** Minimal logger shape this file needs — the SAME `{ error(message,
  * meta?): void }` shape apps/worker/src/consumer/events.consumer.ts's
@@ -139,8 +191,8 @@ function toNewEventRow(logged: LoggedEvent): NewEvent {
 
 /** Enriches one CaptureEvent with its already-resolved `destination`
  * (or `null` when unresolvable — see this file's own header), producing
- * the merged `LoggedEvent` shape both the Postgres insert (below) and a
- * later R2 write (T3.4.3, not this task) consume identically. */
+ * the merged `LoggedEvent` shape both the Postgres insert and the R2
+ * write (both below) consume identically. */
 function toLoggedEvent(event: CaptureEvent, destination: string | null): LoggedEvent {
   return {
     ...event,
@@ -214,17 +266,38 @@ function logUnresolvedDestinations(
   );
 }
 
-/** The `flushBatch(events)` shape this file builds — also exactly the
- * shape apps/worker/src/batch/accumulator.ts's `BatchFlushCallback<T>`
- * expects as its `flush` option (a function taking FEWER parameters
- * than a callback type declares is still structurally assignable to
- * it — TypeScript never requires this function to accept the extra
- * `batchId` argument a caller wiring it into `BatchAccumulator` would
- * pass). That wiring is a later task, not this one. */
-export type FlushBatch = (events: readonly CaptureEvent[]) => Promise<void>;
+/** The `flushBatch(events, batchId?)` shape this file builds — also
+ * exactly the shape apps/worker/src/batch/accumulator.ts's
+ * `BatchFlushCallback<T>` expects as its `flush` option (a function whose
+ * second parameter is OPTIONAL is still structurally assignable where
+ * `BatchFlushCallback<CaptureEvent>` requires it — every real caller
+ * BatchAccumulator drives always supplies one). `batchId` defaults to a
+ * freshly minted `newId()` when a caller omits it — see this file's own
+ * header (T3.4.4) for why: it keeps existing single-argument callers
+ * (flush.test.ts, split-retry.ts's `flushBatch(events)`) compiling and
+ * behaving unchanged, while a caller that DOES pass BatchAccumulator's own
+ * stable id gets `eventBatchKey`'s idempotent-retry property. */
+export type FlushBatch = (events: readonly CaptureEvent[], batchId?: string) => Promise<void>;
 
 export interface CreateFlushBatchOptions {
   readonly db: DbClient['db'];
+  /** The already-constructed S3-compatible client (packages/core/src/r2/
+   * client.ts's `createR2Client`, T3.4.1) — built ONCE at boot by whoever
+   * wires this up, never here; see that function's own docstring for why
+   * constructing per-request/per-batch is wrong. Typed `S3Client` directly
+   * (not re-derived via `ReturnType<typeof createR2Client>`) since
+   * `@aws-sdk/client-s3` is now a direct dependency of this package —
+   * `PutObjectCommand` (below) needs the same import regardless, so there
+   * is no `DbClient`-style "never import the underlying library" boundary
+   * to preserve here the way there is for drizzle-orm. */
+  readonly r2Client: S3Client;
+  /** The bucket every batch's NDJSON object is written to — `R2_BUCKET_EVENTS`
+   * in both apps' own env schemas (apps/worker/src/env.ts,
+   * apps/api/src/env.ts). A plain string, not folded into `r2Client` itself:
+   * S3Client's constructor has no "default bucket" concept (see
+   * `R2ClientConfig`'s own docstring), so a bucket is always supplied
+   * per-call. */
+  readonly r2Bucket: string;
   /** Defaults to {@link consoleErrorLogger} when omitted — same
    * optional-with-a-console-default shape `BatchAccumulatorOptions`
    * (accumulator.ts) already uses for its own `logger` field. */
@@ -232,16 +305,48 @@ export interface CreateFlushBatchOptions {
 }
 
 /**
- * Builds a `flushBatch(events)` closure bound to `db` (and, optionally,
- * a `logger` for the unresolved-destination summary — see this file's
- * own header). `db` is typed as `DbClient['db']` (an indexed-access type
- * off `@posta/core`'s own `DbClient` interface), not `NodePgDatabase`
- * written out directly — apps/worker never imports drizzle-orm itself,
- * matching apps/api/src/redirect/resolve-link.ts's identical precedent
- * (it only ever imports `DbClient`'s TYPE plus this package's own query
- * functions). Drizzle stays an implementation detail of packages/core;
- * `resolveDestinationsByLinkIds` and `insertEventsBatch` are the two
- * calls that actually touch it.
+ * Writes one batch's NDJSON body to R2 as a single `PutObjectCommand` —
+ * see this file's own header (T3.4.4) for why ONE PUT per flush, never
+ * one per event, is the property that matters here. `firstOccurredAt`
+ * is the CALLER's choice of which event's timestamp represents the whole
+ * batch (see `eventBatchKey`'s own docstring) — this function does not
+ * decide that, only turns the already-decided pieces into bytes on the
+ * wire. Explicitly UTF-8-encodes via `Buffer.from` rather than handing
+ * `serializeBatch`'s plain string straight to `Body` — `ndjson.ts`'s own
+ * header names this exact encoding step as the later caller's job, not
+ * `serializeBatch`'s.
+ */
+async function putEventBatch(
+  r2Client: S3Client,
+  r2Bucket: string,
+  batchId: string,
+  firstOccurredAt: string,
+  loggedEvents: readonly LoggedEvent[],
+): Promise<void> {
+  const key = eventBatchKey(batchId, firstOccurredAt);
+  const body = serializeBatch(loggedEvents);
+
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: r2Bucket,
+      Key: key,
+      Body: Buffer.from(body, 'utf-8'),
+      ContentType: 'application/x-ndjson',
+    }),
+  );
+}
+
+/**
+ * Builds a `flushBatch(events, batchId?)` closure bound to `db`, `r2Client`
+ * and `r2Bucket` (and, optionally, a `logger` for the unresolved-destination
+ * summary — see this file's own header). `db` is typed as `DbClient['db']`
+ * (an indexed-access type off `@posta/core`'s own `DbClient` interface), not
+ * `NodePgDatabase` written out directly — apps/worker never imports
+ * drizzle-orm itself, matching apps/api/src/redirect/resolve-link.ts's
+ * identical precedent (it only ever imports `DbClient`'s TYPE plus this
+ * package's own query functions). Drizzle stays an implementation detail of
+ * packages/core; `resolveDestinationsByLinkIds` and `insertEventsBatch` are
+ * the two calls that actually touch it.
  *
  * A redirect never blocks on analytics (invariant 1) is untouched here
  * on purpose — that invariant governs the HOT PATH (apps/api's redirect
@@ -249,10 +354,14 @@ export interface CreateFlushBatchOptions {
  * off that path, downstream of the BullMQ queue.
  */
 export function createFlushBatch(options: CreateFlushBatchOptions): FlushBatch {
-  const { db, logger = consoleErrorLogger } = options;
+  const { db, r2Client, r2Bucket, logger = consoleErrorLogger } = options;
 
-  return async function flushBatch(events: readonly CaptureEvent[]): Promise<void> {
-    if (events.length === 0) return;
+  return async function flushBatch(
+    events: readonly CaptureEvent[],
+    batchId: string = newId(),
+  ): Promise<void> {
+    const [firstEvent] = events;
+    if (firstEvent === undefined) return;
 
     const linkIds = [...new Set(events.map((event) => event.link_id))];
     const destinationsByLinkId = await resolveDestinationsByLinkIds(db, linkIds);
@@ -260,10 +369,20 @@ export function createFlushBatch(options: CreateFlushBatchOptions): FlushBatch {
     const resolutions = events.map((event) => resolveDestination(event, destinationsByLinkId));
     logUnresolvedDestinations(logger, resolutions, linkIds.length);
 
-    const rows: NewEvent[] = resolutions.map(({ event, destination }) =>
-      toNewEventRow(toLoggedEvent(event, destination)),
+    const loggedEvents: LoggedEvent[] = resolutions.map(({ event, destination }) =>
+      toLoggedEvent(event, destination),
     );
+    const rows: NewEvent[] = loggedEvents.map(toNewEventRow);
 
-    await insertEventsBatch(db, rows);
+    // [T3.4.4] The Postgres INSERT and the R2 PUT run concurrently — see
+    // this file's own header for why their relative order is deliberately
+    // NOT coupled yet (that coupling is T3.4.6's job). A rejection from
+    // either propagates as `Promise.all`'s own rejection, failing the
+    // WHOLE flush loudly rather than silently treating R2 as optional
+    // (invariant 7).
+    await Promise.all([
+      insertEventsBatch(db, rows),
+      putEventBatch(r2Client, r2Bucket, batchId, firstEvent.occurred_at, loggedEvents),
+    ]);
   };
 }

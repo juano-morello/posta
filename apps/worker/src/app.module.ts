@@ -1,6 +1,6 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { createDbClient, EVENTS_DLQ_QUEUE, EVENTS_QUEUE, type DbClient } from '@posta/core';
+import { createDbClient, createR2Client, EVENTS_DLQ_QUEUE, EVENTS_QUEUE, type DbClient } from '@posta/core';
 import type { CaptureEvent } from '@posta/contracts';
 import { BatchAccumulator, type BatchFlushCallback } from './batch/accumulator';
 import { createFlushBatch } from './batch/flush';
@@ -111,13 +111,39 @@ export interface AppModuleConfig {
    * `env.SHUTDOWN_TIMEOUT_MS`, passed through to `ShutdownService`. */
   readonly shutdownTimeoutMs: number;
   /** [T3.1.6] Overrides the flush callback the production
-   * `BatchAccumulator<CaptureEvent>` uses. Defaults to
-   * `createFlushBatch({ db })` (against the real `databaseUrl` above)
-   * when omitted — production (main.ts) never sets this.
-   * shutdown.test.ts substitutes a controllable delay to prove the
-   * `SHUTDOWN_TIMEOUT_MS` bound without needing a genuinely wedged
-   * Postgres write. */
+   * `BatchAccumulator<CaptureEvent>` uses. Defaults to the real
+   * `createFlushBatch({ db, r2Client, r2Bucket })` (T3.4.4, against the
+   * real `databaseUrl`/`r2*` fields above) when omitted — production
+   * (main.ts) never sets this. shutdown.test.ts substitutes a
+   * controllable delay to prove the `SHUTDOWN_TIMEOUT_MS` bound without
+   * needing a genuinely wedged Postgres write; several consumer-level
+   * tests (dlq.service.test.ts, events.consumer.test.ts,
+   * malformed-job.test.ts) substitute a plain no-op here too — they
+   * override `eventSink` instead, which means the real accumulator this
+   * callback would be attached to is constructed but never actually
+   * driven, so there is nothing for a real flush to prove in those
+   * files. */
   readonly flush?: BatchFlushCallback<CaptureEvent>;
+  /** [T3.4.4] `R2_ENDPOINT` — passed straight to `createR2Client`
+   * (packages/core/src/r2/client.ts), which itself documents why an
+   * empty string is valid (production's own R2 default-endpoint case,
+   * a KNOWN GAP that function's own docstring names — not this file's
+   * problem to solve). Required unless `flush` is overridden: the
+   * `BATCH_ACCUMULATOR` provider below is constructed eagerly by Nest
+   * regardless of whether anything ever actually drives it (same
+   * reasoning `databaseUrl` above already documents for
+   * `createDbClient`), so a caller that doesn't override `flush` must
+   * still supply enough to build a real R2 client. */
+  readonly r2Endpoint?: string;
+  /** [T3.4.4] `R2_ACCESS_KEY_ID` — see `r2Endpoint` above for why this is
+   * required unless `flush` is overridden. */
+  readonly r2AccessKeyId?: string;
+  /** [T3.4.4] `R2_SECRET_ACCESS_KEY` — see `r2Endpoint` above for why
+   * this is required unless `flush` is overridden. */
+  readonly r2SecretAccessKey?: string;
+  /** [T3.4.4] `R2_BUCKET_EVENTS` — see `r2Endpoint` above for why this is
+   * required unless `flush` is overridden. */
+  readonly r2Bucket?: string;
   /** Overrides the `EVENT_SINK` DI token `EventsConsumer` injects.
    * Defaults to `AccumulatingEventSink` (T3.1.6) when omitted —
    * production (main.ts) never sets this. events.consumer.test.ts and
@@ -137,6 +163,48 @@ export interface AppModuleConfig {
    * substitutes a spy to assert the `SHUTDOWN_TIMEOUT_MS` timeout path
    * actually logs. */
   readonly shutdownLogger?: ShutdownLogger;
+}
+
+/**
+ * [T3.4.4] Builds the real, production `flushBatch` closure — a real R2
+ * client (`createR2Client`, packages/core/src/r2/client.ts, constructed
+ * ONCE here, matching that function's own "never per-request/per-batch"
+ * discipline) plus `createFlushBatch` itself (apps/worker/src/batch/
+ * flush.ts). Only ever called from the `BATCH_ACCUMULATOR` factory above,
+ * and only on the branch where `config.flush` was NOT supplied — see
+ * `AppModuleConfig.r2Endpoint`'s own doc comment for why that branch is
+ * reachable even in a test that never really flushes, and why this
+ * throws (loudly, at construction time, not silently) rather than
+ * building a client against an empty endpoint/bucket when the `r2*`
+ * fields are missing.
+ */
+function buildProductionFlush(config: AppModuleConfig, dbClient: DbClient): BatchFlushCallback<CaptureEvent> {
+  const { r2Endpoint, r2AccessKeyId, r2SecretAccessKey, r2Bucket } = config;
+
+  if (r2AccessKeyId === undefined || r2SecretAccessKey === undefined || r2Bucket === undefined) {
+    throw new Error(
+      'AppModule.forRoot: r2AccessKeyId, r2SecretAccessKey and r2Bucket are required unless `flush` ' +
+        'is overridden (T3.4.4) — the BATCH_ACCUMULATOR provider builds a real flushBatch eagerly ' +
+        'regardless of whether anything ever drives the accumulator it is attached to.',
+    );
+  }
+
+  return createFlushBatch({
+    db: dbClient.db,
+    r2Client: createR2Client({
+      // `R2ClientConfig.endpoint` is a REQUIRED `string`, unlike
+      // `AppModuleConfig.r2Endpoint` above — createR2Client's own
+      // docstring documents `''` (not an omitted key) as the way a
+      // caller says "no endpoint override", so an omitted
+      // `AppModuleConfig.r2Endpoint` becomes an explicit `''` here, one
+      // level down.
+      endpoint: r2Endpoint ?? '',
+      accessKeyId: r2AccessKeyId,
+      secretAccessKey: r2SecretAccessKey,
+      bucket: r2Bucket,
+    }),
+    r2Bucket,
+  });
 }
 
 @Module({})
@@ -247,11 +315,20 @@ export class AppModule {
         // sharing is load-bearing, not incidental. `config.flush`
         // overrides the callback entirely (shutdown.test.ts's wedged-flush
         // scenario); production falls back to the real
-        // `createFlushBatch({ db })` (T3.3.2) against the DbClient above.
+        // `createFlushBatch({ db, r2Client, r2Bucket })` (T3.4.4) against
+        // the DbClient above and a fresh `createR2Client()` built from
+        // this config's own `r2*` fields — both constructed here, not
+        // hoisted to their own DI tokens the way `DB_CLIENT` is, since
+        // nothing else in this module needs to inject the R2 client on
+        // its own. Throwing when `flush` is absent AND the `r2*` fields
+        // are missing (rather than silently building a client against
+        // an empty endpoint/bucket) is deliberate — see `r2Endpoint`'s
+        // own doc comment above for why this branch is reachable at all
+        // even in a test that never really flushes.
         {
           provide: BATCH_ACCUMULATOR,
           useFactory: (dbClient: DbClient): BatchAccumulator<CaptureEvent> => {
-            const flush = config.flush ?? createFlushBatch({ db: dbClient.db });
+            const flush = config.flush ?? buildProductionFlush(config, dbClient);
             return new BatchAccumulator<CaptureEvent>({
               batchSize: config.batchSize,
               batchIntervalMs: config.batchIntervalMs,

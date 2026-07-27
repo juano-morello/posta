@@ -44,6 +44,10 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 // connection string only has to satisfy createDbClient()'s own
 // construction-time validation (a non-empty string) — `pg.Pool` never
 // connects eagerly — and no query is ever issued against it in this file.
+// [T3.4.4] `flush` is a no-op for the identical reason — see
+// dlq.service.test.ts's own updated comment for the full rationale
+// (BATCH_ACCUMULATOR would otherwise need real `r2*` config this file
+// has no use for).
 const UNUSED_DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
 const UNUSED_ACCUMULATOR_CONFIG = {
   databaseUrl: UNUSED_DATABASE_URL,
@@ -51,6 +55,7 @@ const UNUSED_ACCUMULATOR_CONFIG = {
   batchSize: 100,
   batchIntervalMs: 2_000,
   shutdownTimeoutMs: 5_000,
+  flush: async (): Promise<void> => {},
 };
 
 function buildCaptureEvent(overrides: Partial<CaptureEvent> = {}): CaptureEvent {

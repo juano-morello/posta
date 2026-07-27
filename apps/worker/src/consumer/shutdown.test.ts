@@ -65,6 +65,26 @@ const MIGRATIONS_DIR = path.join(
 // (createDbClient's own rule, db/client.ts).
 const TEST_DB_POOL_MAX = 5;
 
+// [T3.4.4] Unlike dlq.service.test.ts/events.consumer.test.ts/
+// malformed-job.test.ts (which override `eventSink` and never really
+// flush, so a no-op `flush` sidesteps R2 entirely), THIS test does NOT
+// override `flush` — its whole point is proving a real
+// `ShutdownService.onModuleDestroy()` flush lands rows, so it needs a
+// REAL, working R2 client too (flushBatch now writes to both stores).
+// Same local-dev-only MinIO root credentials as
+// packages/core/src/r2/client.test.ts's own `REAL_CONFIG` (already in
+// .env.example, not a real secret). This test does not clean up the R2
+// object its own real flush creates — unlike client.test.ts/
+// r2-put.test.ts/flush.test.ts, it never learns the accumulator's own
+// internally-minted `batch_id`, so there is no key to target a
+// `DeleteObjectCommand` at without listing (and risking deleting) other
+// tests' objects sharing the same UTC date/hour partition; a few bytes
+// of leftover local-dev NDJSON debris is the accepted tradeoff.
+const REAL_R2_ENDPOINT = 'http://localhost:9000';
+const REAL_R2_ACCESS_KEY_ID = 'posta-local-dev';
+const REAL_R2_SECRET_ACCESS_KEY = 'posta-local-dev-secret';
+const REAL_R2_BUCKET = 'posta-events';
+
 const PARTIAL_BATCH_SIZE = 30;
 // Comfortably above PARTIAL_BATCH_SIZE — the count trigger must never fire
 // during this test.
@@ -131,6 +151,10 @@ describe('ShutdownService — graceful shutdown flushes the in-memory batch (T3.
         batchSize: BATCH_SIZE_NEVER_HIT,
         batchIntervalMs: BATCH_INTERVAL_MS_NEVER_HIT,
         shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
+        r2Endpoint: REAL_R2_ENDPOINT,
+        r2AccessKeyId: REAL_R2_ACCESS_KEY_ID,
+        r2SecretAccessKey: REAL_R2_SECRET_ACCESS_KEY,
+        r2Bucket: REAL_R2_BUCKET,
       }),
     );
 

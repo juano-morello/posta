@@ -34,6 +34,14 @@ async function bootstrap(): Promise<void> {
   // `shutdownLogger`) are deliberately left unset — production relies on
   // `createDbClient`'s own `DB_POOL_MAX` env fallback and every other
   // component's real default (app.module.ts's own header explains each).
+  //
+  // [T3.4.4] r2Endpoint/r2AccessKeyId/r2SecretAccessKey/r2Bucket — the
+  // SAME "validate once, pass down" discipline, extended to the four
+  // R2_* vars workerEnvSchema already validates (env.ts, T0.3.6).
+  // app.module.ts's own `buildProductionFlush` is what actually
+  // constructs `createR2Client()` from these; this file's only job is
+  // handing down the already-validated values, never re-reading
+  // `process.env` itself.
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule.forRoot({
       redisUrl: env.REDIS_URL,
@@ -41,6 +49,10 @@ async function bootstrap(): Promise<void> {
       batchSize: env.EVENT_BATCH_SIZE,
       batchIntervalMs: env.EVENT_BATCH_INTERVAL_MS,
       shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+      r2Endpoint: env.R2_ENDPOINT,
+      r2AccessKeyId: env.R2_ACCESS_KEY_ID,
+      r2SecretAccessKey: env.R2_SECRET_ACCESS_KEY,
+      r2Bucket: env.R2_BUCKET_EVENTS,
     }),
   );
 
