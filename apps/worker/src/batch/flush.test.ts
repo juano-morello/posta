@@ -1,0 +1,420 @@
+import path from 'node:path';
+import type { Pool, QueryResult } from 'pg';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { links, newId, runSqlMigrations, user } from '@posta/core';
+import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
+import type { CaptureEvent } from '@posta/contracts';
+import { createFlushBatch, type FlushBatch } from './flush';
+
+// T3.3.2 [E3, S3.3][INV-8] — flushBatch's own suite. `events` is
+// hand-written SQL (packages/core/migrations/sql/001_events.sql,
+// T1.2.2), applied through runSqlMigrations — startPgContainer() alone
+// only runs drizzle-kit's OWN migrations, so without this the `events`
+// table and create_events_partition() genuinely do not exist (mirrors
+// events-schema.test.ts / partition-maintenance.job.test.ts's identical
+// setup).
+//
+// Every assertion below reads `events` back via the RAW pool
+// (`handle.pool.query('SELECT ... FROM events ...')`), never
+// drizzle's own query builder — apps/worker (this file included) never
+// imports drizzle-orm directly, matching flush.ts's own boundary
+// discipline (see that file's header): every OTHER apps/worker test
+// touching Postgres (partition-maintenance.job.test.ts,
+// default-partition-alert.test.ts) reads back through raw SQL too, for
+// the identical reason.
+//
+// All flush-related work (both flushBatch() calls, proving [INV-8]'s
+// "same batch twice" idempotency) happens ONCE, in beforeAll — every
+// `it()` below only asserts against state already captured there, so
+// none of them depend on declaration order or on each other, even
+// though they share one expensive testcontainers Postgres boot.
+const CONTAINER_TEST_TIMEOUT_MS = 120_000;
+const MIGRATIONS_DIR = path.join(
+  path.dirname(require.resolve('@posta/core/package.json')),
+  'migrations',
+  'sql',
+);
+
+// The real, verified `events` column count — schema/events.ts (T1.2.4)
+// and packages/core/src/r2/ndjson.ts (T3.4.2) both independently state
+// it: 24 capture-time fields CaptureEventSchema validates (NOT 20 — see
+// this task's own report) plus 7 enrichment columns = 31. Used below to
+// prove the batch INSERT carries every row's full parameter set in one
+// statement, not a partial or chunked one.
+const EVENTS_COLUMN_COUNT = 31;
+
+const DESKTOP_CHROME_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+const INSTAGRAM_IN_APP_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram 302.0.0.23.114 (iPhone14,3; iOS 17_4; en_US; en-US; scale=3.00; 1284x2778; 498540814)';
+const PIXEL_CHROME_UA =
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0.0.0 Mobile Safari/537.36';
+
+interface QuerySpyCall {
+  readonly text: string;
+  readonly paramCount: number;
+}
+
+interface QuerySpy {
+  readonly calls: QuerySpyCall[];
+  reset(): void;
+  restore(): void;
+}
+
+/**
+ * Intercepts every SQL statement `pool.query()` issues, recording the
+ * text and the parameter count of each call — the mechanism this task's
+ * own brief asks for ("wrapping the pool's own query() method to count
+ * invocations during the flush"). Reassigning the INSTANCE property
+ * (not the prototype method) means drizzle's own internal calls — which
+ * read `this.client.query(...)` off the SAME pool object at call time
+ * (verified against the installed drizzle-orm@0.45.2 node-postgres
+ * driver source) — are captured too, without drizzle ever being told
+ * anything changed.
+ *
+ * The first argument is `string | { text: string }`: drizzle-orm's
+ * node-postgres driver ALWAYS calls `client.query(rawQueryConfig,
+ * params)` with a `QueryConfig`-shaped object (verified against that
+ * same installed source — `NodePgPreparedQuery#execute`/`#all` both
+ * pass `this.rawQueryConfig`, never a bare string), even though pg's own
+ * `Pool#query` also accepts a plain string — this test's own
+ * `handle.pool.query('SELECT ...', [...])` calls (used for setup/
+ * assertions, outside the flush window this spy is active for) DO pass
+ * a bare string, so both shapes have to be handled. Narrowed to this one
+ * promise-returning call shape deliberately — pg's `Pool#query` is
+ * otherwise so heavily overloaded that `Parameters<Pool['query']>`
+ * resolves to its LAST declared overload (a 3-arg callback form), the
+ * wrong shape entirely.
+ */
+function spyOnPoolQueries(pool: Pool): QuerySpy {
+  const originalQuery = pool.query.bind(pool) as (
+    textOrConfig: string | { text: string },
+    params?: unknown[],
+  ) => Promise<QueryResult>;
+  const calls: QuerySpyCall[] = [];
+
+  const spied = (textOrConfig: string | { text: string }, params?: unknown[]): Promise<QueryResult> => {
+    const text = typeof textOrConfig === 'string' ? textOrConfig : textOrConfig.text;
+    calls.push({ text, paramCount: params?.length ?? 0 });
+    return originalQuery(textOrConfig, params);
+  };
+
+  pool.query = spied as unknown as Pool['query'];
+
+  return {
+    calls,
+    reset() {
+      calls.length = 0;
+    },
+    restore() {
+      pool.query = originalQuery as unknown as Pool['query'];
+    },
+  };
+}
+
+function insertStatements(calls: readonly QuerySpyCall[]): QuerySpyCall[] {
+  return calls.filter((call) => /^\s*insert\s+into\s+"?events"?/i.test(call.text));
+}
+
+function selectFromLinksStatements(calls: readonly QuerySpyCall[]): QuerySpyCall[] {
+  return calls.filter((call) => /^\s*select\b/i.test(call.text) && /"?links"?/i.test(call.text));
+}
+
+async function seedTenant(handle: PgContainerHandle): Promise<string> {
+  const tenantId = newId();
+  await handle.db.insert(user).values({
+    id: tenantId,
+    name: 'Test Tenant',
+    email: `${tenantId.toLowerCase()}@example.test`,
+  });
+  return tenantId;
+}
+
+async function seedLink(
+  handle: PgContainerHandle,
+  tenantId: string,
+  slug: string,
+  destination: string,
+): Promise<string> {
+  const linkId = newId();
+  await handle.db.insert(links).values({ id: linkId, tenantId, slug, destination });
+  return linkId;
+}
+
+/** A fully-signalled CaptureEvent, every field defaulted to `null`
+ * except the required identity/context frame — callers override just
+ * the fields their profile cares about, so nothing is left implicitly
+ * `undefined` (CaptureEventSchema is `.strict()` with every signal an
+ * explicit nullable, never optional). */
+function buildCaptureEvent(overrides: Partial<CaptureEvent>): CaptureEvent {
+  return {
+    event_id: newId(),
+    occurred_at: new Date().toISOString(),
+    tenant_id: newId(),
+    link_id: newId(),
+    slug: 'promo',
+    http_method: 'GET',
+    user_agent: null,
+    referer: null,
+    accept: null,
+    accept_language: null,
+    sec_fetch_site: null,
+    sec_fetch_mode: null,
+    sec_fetch_dest: null,
+    sec_fetch_user: null,
+    sec_purpose: null,
+    sec_ch_ua: null,
+    sec_ch_ua_mobile: null,
+    sec_ch_ua_platform: null,
+    purpose: null,
+    x_purpose: null,
+    x_moz: null,
+    country: null,
+    asn: null,
+    visitor_hash: null,
+    ...overrides,
+  };
+}
+
+interface EventEnrichmentRow {
+  readonly browser: string | null;
+  readonly browser_version: string | null;
+  readonly os: string | null;
+  readonly device_type: string | null;
+  readonly source_platform: string | null;
+  readonly is_in_app: boolean | null;
+  readonly dest_host: string | null;
+}
+
+async function fetchEventEnrichment(
+  handle: PgContainerHandle,
+  eventId: string,
+): Promise<EventEnrichmentRow | undefined> {
+  const result = await handle.pool.query<EventEnrichmentRow>(
+    'SELECT browser, browser_version, os, device_type, source_platform, is_in_app, dest_host ' +
+      'FROM events WHERE event_id = $1',
+    [eventId],
+  );
+  return result.rows[0];
+}
+
+describe('createFlushBatch / flushBatch (T3.3.2)', () => {
+  let handle: PgContainerHandle;
+
+  let profile0EventId: string; // desktop Chrome + Instagram referer, resolvable destination
+  let profile1EventId: string; // Instagram in-app UA, no referer
+  let profile2EventId: string; // resolvable destination, every UA/referer signal null
+  let profile3EventId: string; // TikTok referer + Android Chrome UA
+  let profile4EventId: string; // link_id with no matching `links` row at all
+  let profile5EventId: string; // link_id exists, but under the WRONG tenant
+
+  let firstFlushCalls: QuerySpyCall[];
+  let secondFlushCalls: QuerySpyCall[];
+  let finalRowCount: number;
+  let emptyBatchCalls: QuerySpyCall[];
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+    await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
+
+    const tenantA = await seedTenant(handle);
+    const tenantB = await seedTenant(handle);
+
+    const linkInstagramShop = await seedLink(
+      handle,
+      tenantA,
+      'shop',
+      'https://Shop.Example.com:443/promo?utm_source=ig',
+    );
+    const linkBlogInApp = await seedLink(handle, tenantA, 'blog', 'https://blog.example.org/post');
+    const linkNullSignals = await seedLink(
+      handle,
+      tenantA,
+      'null-case',
+      'https://null-signals.example.net',
+    );
+    const linkTikTok = await seedLink(handle, tenantA, 'tiktok', 'https://another.example.com/x');
+    const linkNeverInserted = newId(); // a syntactically valid ULID, never written to `links`
+
+    const events100: CaptureEvent[] = Array.from({ length: 100 }, (_, index) => {
+      const profile = index % 6;
+      switch (profile) {
+        case 0:
+          return buildCaptureEvent({
+            tenant_id: tenantA,
+            link_id: linkInstagramShop,
+            slug: 'shop',
+            user_agent: DESKTOP_CHROME_UA,
+            referer: 'https://l.instagram.com/?u=https%3A%2F%2Fexample.com',
+          });
+        case 1:
+          return buildCaptureEvent({
+            tenant_id: tenantA,
+            link_id: linkBlogInApp,
+            slug: 'blog',
+            user_agent: INSTAGRAM_IN_APP_UA,
+            referer: null,
+          });
+        case 2:
+          return buildCaptureEvent({
+            tenant_id: tenantA,
+            link_id: linkNullSignals,
+            slug: 'null-case',
+            user_agent: null,
+            referer: null,
+          });
+        case 3:
+          return buildCaptureEvent({
+            tenant_id: tenantA,
+            link_id: linkTikTok,
+            slug: 'tiktok',
+            user_agent: PIXEL_CHROME_UA,
+            referer: 'https://www.tiktok.com/@someone/video/123',
+          });
+        case 4:
+          return buildCaptureEvent({
+            tenant_id: tenantA,
+            link_id: linkNeverInserted,
+            slug: 'gone',
+            user_agent: DESKTOP_CHROME_UA,
+            referer: null,
+          });
+        default:
+          // profile 5 — tenant mismatch: linkInstagramShop is really
+          // tenantA's, but this event claims tenantB.
+          return buildCaptureEvent({
+            tenant_id: tenantB,
+            link_id: linkInstagramShop,
+            slug: 'shop',
+            user_agent: DESKTOP_CHROME_UA,
+            referer: null,
+          });
+      }
+    });
+
+    profile0EventId = events100[0]!.event_id;
+    profile1EventId = events100[1]!.event_id;
+    profile2EventId = events100[2]!.event_id;
+    profile3EventId = events100[3]!.event_id;
+    profile4EventId = events100[4]!.event_id;
+    profile5EventId = events100[5]!.event_id;
+
+    const flushBatch: FlushBatch = createFlushBatch(handle.db);
+    const querySpy = spyOnPoolQueries(handle.pool);
+
+    querySpy.reset();
+    await flushBatch(events100);
+    firstFlushCalls = [...querySpy.calls];
+
+    querySpy.reset();
+    await flushBatch(events100); // [INV-8] the SAME batch, again
+    secondFlushCalls = [...querySpy.calls];
+
+    querySpy.reset();
+    await flushBatch([]);
+    emptyBatchCalls = [...querySpy.calls];
+
+    querySpy.restore();
+
+    const countResult = await handle.pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM events',
+    );
+    finalRowCount = Number(countResult.rows[0]?.count ?? '0');
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('[INV-8] exactly 100 rows exist after the first flush, still exactly 100 after flushing the identical batch again', () => {
+    expect(finalRowCount).toBe(100);
+  });
+
+  it('the first flush issues exactly ONE INSERT statement, carrying every row\'s full parameter set — never chunked, never per-row', () => {
+    const inserts = insertStatements(firstFlushCalls);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.paramCount).toBe(100 * EVENTS_COLUMN_COUNT);
+  });
+
+  it('the second (re-)flush ALSO issues exactly ONE INSERT statement — ON CONFLICT DO NOTHING stays a single statement, not one attempt per row', () => {
+    const inserts = insertStatements(secondFlushCalls);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.paramCount).toBe(100 * EVENTS_COLUMN_COUNT);
+  });
+
+  it('the first flush issues exactly ONE batched destination SELECT — never one per event', () => {
+    const selects = selectFromLinksStatements(firstFlushCalls);
+    expect(selects).toHaveLength(1);
+  });
+
+  it('the first flush issues exactly two statements total (the batched SELECT, then the batched INSERT) — see flush.ts\'s own header for why not one', () => {
+    expect(firstFlushCalls).toHaveLength(2);
+  });
+
+  it('an empty batch issues zero statements and is a pure no-op', () => {
+    expect(emptyBatchCalls).toHaveLength(0);
+  });
+
+  it('populates enrichment columns for a real desktop-Chrome + Instagram-referer + resolvable-destination hit', async () => {
+    const row = await fetchEventEnrichment(handle, profile0EventId);
+
+    expect(row).toMatchObject({
+      browser: 'Chrome',
+      browser_version: '125.0.0.0',
+      os: 'Windows',
+      device_type: 'desktop',
+      source_platform: 'instagram',
+      is_in_app: false,
+      dest_host: 'shop.example.com',
+    });
+  });
+
+  it('populates enrichment columns for a real in-app UA hit with no referer', async () => {
+    const row = await fetchEventEnrichment(handle, profile1EventId);
+
+    expect(row).toMatchObject({
+      is_in_app: true,
+      source_platform: 'instagram',
+      device_type: 'mobile',
+      dest_host: 'blog.example.org',
+    });
+  });
+
+  it('resolves dest_host to a real host when the destination is resolvable but every UA/referer signal is null, falling back source_platform to directo', async () => {
+    const row = await fetchEventEnrichment(handle, profile2EventId);
+
+    expect(row).toMatchObject({
+      browser: null,
+      os: null,
+      device_type: null,
+      source_platform: 'directo',
+      is_in_app: false,
+      dest_host: 'null-signals.example.net',
+    });
+  });
+
+  it('resolves source_platform from a referer host (TikTok) with device/browser facts from a real mobile UA', async () => {
+    const row = await fetchEventEnrichment(handle, profile3EventId);
+
+    expect(row?.source_platform).toBe('tiktok');
+    expect(row?.device_type).toBe('mobile');
+    expect(row?.dest_host).toBe('another.example.com');
+  });
+
+  it('resolves dest_host to null when link_id has no matching links row at all', async () => {
+    const row = await fetchEventEnrichment(handle, profile4EventId);
+
+    expect(row?.dest_host).toBeNull();
+    // UA-derived facts are unaffected by an unresolvable destination.
+    expect(row?.browser).toBe('Chrome');
+  });
+
+  it('[security] resolves dest_host to null when link_id exists but under a DIFFERENT tenant than the event claims', async () => {
+    const row = await fetchEventEnrichment(handle, profile5EventId);
+
+    // The link genuinely resolves (it exists, owned by tenant A) but this
+    // event claims tenant B — the mismatch must be rejected, not trusted.
+    expect(row?.dest_host).toBeNull();
+    expect(row?.browser).toBe('Chrome');
+  });
+});
