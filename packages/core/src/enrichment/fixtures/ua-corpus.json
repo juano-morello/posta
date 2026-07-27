@@ -1,0 +1,722 @@
+[
+  {
+    "name": "Chrome on Windows 11, no referer",
+    "category": "desktop-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": "https://tienda.mercadolibre.com.ar/producto/123"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "tienda.mercadolibre.com.ar"
+    }
+  },
+  {
+    "name": "Safari on macOS, no referer",
+    "category": "desktop-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+      "referer": null,
+      "destination": "https://www.example.com.br/promo"
+    },
+    "expected": {
+      "browser": "Safari",
+      "browser_version": "17.5",
+      "os": "macOS",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "www.example.com.br"
+    }
+  },
+  {
+    "name": "Firefox on Windows, no referer",
+    "category": "desktop-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+      "referer": null,
+      "destination": "https://noticias.example.com/nota"
+    },
+    "expected": {
+      "browser": "Firefox",
+      "browser_version": "127.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "noticias.example.com"
+    }
+  },
+  {
+    "name": "Firefox on Ubuntu Linux, no referer",
+    "category": "desktop-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
+      "referer": null,
+      "destination": "https://blog.example.org/post"
+    },
+    "expected": {
+      "browser": "Firefox",
+      "browser_version": "126.0",
+      "os": "Ubuntu",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "blog.example.org"
+    }
+  },
+  {
+    "name": "Edge on Windows, no referer",
+    "category": "desktop-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+      "referer": null,
+      "destination": "https://cursos.example.com/inscripcion"
+    },
+    "expected": {
+      "browser": "Edge",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "cursos.example.com"
+    }
+  },
+  {
+    "name": "Chrome on Android (Pixel 8), no referer",
+    "category": "mobile-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://m.mercadolibre.com.mx/oferta"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "m.mercadolibre.com.mx"
+    }
+  },
+  {
+    "name": "Safari on iOS (iPhone 15), no referer",
+    "category": "mobile-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+      "referer": null,
+      "destination": "https://tienda.example.pe/item"
+    },
+    "expected": {
+      "browser": "Mobile Safari",
+      "browser_version": "17.5",
+      "os": "iOS",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "tienda.example.pe"
+    }
+  },
+  {
+    "name": "Samsung Internet on Android (Galaxy S23), no referer",
+    "category": "mobile-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/122.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://banco.example.co/login"
+    },
+    "expected": {
+      "browser": "Samsung Internet",
+      "browser_version": "25.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "banco.example.co"
+    }
+  },
+  {
+    "name": "Firefox on Android, no referer",
+    "category": "mobile-browser",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Android 14; Mobile; rv:126.0) Gecko/126.0 Firefox/126.0",
+      "referer": null,
+      "destination": "https://foro.example.cl/tema"
+    },
+    "expected": {
+      "browser": "Mobile Firefox",
+      "browser_version": "126.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "foro.example.cl"
+    }
+  },
+  {
+    "name": "Instagram in-app webview on Android (Instagram marker)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A536E) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0.0.0 Mobile Safari/537.36 Instagram 306.0.0.36.109 Android (33/13; 420dpi; 1080x2296; samsung; SM-A536E; a53x; qcom; en_US; 543215678)",
+      "referer": null,
+      "destination": "https://sorteo.example.com/participar"
+    },
+    "expected": {
+      "browser": "Instagram",
+      "browser_version": "306.0.0.36.109",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "instagram",
+      "is_in_app": true,
+      "dest_host": "sorteo.example.com"
+    }
+  },
+  {
+    "name": "Facebook in-app webview on iOS (FBAN marker)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/FBIOS;FBAV/475.0.0.36.108;FBBV/566789012;FBDV/iPhone15,3;FBMD/iPhone;FBSN/iOS;FBSV/17.5;FBSS/3;FBID/phone;FBLC/es_LA]",
+      "referer": null,
+      "destination": "https://evento.example.uy/entradas"
+    },
+    "expected": {
+      "browser": "Facebook",
+      "browser_version": "475.0.0.36.108",
+      "os": "iOS",
+      "device_type": "mobile",
+      "source_platform": "facebook",
+      "is_in_app": true,
+      "dest_host": "evento.example.uy"
+    }
+  },
+  {
+    "name": "Facebook in-app webview on Android (FBAV marker)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; moto g54 5G) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.0.0 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/475.0.0.36.108;]",
+      "referer": null,
+      "destination": "https://catalogo.example.bo/ver"
+    },
+    "expected": {
+      "browser": "Facebook",
+      "browser_version": "475.0.0.36.108",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "facebook",
+      "is_in_app": true,
+      "dest_host": "catalogo.example.bo"
+    }
+  },
+  {
+    "name": "TikTok in-app webview on Android (TikTok marker)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A536E Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/122.0.0.0 Mobile Safari/537.36 musical_ly_2024407020 JsSdk/2.0 NetType/WIFI Channel/googleplay AppName/musical_ly app_version/34.4.0 ByteLocale/es TikTok/34.4.0 rv:344020",
+      "referer": null,
+      "destination": "https://reto.example.com/unite"
+    },
+    "expected": {
+      "browser": "TikTok",
+      "browser_version": "34.4.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "tiktok",
+      "is_in_app": true,
+      "dest_host": "reto.example.com"
+    }
+  },
+  {
+    "name": "ByteDance-family webview on Android (BytedanceWebview marker; resolves directo, not tiktok)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 12; Redmi Note 11) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 Mobile Safari/537.36 BytedanceWebview/d9b34f1",
+      "referer": null,
+      "destination": "https://articulo.example.com/leer"
+    },
+    "expected": {
+      "browser": "Android Browser",
+      "browser_version": "4.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": true,
+      "dest_host": "articulo.example.com"
+    }
+  },
+  {
+    "name": "LINE in-app webview on Android (Line marker; resolves directo, LINE has no platform mapping)",
+    "category": "in-app-webview",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A146U) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/121.0.0.0 Mobile Safari/537.36 Line/14.2.0",
+      "referer": null,
+      "destination": "https://juego.example.com/jugar"
+    },
+    "expected": {
+      "browser": "Android Browser",
+      "browser_version": "4.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": true,
+      "dest_host": "juego.example.com"
+    }
+  },
+  {
+    "name": "Instagram referer (www.instagram.com) with a plain desktop Chrome UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "referer": "https://www.instagram.com/reel/Cx1aBcDeFg/",
+      "destination": "https://receta.example.com/postre"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "124.0.0.0",
+      "os": "Linux",
+      "device_type": "desktop",
+      "source_platform": "instagram",
+      "is_in_app": false,
+      "dest_host": "receta.example.com"
+    }
+  },
+  {
+    "name": "Facebook referer (m.facebook.com) with a plain iOS Safari UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+      "referer": "https://m.facebook.com/",
+      "destination": "https://oferta.example.com/hoy"
+    },
+    "expected": {
+      "browser": "Mobile Safari",
+      "browser_version": "17.4",
+      "os": "iOS",
+      "device_type": "mobile",
+      "source_platform": "facebook",
+      "is_in_app": false,
+      "dest_host": "oferta.example.com"
+    }
+  },
+  {
+    "name": "X/Twitter referer (x.com) with a plain desktop Firefox UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+      "referer": "https://x.com/alguien/status/987654321",
+      "destination": "https://hilo.example.com/leer"
+    },
+    "expected": {
+      "browser": "Firefox",
+      "browser_version": "127.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "x",
+      "is_in_app": false,
+      "dest_host": "hilo.example.com"
+    }
+  },
+  {
+    "name": "TikTok referer (vm.tiktok.com) with a plain mobile Chrome UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A536E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+      "referer": "https://vm.tiktok.com/ZMabcdEFG/",
+      "destination": "https://tienda.example.com/producto"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "125.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "tiktok",
+      "is_in_app": false,
+      "dest_host": "tienda.example.com"
+    }
+  },
+  {
+    "name": "WhatsApp referer (wa.me) with a plain desktop Chrome UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": "https://wa.me/5491122334455",
+      "destination": "https://contacto.example.com/gracias"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "whatsapp",
+      "is_in_app": false,
+      "dest_host": "contacto.example.com"
+    }
+  },
+  {
+    "name": "WhatsApp Android Custom Tabs referer (android-app://com.whatsapp) with a plain mobile Chrome UA",
+    "category": "referer-driven-platform",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A146U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+      "referer": "android-app://com.whatsapp",
+      "destination": "https://cupon.example.com/canjear"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "125.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "whatsapp",
+      "is_in_app": false,
+      "dest_host": "cupon.example.com"
+    }
+  },
+  {
+    "name": "Samsung Galaxy A14 5G (SM-A146U), Chrome, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A146U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://recarga.example.com.co/plan"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "125.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "recarga.example.com.co"
+    }
+  },
+  {
+    "name": "Motorola Moto G60, Chrome, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 11; moto g(60)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://empleo.example.com.pe/postular"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "113.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "empleo.example.com.pe"
+    }
+  },
+  {
+    "name": "Xiaomi Redmi Note 10 Pro, Chrome, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 11; M2101K7AI) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://curso.example.com.ec/gratis"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "108.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "curso.example.com.ec"
+    }
+  },
+  {
+    "name": "Samsung Galaxy J4+, older Android 9 system WebView, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 9; SM-J415F Build/PPR1.180610.011; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/90.0.4430.210 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://donacion.example.org/ayudar"
+    },
+    "expected": {
+      "browser": "Chrome WebView",
+      "browser_version": "90.0.4430.210",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "donacion.example.org"
+    }
+  },
+  {
+    "name": "Motorola Moto G Power (2022), Chrome, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 12; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
+      "referer": null,
+      "destination": "https://encuesta.example.com.gt/responder"
+    },
+    "expected": {
+      "browser": "Mobile Chrome",
+      "browser_version": "119.0.0.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "encuesta.example.com.gt"
+    }
+  },
+  {
+    "name": "destination with mixed-case host, non-default port, query string, and fragment all stripped",
+    "category": "dest-host-variety",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": "https://Tienda.MercadoLibre.com.ar:8443/producto/123?utm=ig&ref=abc#section"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "tienda.mercadolibre.com.ar"
+    }
+  },
+  {
+    "name": "destination with embedded userinfo credentials never leaks into dest_host",
+    "category": "dest-host-variety",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": "https://promo:secret123@shop.example.com/deal"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "shop.example.com"
+    }
+  },
+  {
+    "name": "genuinely malformed/unparseable destination resolves dest_host to null",
+    "category": "dest-host-variety",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": "esto no es una url en absoluto"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": null
+    }
+  },
+  {
+    "name": "plain distinct destination host (.com.br)",
+    "category": "dest-host-variety",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": "https://api.example.com.br/redirect"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "api.example.com.br"
+    }
+  },
+  {
+    "name": "empty-string user_agent still resolves dest_host from a valid destination",
+    "category": "malformed-input",
+    "input": {
+      "user_agent": "",
+      "referer": null,
+      "destination": "https://example.com/x"
+    },
+    "expected": {
+      "browser": null,
+      "browser_version": null,
+      "os": null,
+      "device_type": null,
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "example.com"
+    }
+  },
+  {
+    "name": "garbage, non-browser-shaped user_agent text",
+    "category": "malformed-input",
+    "input": {
+      "user_agent": "asdklfjasdklfj esto no es un navegador real 12345",
+      "referer": null,
+      "destination": "https://example.com/y"
+    },
+    "expected": {
+      "browser": null,
+      "browser_version": null,
+      "os": null,
+      "device_type": null,
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "example.com"
+    }
+  },
+  {
+    "name": "garbage, unparseable referer falls through to directo",
+    "category": "malformed-input",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": "esto tampoco es una url, entiendes?",
+      "destination": "https://example.com/z"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "example.com"
+    }
+  },
+  {
+    "name": "empty-string referer falls through to directo, same as no referer at all",
+    "category": "malformed-input",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": "",
+      "destination": "https://example.com/w"
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "example.com"
+    }
+  },
+  {
+    "name": "facebookexternalhit link-preview bot UA: not browser-shaped, degrades to null facts without throwing",
+    "category": "malformed-input",
+    "input": {
+      "user_agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      "referer": null,
+      "destination": "https://example.com/link-preview"
+    },
+    "expected": {
+      "browser": null,
+      "browser_version": null,
+      "os": null,
+      "device_type": null,
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "example.com"
+    }
+  },
+  {
+    "name": "a matching Instagram referer wins over a conflicting TikTok in-app UA marker (referer is the stronger signal)",
+    "category": "composition",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-A536E Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/122.0.0.0 Mobile Safari/537.36 musical_ly_2024407020 JsSdk/2.0 NetType/WIFI Channel/googleplay AppName/musical_ly app_version/34.4.0 ByteLocale/es TikTok/34.4.0 rv:344020",
+      "referer": "https://l.instagram.com/?u=https%3A%2F%2Fejemplo.com",
+      "destination": "https://landing.example.com/promo"
+    },
+    "expected": {
+      "browser": "TikTok",
+      "browser_version": "34.4.0",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "instagram",
+      "is_in_app": true,
+      "dest_host": "landing.example.com"
+    }
+  },
+  {
+    "name": "null user_agent with a recognized TikTok referer still resolves source_platform, all UA facts stay null",
+    "category": "composition",
+    "input": {
+      "user_agent": null,
+      "referer": "https://www.tiktok.com/@marca/video/456",
+      "destination": "https://landing.example.com/tiktok"
+    },
+    "expected": {
+      "browser": null,
+      "browser_version": null,
+      "os": null,
+      "device_type": null,
+      "source_platform": "tiktok",
+      "is_in_app": false,
+      "dest_host": "landing.example.com"
+    }
+  },
+  {
+    "name": "Samsung Galaxy A12 (SM-A125M), Opera for Android, no referer",
+    "category": "latam-android-long-tail",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Linux; Android 12; SM-A125M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36 OPR/76.2.4027.73374",
+      "referer": null,
+      "destination": "https://ahorro.example.com.py/datos"
+    },
+    "expected": {
+      "browser": "Opera",
+      "browser_version": "76.2.4027.73374",
+      "os": "Android",
+      "device_type": "mobile",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": "ahorro.example.com.py"
+    }
+  },
+  {
+    "name": "a null destination (not malformed text) resolves dest_host to null without ever calling the URL parser",
+    "category": "dest-host-variety",
+    "input": {
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "referer": null,
+      "destination": null
+    },
+    "expected": {
+      "browser": "Chrome",
+      "browser_version": "126.0.0.0",
+      "os": "Windows",
+      "device_type": "desktop",
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": null
+    }
+  },
+  {
+    "name": "user_agent, referer, and destination all null",
+    "category": "all-missing",
+    "input": {
+      "user_agent": null,
+      "referer": null,
+      "destination": null
+    },
+    "expected": {
+      "browser": null,
+      "browser_version": null,
+      "os": null,
+      "device_type": null,
+      "source_platform": "directo",
+      "is_in_app": false,
+      "dest_host": null
+    }
+  }
+]
