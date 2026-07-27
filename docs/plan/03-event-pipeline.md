@@ -178,7 +178,7 @@ A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACC
 `eventBatchKey(batchId, occurredAt)` → `events/dt=YYYY-MM-DD/hour=HH/<batchId>.ndjson`, always in UTC so a São Paulo `-03:00` timestamp partitions by its instant and not its local date. The key is derived from the `batch_id` minted once in T3.3.1, so every retry of the same batch PUTs to the same key and overwrites rather than duplicating.
 → **files** `packages/core/src/r2/keys.ts` · `packages/core/src/r2/keys.test.ts` · **verify** `pnpm test keys.test.ts` asserts `2026-07-21T02:30:00-03:00` produces `dt=2026-07-21/hour=05`, that hours are zero-padded, and that the same `batch_id` yields a byte-identical key across calls · **after** T3.4.2
 
-#### T3.4.4 · `feat: one R2 PUT per batch from the flush path`
+#### T3.4.4 · `feat: one R2 PUT per batch from the flush path` ✅ done (`10c25e0`)
 `flushBatch` serializes the batch and issues a single `PutObject`. One PUT per batch, never per event — R2 bills per PUT, and one object per click is real money at any volume, quite apart from turning a 10k-event burst into 10k round trips.
 → **files** `apps/worker/src/batch/flush.ts` · `apps/worker/src/batch/r2-put.test.ts` · **verify** `pnpm test r2-put.test.ts` flushes batches of 1, 100 and 100 against MinIO and asserts the PUT count is 3 and not 201, and that each object's line count matches its batch · **after** T3.4.3, T3.3.2
 

@@ -407,3 +407,31 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none — clean recovery, no scope deviation.
 
 **Handed back to:** n/a.
+
+---
+
+## T3.4.4 · `10c25e0` · 2026-07-27T20:33:00-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test r2-put.test.ts` — 3/3 pass (hard PUT-count assertion, not a spot check)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test flush.test.ts` — 17/17 pass
+- `pnpm test shutdown.test.ts dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts health.controller.test.ts` — 26/26 pass, no regression
+
+**Recovery context:** third attempt at this task. Attempt 1 died mid-response before writing code. Attempt 2 stalled 600s, apparently trying to launch a Docker Desktop GUI app that isn't installed in this environment (`open -a Docker` → "Unable to find application named 'Docker'"; no Docker Desktop process at the OS level). Orchestrator confirmed Docker itself works fine via CLI and a docker-compose stack (redis/postgres/minio) was already up and healthy the whole time — the 2-minute `docker ps` hang observed mid-investigation was transient contention from concurrent testcontainers work in this shared worktree, not a real outage. Attempt 3 was briefed with this finding explicitly (don't try to launch a GUI Docker app; the compose stack is already running; `packages/core/src/r2/client.test.ts` connects directly to `localhost:9000`) and completed cleanly.
+
+**Findings surviving triage:** none — clean implementation. `Promise.all([insertEventsBatch, putEventBatch])` composes the three already-built R2 pieces (T3.4.1 client, T3.4.2 serializer, T3.4.3 keys) without a second enrichment pass, reusing `flush.ts`'s existing `LoggedEvent` intermediate as designed.
+
+**Judgment calls made by the implementer, reviewed and accepted:**
+- `FlushBatch`'s signature widened to `(events, batchId?: string)` — optional, defaulting to a fresh `newId()` — to keep `split-retry.ts`'s existing single-argument call and all pre-existing test call sites compiling unchanged. Documented, narrow known gap: until a later task wires `flushBatch` through `BatchAccumulator` for real, a batch retried via `retryWithSplit` mints a new R2 key per retry attempt instead of reusing one (duplicate R2 objects, not data loss — explicitly out of this task's scope).
+- R2 PUT and Postgres INSERT run concurrently via `Promise.all`, order deliberately uncoupled (T3.4.6's job, not this one's) — a rejection from either fails the whole flush loudly, R2 is never silently optional.
+- `@aws-sdk/client-s3` added as a direct dependency of `@posta/worker` (previously only transitively reachable via `@posta/core`) — required for pnpm's strict linking to resolve `PutObjectCommand`/`S3Client` types in `flush.ts`.
+- `AppModuleConfig` gained optional `r2Endpoint`/`r2AccessKeyId`/`r2SecretAccessKey`/`r2Bucket` fields; a new `buildProductionFlush()` in `app.module.ts` throws loudly at DI-construction time if they're missing and no `config.flush` override was supplied — never a silent empty-string fallback.
+- Necessary knock-on edits to `dlq.service.test.ts`/`events.consumer.test.ts`/`malformed-job.test.ts` (a one-line `flush: async () => {}` no-op added to each file's existing `UNUSED_ACCUMULATOR_CONFIG`, since `BATCH_ACCUMULATOR` is now constructed eagerly regardless of `eventSink` overrides) and `shutdown.test.ts` (needed a real, working R2 client since it proves an actual flush, not a stubbed one).
+
+**Concurrent-work note:** T3.3.4 (poison-row DLQ routing) landed in this same worktree concurrently and its `poison-dlq.test.ts` directly depends on this task's `createFlushBatch({ r2Client, r2Bucket })` signature — committed second, immediately after this one, for exactly that reason.
+
+**Deviation from plan:** file list expanded beyond the plan's stated two (`flush.ts`, `r2-put.test.ts`) to include the DI/env wiring knock-on above — necessary because `r2Client`/`r2Bucket` became required construction inputs for the one production call site (`app.module.ts`) and every test that boots the real `AppModule.forRoot()`.
+
+**Handed back to:** n/a — no unresolved findings.
