@@ -97,6 +97,25 @@ export interface R2ClientConfig {
  * itself), which this module's own test suite (client.test.ts) verifies
  * directly against the real MinIO rather than assuming.
  *
+ * [security review round 1, LOW] That "never embeds the secret" property
+ * does NOT extend to `config.accessKeyId`: verified by hand against this
+ * real MinIO, an UNRESTRICTED `util.inspect(error, { depth: null,
+ * showHidden: true })` dump of a caught auth-failure error DOES contain
+ * the access key id in cleartext, nested inside `error.$response`'s
+ * embedded raw HTTP request (`authorization: AWS4-HMAC-SHA256
+ * Credential=<accessKeyId>/...` — SigV4 always sends the key id over the
+ * wire, only the secret never crosses). No caller of this module exists
+ * yet (the writer that actually calls `.send()` is a later E3 task), so
+ * this is not live-exploitable today, but whoever writes that caller:
+ * NEVER log a caught S3 error wholesale — no bare `console.log(error)`,
+ * no `util.inspect(error, { depth: null })` on anything this client
+ * throws. Log an explicit ALLOWLISTED subset instead — `error.name`,
+ * `error.message`, `error.$metadata?.httpStatusCode`,
+ * `error.$metadata?.requestId` — the same "don't trust the whole object,
+ * only known-safe fields" discipline resolve-redis.ts's own describeError
+ * already applies to ioredis errors, extended here to whatever shape the
+ * AWS SDK throws.
+ *
  * KNOWN GAP, left deliberately unresolved by this task's own brief: when
  * `config.endpoint` is the empty string, this function omits `endpoint`
  * from the S3Client config, which falls through to the AWS SDK's own

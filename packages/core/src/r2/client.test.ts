@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newId } from '../ulid';
@@ -105,14 +106,43 @@ describe('createR2Client (T3.4.1)', () => {
       expect(message).not.toContain(REAL_CONFIG.secretAccessKey);
       expect(message).not.toContain(WRONG_SECRET);
 
-      // Also check the whole serialized error (name, code, metadata) —
-      // not just `.message` — the same "don't trust .message alone"
-      // discipline resolve-redis.ts's own describeError applies to
-      // ioredis errors, extended here to whatever shape the AWS SDK
-      // throws.
-      const fullySerialized = JSON.stringify(caught, Object.getOwnPropertyNames(caught));
-      expect(fullySerialized).not.toContain(REAL_CONFIG.secretAccessKey);
-      expect(fullySerialized).not.toContain(WRONG_SECRET);
+      // Also check the WHOLE error object graph — not just `.message` —
+      // the same "don't trust .message alone" discipline resolve-redis.ts's
+      // own describeError applies to ioredis errors, extended here to
+      // whatever shape the AWS SDK throws.
+      //
+      // [security review round 1, MEDIUM] `JSON.stringify(caught,
+      // Object.getOwnPropertyNames(caught))` previously stood in for "the
+      // whole serialized error", but the ARRAY form of JSON.stringify's
+      // replacer applies the SAME top-level name allowlist at EVERY
+      // nesting level — it does not recurse per-object. A real S3 SDK
+      // error's own `$response`/`$metadata` have their OWN property names
+      // (headers, body, ...), none of which are in `caught`'s top-level
+      // name list, so they silently collapsed to `{}` and the assertion
+      // below was passing because that content was discarded before the
+      // check ever ran, not because it was actually inspected — a false
+      // sense of security on exactly the property this test exists to
+      // prove. `util.inspect(caught, { depth: null, showHidden: true })`
+      // instead walks the FULL graph with no depth limit, so nested
+      // `$response` internals (verified by hand against this real MinIO:
+      // they contain the raw HTTP request, including the `authorization`
+      // header) are genuinely present in `fullyInspected` for the
+      // assertion below to actually check, not silently pruned first.
+      //
+      // Deliberately does NOT also assert `.not.toContain(accessKeyId)`
+      // here: a full-depth dump DOES contain the access key id in
+      // cleartext (`authorization: AWS4-HMAC-SHA256
+      // Credential=<accessKeyId>/...`, confirmed against this real MinIO)
+      // — SigV4's own protocol always sends the key id, never the secret,
+      // over the wire. That is expected AWS/R2 protocol behavior, not a
+      // leak this test's own SECRET-focused scope tries to catch; it is
+      // exactly why createR2Client's own docstring warns callers never to
+      // log a caught S3 error wholesale (no `util.inspect(error, {depth:
+      // null})`, no bare `console.log(error)`) and to log an explicit
+      // allowlisted subset instead.
+      const fullyInspected = inspect(caught, { depth: null, showHidden: true });
+      expect(fullyInspected).not.toContain(REAL_CONFIG.secretAccessKey);
+      expect(fullyInspected).not.toContain(WRONG_SECRET);
     });
   });
 });
