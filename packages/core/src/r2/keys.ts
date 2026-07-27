@@ -44,6 +44,25 @@ function zeroPad(value: number, length: number): string {
   return String(value).padStart(length, '0');
 }
 
+/** Parses `value` as an ISO-8601 instant, throwing loudly — rather than
+ * letting a `NaN`-poisoned `Date` silently produce a "NaN" key segment or a
+ * wrong/partial range — if it does not parse to a valid instant. Shared by
+ * `eventBatchKey` and `eventPrefixes` so both interpret "a valid ISO-8601
+ * instant" identically; that shared interpretation is exactly what makes
+ * the two functions genuine inverses of each other. */
+function parseInstant(value: string, fnName: string, paramName: string): Date {
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fnName}: ${paramName} is not a valid ISO-8601 timestamp: "${value}"`);
+  }
+
+  return parsed;
+}
+
+const HOURS_PER_DAY = 24;
+const MS_PER_DAY = HOURS_PER_DAY * 60 * 60 * 1000;
+
 /**
  * Builds the partitioned R2 key a batch's NDJSON body is written to:
  * `events/dt=YYYY-MM-DD/hour=HH/<batchId>.ndjson`.
@@ -75,11 +94,7 @@ function zeroPad(value: number, length: number): string {
  * an opaque, already-trusted string to key the object with.
  */
 export function eventBatchKey(batchId: string, occurredAt: string): string {
-  const parsed = new Date(occurredAt);
-
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`eventBatchKey: occurredAt is not a valid ISO-8601 timestamp: "${occurredAt}"`);
-  }
+  const parsed = parseInstant(occurredAt, 'eventBatchKey', 'occurredAt');
 
   const year = parsed.getUTCFullYear();
   const month = zeroPad(parsed.getUTCMonth() + 1, 2);
@@ -87,4 +102,79 @@ export function eventBatchKey(batchId: string, occurredAt: string): string {
   const hour = zeroPad(parsed.getUTCHours(), 2);
 
   return `events/dt=${year}-${month}-${day}/hour=${hour}/${batchId}.ndjson`;
+}
+
+/**
+ * T3.6.1 (E3, S3.6) [INV-7] — the exact inverse of `eventBatchKey`'s key
+ * layout. Enumerates the `events/dt=YYYY-MM-DD/hour=HH/` partition
+ * prefixes (the two-level directory prefix only — no filename, no
+ * batchId) touched by the inclusive UTC range `[from, to]`. A replay tool
+ * walks this list to know which R2 prefixes to LIST/GET when rebuilding
+ * Postgres from the NDJSON log for a given window: if this file's key
+ * LAYOUT (the `dt=.../hour=...` scheme) ever changes, this function must
+ * change with it, and prefixes.test.ts's own cross-check against a real
+ * `eventBatchKey` output is what turns a missed update into one loud
+ * failing test instead of a replay tool that silently narrows and misses
+ * real events.
+ *
+ * --- Why the range operates at UTC DAY granularity, not raw instant/hour -
+ *
+ * `from`/`to` accept arbitrary ISO-8601 instants — same convention as
+ * `eventBatchKey`'s `occurredAt`, so a caller threading a real timestamp
+ * through needs no rounding of its own — but the RANGE this function walks
+ * is the whole UTC calendar days those instants fall on, not a narrower
+ * per-hour slice. Two instants that land on the same UTC day, even the
+ * exact same instant and even one nowhere near an hour boundary (e.g.
+ * `eventPrefixes('2026-07-21T05:45:00Z', '2026-07-21T05:45:00Z')`), still
+ * yield all 24 hours of that day — not 1, and not 0.
+ *
+ * This is deliberate. The alternative — intersecting each hour BUCKET
+ * against `[from, to]` and only including buckets that genuinely overlap —
+ * would make this function's output depend on the exact minute/second
+ * `from`/`to` happen to carry, which is exactly the SILENT-NARROWING
+ * failure mode this function exists to avoid: a `from`/`to` pair that
+ * isn't perfectly hour-aligned would quietly drop the partial hours at
+ * each end instead of covering them. Emitting the full day on both ends
+ * means `eventPrefixes` only ever OVER-covers a range, never under-covers
+ * it — for a replay tool, a few extra hours of a boundary day is a
+ * correctness no-op (writes are idempotent, invariant 8); a missing real
+ * hour is data loss. A consequence worth knowing: a range that crosses a
+ * UTC day boundary by even one second emits prefixes for BOTH full days —
+ * 48 prefixes, not the ~2 hours' worth actually spanned.
+ *
+ * The `from > to` validity check compares UTC CALENDAR DAYS, not raw
+ * instants, to match this same day granularity: two same-day instants in
+ * either time-of-day order are not an error, since they produce
+ * byte-identical output either way (both truncate to the same day).
+ *
+ * Throws if `from` or `to` does not parse to a valid instant, or if `from`
+ * falls on a UTC calendar day after `to` — the same "throw loudly rather
+ * than silently produce a wrong/partial range" discipline as
+ * `eventBatchKey`.
+ */
+export function eventPrefixes(from: string, to: string): string[] {
+  const fromParsed = parseInstant(from, 'eventPrefixes', 'from');
+  const toParsed = parseInstant(to, 'eventPrefixes', 'to');
+
+  const fromDayMs = Date.UTC(fromParsed.getUTCFullYear(), fromParsed.getUTCMonth(), fromParsed.getUTCDate());
+  const toDayMs = Date.UTC(toParsed.getUTCFullYear(), toParsed.getUTCMonth(), toParsed.getUTCDate());
+
+  if (fromDayMs > toDayMs) {
+    throw new Error(`eventPrefixes: from ("${from}") falls on a UTC calendar day after to ("${to}")`);
+  }
+
+  const prefixes: string[] = [];
+
+  for (let dayMs = fromDayMs; dayMs <= toDayMs; dayMs += MS_PER_DAY) {
+    const day = new Date(dayMs);
+    const year = day.getUTCFullYear();
+    const month = zeroPad(day.getUTCMonth() + 1, 2);
+    const date = zeroPad(day.getUTCDate(), 2);
+
+    for (let hour = 0; hour < HOURS_PER_DAY; hour++) {
+      prefixes.push(`events/dt=${year}-${month}-${date}/hour=${zeroPad(hour, 2)}/`);
+    }
+  }
+
+  return prefixes;
 }
