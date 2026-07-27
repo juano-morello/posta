@@ -24,12 +24,29 @@
  * query string, fragment, port, and userinfo (`username:password@`).
  *
  * Returns `null` for any value the `URL` constructor can't parse —
- * including the empty string — rather than throwing.
+ * including the empty string — rather than throwing. Also returns `null`
+ * (never the empty string) for a value the `URL` constructor DOES parse
+ * successfully but that has no authority component, e.g. `javascript:` or
+ * `mailto:` — `new URL(...).hostname` reports `''` for those, and this
+ * function normalizes that into the same "no usable host" `null` the rest
+ * of its contract already uses, rather than handing callers a second,
+ * falsy-but-not-null shape to check for. `zDestination`
+ * (packages/contracts/src/links.ts) already restricts stored destinations
+ * to http(s), where this case can't arise, but this function stays
+ * defensive for any caller that hands it unvalidated input.
  *
  * Userinfo is deliberately never part of the return value: `URL#hostname`
  * (unlike `URL#host`) never includes it, and a destination someone pasted
  * with embedded credentials must not leak them into a value that can end
  * up in a dashboard-facing analytics field.
+ *
+ * SECURITY: the returned hostname is a structural fact, not an
+ * output-encoded value. The WHATWG forbidden-host-code-point list blocks
+ * characters like `<`, `>`, `@`, and `/`, but NOT `'`, `"`, backtick,
+ * `;`, or parens/braces — a destination such as `https://a'b.com/`
+ * round-trips to `a'b.com` unescaped. Callers MUST still escape/parameterize
+ * this value before interpolating it into HTML, SQL, or a log line; this
+ * function performs no output encoding of any kind.
  */
 export function destHost(destination: string): string | null {
   if (destination === '') {
@@ -37,7 +54,9 @@ export function destHost(destination: string): string | null {
   }
 
   try {
-    return new URL(destination).hostname.toLowerCase();
+    const hostname = new URL(destination).hostname.toLowerCase();
+
+    return hostname === '' ? null : hostname;
   } catch {
     return null;
   }

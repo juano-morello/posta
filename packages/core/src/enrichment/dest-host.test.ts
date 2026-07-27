@@ -15,12 +15,40 @@ describe('destHost (T3.2.4)', () => {
     expect(destHost('https://Shop.Example.com:443/a?utm_source=ig#x')).toBe('shop.example.com');
   });
 
-  it('returns null for an unparseable value', () => {
-    expect(destHost('not a url')).toBeNull();
-  });
-
   it('returns null for the empty string', () => {
     expect(destHost('')).toBeNull();
+  });
+
+  it.each([
+    ['plain garbage text', 'not a url'],
+    ['a scheme with no authority at all', 'https://'],
+    ['whitespace only', '   '],
+    ['garbage containing unicode/emoji', 'not 🚀 a url'],
+    ['a space inside the host', 'http://exam ple.com/'],
+  ])('returns null for an unparseable value: %s (%j)', (_label, input) => {
+    expect(destHost(input)).toBeNull();
+  });
+
+  it('returns null for a protocol-relative URL (no base to resolve it against)', () => {
+    expect(destHost('//example.com')).toBeNull();
+  });
+
+  it.each([
+    ['javascript:', 'javascript:alert(1)'],
+    ['mailto:', 'mailto:test@example.com'],
+  ])(
+    'normalizes a %s URL that parses but has no host to null, not empty string',
+    (_label, input) => {
+      expect(destHost(input)).toBeNull();
+    },
+  );
+
+  it('preserves the brackets on an IPv6 host', () => {
+    expect(destHost('http://[::1]/')).toBe('[::1]');
+  });
+
+  it('returns the punycode-encoded form of an internationalized domain', () => {
+    expect(destHost('http://münchen.de/')).toBe('xn--mnchen-3ya.de');
   });
 
   it('never leaks embedded userinfo (username:password@) into the returned host', () => {
