@@ -96,7 +96,7 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 `enrich(payload)` returns exactly the seven enrichment columns from spec §8 — `browser`, `browser_version`, `os`, `device_type`, `source_platform`, `is_in_app`, `dest_host` — with a return type that structurally cannot carry an eighth field. One entry point so the live flush path (T3.3.2) and replay (T3.6.3) enrich identically.
 → **files** `packages/core/src/enrichment/index.ts` · `packages/core/src/enrichment/enrich.test.ts` · **verify** `pnpm test enrich.test.ts` asserts the returned key set equals the seven column names exactly, and that a payload with every field null returns seven nulls without throwing · **after** T3.2.3, T3.2.4
 
-#### T3.2.6 · `test: enrichment fixture corpus over real UA and referer combinations`
+#### T3.2.6 · `test: enrichment fixture corpus over real UA and referer combinations` ✅ done (`9882284`)
 A committed fixture of ~40 real `{ user_agent, referer, destination }` triples with their expected enrichment output — desktop and mobile browsers, all six in-app webviews, the LATAM Android long tail, and deliberately malformed entries. **This is not the classification corpus** (spec §7.2, which belongs to E4): it asserts descriptive fields only, with no expected verdict column anywhere in the file. Reused end-to-end by T3.5.5.
 → **files** `packages/core/src/enrichment/fixtures/ua-corpus.json` · `packages/core/src/enrichment/corpus.test.ts` · **verify** `pnpm test corpus.test.ts` runs `enrich()` over every fixture and asserts the expected output, plus asserts the fixture file contains no key matching `verdict|classification|is_bot|is_human` · **after** T3.2.5
 
