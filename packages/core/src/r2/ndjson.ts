@@ -118,6 +118,28 @@ function toLogLine(event: LoggedEvent): EventLogLine {
 }
 
 /**
+ * `JSON.stringify(toLogLine(event))`, with the failing event identified in
+ * the error if it throws (e.g. a BigInt smuggled onto the object via an
+ * unsafe cast — none of {@link EventLogLine}'s 31 fields can naturally
+ * produce a circular reference, but nothing stops a caller from handing
+ * this function something that violates {@link LoggedEvent}'s own type at
+ * runtime). Deliberately does NOT catch-and-skip: {@link serializeBatch}'s
+ * own docstring explains why one poisoned event failing the WHOLE batch,
+ * loudly, is the correct behavior for this codebase — this wrapper only
+ * makes that failure diagnosable, it does not change what fails or when.
+ */
+function serializeEvent(event: LoggedEvent): string {
+  try {
+    return JSON.stringify(toLogLine(event));
+  } catch (cause) {
+    throw new Error(
+      `serializeBatch: failed to serialize event_id=${event.event_id} occurred_at=${event.occurred_at}`,
+      { cause },
+    );
+  }
+}
+
+/**
  * Serializes a batch of fully-enriched event rows to NDJSON: one JSON
  * object per line, every line (including the last) newline-terminated, no
  * trailing blank line — the standard NDJSON convention (ndjson.org: "the
@@ -142,7 +164,22 @@ function toLogLine(event: LoggedEvent): EventLogLine {
  * Fields are copied through {@link toLogLine}'s explicit allowlist — see
  * that function's own docstring for why a spread can never leak an
  * unexpected field (invariant 4, invariant 6) into this durable log.
+ *
+ * If serializing ANY single event throws, the WHOLE batch throws — this is
+ * deliberate, not an oversight. Invariant 7 ("every event goes to both
+ * Postgres and R2") means a silent per-event skip here (write N-1 of N
+ * events to R2 while a sibling flush's Postgres write for the SAME batch
+ * either succeeds or fails as a whole) would create exactly the
+ * store-inconsistency invariant 7 exists to prevent: an event durably in
+ * Postgres with no corresponding record it was ever dropped from the R2
+ * log. "One poisoned event in an otherwise-good batch" has a planned home
+ * — the split-retry/poison-DLQ handling later E3 tasks add on the Postgres
+ * side — and this function deferring to that mechanism (by failing loudly
+ * and completely) is the correct, visible failure mode, not a gap to
+ * paper over with a try/catch-and-continue here. {@link serializeEvent}
+ * only makes that failure diagnosable (which `event_id` caused it), it
+ * does not change whether or when it happens.
  */
 export function serializeBatch(events: readonly LoggedEvent[]): string {
-  return events.map((event) => `${JSON.stringify(toLogLine(event))}\n`).join('');
+  return events.map((event) => `${serializeEvent(event)}\n`).join('');
 }

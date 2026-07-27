@@ -217,6 +217,45 @@ describe('serializeBatch (T3.4.2)', () => {
     expect(linesOf(output)).toHaveLength(500);
   });
 
+  describe('a genuinely unserializable field throws a diagnosable, whole-batch error', () => {
+    it('identifies the failing event_id in the thrown error, with the original TypeError as cause, rather than a bare JSON.stringify error', () => {
+      // A BigInt is the most realistic thing JSON.stringify actually
+      // chokes on here: none of EventLogLine's 31 fields can naturally
+      // produce a circular reference, but nothing at runtime stops a
+      // caller from violating LoggedEvent's own type. Unlike the
+      // planted-EXTRA-key test below (a strict widening, so `as
+      // LoggedEvent` alone compiles), swapping `asn`'s type from `number`
+      // to `bigint` is an incompatible narrowing — TS's overlap check
+      // correctly rejects a direct `as LoggedEvent` here, so this goes
+      // through `unknown` first, same as any other deliberate
+      // runtime-only type violation.
+      const poisonedEventId = newId();
+      const poisonedEvent = {
+        ...buildLoggedEvent({ event_id: poisonedEventId }),
+        asn: 123n,
+      } as unknown as LoggedEvent;
+      const goodEvent = buildLoggedEvent();
+
+      let caught: unknown;
+      try {
+        serializeBatch([goodEvent, poisonedEvent]);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      const error = caught as Error;
+      expect(error.message).toContain(poisonedEventId);
+      expect(error.cause).toBeInstanceOf(TypeError);
+    });
+
+    it('the whole batch fails — a good event earlier in the batch does not partially succeed', () => {
+      const poisonedEvent = { ...buildLoggedEvent(), asn: 123n } as unknown as LoggedEvent;
+
+      expect(() => serializeBatch([buildLoggedEvent(), poisonedEvent])).toThrow();
+    });
+  });
+
   describe('[INV-4][INV-6] the allowlist — an extra ip/classification field on the input never reaches the output', () => {
     it('a payload with planted ip and classification keys serializes WITHOUT them, anywhere', () => {
       const secretMarker = `do-not-leak-me-${newId()}`;
