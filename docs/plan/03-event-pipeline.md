@@ -170,7 +170,7 @@ Feeds 10k generated events through accumulator → enrichment → insert against
 A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET_EVENTS` (already validated in T0.3.6), with `forcePathStyle: true` so the same code addresses MinIO locally and R2 in production. Constructed once at module load, never per batch. [security] — credentials are read from env and never logged, including in the SDK's error paths.
 → **files** `packages/core/src/r2/client.ts` · `packages/core/src/r2/client.test.ts` · **verify** `pnpm test r2/client.test.ts` puts and re-reads an object against the compose MinIO from T0.4.4, and asserts a forced auth failure produces an error message containing no part of the secret key · **after** T0.4.4, T0.3.6
 
-#### T3.4.2 · `feat: NDJSON serializer for event batches` [INV-4][INV-6]
+#### T3.4.2 · `feat: NDJSON serializer for event batches` [INV-4][INV-6] ✅ done (`9e00a07`)
 `serializeBatch(events)` emits one JSON object per line, newline-terminated, UTF-8. Fields are copied through an **explicit allowlist** matching the `events` column set from spec §8 — not a spread — so a future extra field on the payload cannot silently reach the durable log. An `ip` or a verdict cannot appear in the log because the serializer has no key for one.
 → **files** `packages/core/src/r2/ndjson.ts` · `packages/core/src/r2/ndjson.test.ts` · **verify** `pnpm test ndjson.test.ts` asserts line count equals batch length, every line round-trips through `JSON.parse`, the emitted key set equals the `events` column list, and a payload with planted `ip` and `classification` keys serializes without them · **after** T3.2.5
 
