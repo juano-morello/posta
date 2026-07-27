@@ -218,7 +218,13 @@ describe('retryWithSplit — a lone poison event (batch of one) is isolated with
     expect(callCount()).toBe(4);
     expect(result.committedEvents).toEqual([]);
     expect(result.poisonEvents).toHaveLength(1);
-    expect(result.poisonEvents[0]?.event_id).toBe(poisonEvent.event_id);
+    expect(result.poisonEvents[0]?.event.event_id).toBe(poisonEvent.event_id);
+    // [T3.3.4] the underlying Error is carried through, not reduced to a
+    // string — a real Postgres error's own `.code` (the SQLSTATE) rides
+    // along on this same object, which is what lets a caller route it to
+    // the DLQ without this file ever inspecting it itself.
+    expect(result.poisonEvents[0]?.error).toBeInstanceOf(Error);
+    expect(result.poisonEvents[0]?.error.message).toMatch(/simulated Postgres rejection/);
   });
 });
 
@@ -232,7 +238,8 @@ describe('retryWithSplit — the plan\'s literal verify: 100-event batch, one ov
 
     expect(result.committedEvents).toHaveLength(99);
     expect(result.poisonEvents).toHaveLength(1);
-    expect(result.poisonEvents[0]?.event_id).toBe(poisonEventId);
+    expect(result.poisonEvents[0]?.event.event_id).toBe(poisonEventId);
+    expect(result.poisonEvents[0]?.error).toBeInstanceOf(Error);
 
     // Every committed event actually reached the fake table.
     expect(committed.size).toBe(99);
@@ -242,9 +249,10 @@ describe('retryWithSplit — the plan\'s literal verify: 100-event batch, one ov
 
     // committedEvents ⊎ poisonEvents accounts for every original event
     // exactly once — nothing lost, nothing duplicated across the split.
-    const resultIds = [...result.committedEvents, ...result.poisonEvents]
-      .map((e) => e.event_id)
-      .sort();
+    const resultIds = [
+      ...result.committedEvents.map((e) => e.event_id),
+      ...result.poisonEvents.map((p) => p.event.event_id),
+    ].sort();
     expect(resultIds).toEqual(events.map((e) => e.event_id).sort());
   });
 

@@ -34,6 +34,16 @@ import { redactCredentialsFromMessage } from '@posta/contracts';
 // exchange for one shape every consumer of this queue can rely on
 // unconditionally, regardless of `reason`.
 //
+// [T3.3.4] `sqlstate` follows the SAME flat-shape reasoning: it is
+// `null` for 'schema-validation-failed' (a ZodError has no SQLSTATE) and
+// for 'attempts-exhausted' (a sink error is not necessarily a database
+// error at all), non-null for 'flush-poison' whenever the underlying
+// Error came from `pg`/`node-postgres` (whose `DatabaseError` sets
+// `.code` to the real SQLSTATE) — `send()` derives it structurally from
+// `error`'s own `.code` property, never by importing `pg`'s error class
+// (this file has no `pg` dependency, and doesn't need one to read one
+// property off a duck-typed shape).
+//
 // [security, invariant 6] `rawPayload` is stored EXACTLY as received,
 // unredacted, for BOTH reasons — this is T3.1.4's own established
 // decision (its own EventsDlqJobPayload doc comment, preserved here:
@@ -87,8 +97,18 @@ export function toDlqIssues(
 /** Why a job ended up here. A bare string union (not open-ended
  * `string`) so a typo in a future third reason fails to compile rather
  * than silently landing on the DLQ under a reason nothing else
- * recognizes. */
-export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted';
+ * recognizes.
+ *
+ * [T3.3.4] `'flush-poison'` is the THIRD reason, added by that task:
+ * `apps/worker/src/batch/split-retry.ts`'s `retryWithSplit` (T3.3.3)
+ * isolates a single event that still fails after binary-splitting a
+ * batch down to size one — that event never came from a single BullMQ
+ * job the way the other two reasons' payloads did, it came from a
+ * Postgres-rejected sub-batch. `sendPoisonEventsToDlq`
+ * (split-retry.ts) is the one caller that produces this reason, via the
+ * `PoisonDlqSink` interface that file defines to avoid importing this
+ * class directly — see that file's own header for why. */
+export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted' | 'flush-poison';
 
 /**
  * `EVENTS_DLQ_QUEUE`'s own job payload — the record `DlqService.send()`
@@ -112,6 +132,13 @@ export interface EventsDlqJobPayload {
    * (JSON-ish) `.message` for 'schema-validation-failed' (the structured,
    * human-readable equivalent lives in `issues` for that reason). */
   readonly errorMessage: string;
+  /** [T3.3.4] The SQLSTATE off the underlying Postgres error, when there
+   * is one — `error.code` when `error` carries a string `.code` property
+   * (`pg`'s own `DatabaseError` shape), `null` otherwise. Always `null`
+   * for 'schema-validation-failed' and 'attempts-exhausted' today (see
+   * this file's own "flat shape" reasoning, above) — only 'flush-poison'
+   * entries populate this from a real Postgres rejection. */
+  readonly sqlstate: string | null;
   /** Non-empty only for 'schema-validation-failed' — `[]` otherwise. See
    * this file's own "flat shape" reasoning for why this field exists
    * unconditionally rather than only on a narrower type. */
@@ -139,6 +166,33 @@ export interface DlqSendMeta {
   readonly originalJobId: string;
   readonly attemptsMade: number;
   readonly issues?: readonly EventsDlqIssue[];
+}
+
+/** [T3.3.4] Reads the SQLSTATE off `error`'s own `.code` property, or the
+ * first `.code` found by walking a BOUNDED chain of standard
+ * `Error.prototype.cause` links — `pg`'s `DatabaseError` sets `.code` to
+ * the real 5-character SQLSTATE directly, but the error a real
+ * `flushBatch` (apps/worker/src/batch/flush.ts) rejects with is
+ * drizzle-orm's own `DrizzleQueryError`, which wraps the ORIGINAL `pg`
+ * error via the standard ES2022 `cause` chain rather than copying `.code`
+ * onto itself (verified against the installed drizzle-orm@0.45.2 source,
+ * `errors.cjs`'s `DrizzleQueryError` constructor: `this.cause = cause`).
+ * A plain structural `.code` check, not an `instanceof` against `pg`'s or
+ * drizzle's own error classes: this file has no dependency on either (it
+ * is transport-agnostic, see this file's own header), and duck-typing one
+ * property at each link costs nothing an import would buy here. Bounded
+ * at 5 links so an accidental `cause` cycle cannot loop forever. Any
+ * error whose whole chain has no string `.code` (a plain `Error`, a
+ * `ZodError`, ...) yields `null`. */
+function extractSqlState(error: Error): string | null {
+  const MAX_CAUSE_DEPTH = 5;
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth++) {
+    const code = (current as { readonly code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return null;
 }
 
 /**
@@ -170,6 +224,7 @@ export class DlqService {
       // received, unredacted" — a different, already-reviewed decision
       // this fix does not touch).
       errorMessage: redactCredentialsFromMessage(error.message),
+      sqlstate: extractSqlState(error),
       issues: meta.issues ?? [],
       attemptsMade: meta.attemptsMade,
       originalJobId: meta.originalJobId,

@@ -7,11 +7,14 @@ import type { FlushBatch } from './flush';
 // exponential backoff, and only once THAT is exhausted does it binary-
 // split into two halves and recurse — each half getting its own full
 // retry-then-split treatment — until a single event, alone in a batch of
-// one, still fails. That event is "poison": isolated and RETURNED, never
-// dropped and never sent anywhere by this file (T3.3.4, not this task,
-// routes it to `DlqService` via `EVENTS_DLQ_QUEUE` — this module has no
-// idea that queue exists, on purpose, so it stays testable and reusable
-// without a DLQ dependency).
+// one, still fails. That event is "poison": isolated and RETURNED,
+// paired with the Error that caused its final rejection (T3.3.4, see
+// {@link PoisonedEvent}), never dropped and never sent anywhere by
+// `retryWithSplit` itself. Routing it to `DlqService` via
+// `EVENTS_DLQ_QUEUE` is `sendPoisonEventsToDlq`'s job (T3.3.4, below) —
+// built around a narrow `PoisonDlqSink` interface rather than an import
+// of `DlqService` itself, so `retryWithSplit` proper stays exactly as
+// testable and reusable without a DLQ dependency as T3.3.3 left it.
 //
 // WHY BINARY SPLIT AND NOT "drop the batch" OR "retry forever": a single
 // bad row (an oversized field, a constraint violation, anything the
@@ -30,13 +33,21 @@ import type { FlushBatch } from './flush';
 // `FlushBatch`-shaped function (flush.ts's own exported type,
 // `(events: readonly CaptureEvent[]) => Promise<void>`) as a parameter,
 // never imports `@posta/core`'s db helpers itself, and inspects nothing
-// about WHY a call rejected — no SQLSTATE parsing, no Postgres-specific
-// error shape anywhere in this file. Any rejection at all is treated as
-// "this sub-batch did not commit, try again / split it" — the SAME
-// contract flush.test.ts's own `createFlushBatch` already promises,
-// which is also why split-retry.test.ts can point this module at either
-// a real testcontainer-backed `flushBatch` OR a plain injected function
-// that fails on cue, and get identical behavior either way.
+// about WHY a call rejected inside the retry/split algorithm itself — no
+// SQLSTATE parsing, no Postgres-specific error shape anywhere in
+// `attemptBatch`. Any rejection at all is treated as "this sub-batch did
+// not commit, try again / split it" — the SAME contract flush.test.ts's
+// own `createFlushBatch` already promises, which is also why
+// split-retry.test.ts can point this module at either a real
+// testcontainer-backed `flushBatch` OR a plain injected function that
+// fails on cue, and get identical behavior either way. [T3.3.4] A
+// poisoned sub-batch's final Error IS carried through onto its
+// `PoisonedEvent` unchanged now (never reduced to a string, as before
+// this task) — a real Postgres error's own `.code` IS the SQLSTATE, and
+// a caller reads it off `PoisonedEvent.error`. `attemptBatch` itself
+// still never branches on `.code` or on what kind of error it received;
+// it only ever decides "retry, split, or declare poison" from attempt
+// count and sub-batch size.
 //
 // SEQUENTIAL, NOT `Promise.all`, ACROSS THE TWO HALVES: a split's two
 // halves are awaited one after another rather than concurrently. This
@@ -97,17 +108,32 @@ export interface SplitRetryOptions {
   readonly logger?: SplitRetryLogger;
 }
 
+/** A poisoned event, paired with the Error that caused its final,
+ * unrecoverable rejection — the SAME Error object `flushBatch` itself
+ * rejected with on the LAST attempt of the sub-batch of one that isolated
+ * it, never reduced to a string. A real Postgres error's own `.code` IS
+ * the SQLSTATE (`pg`'s `DatabaseError` sets it directly) — carrying the
+ * whole object through, rather than just `.message`, is what lets a
+ * caller (T3.3.4's `sendPoisonEventsToDlq`, below) surface that code
+ * without `attemptBatch` ever inspecting or depending on it itself. */
+export interface PoisonedEvent {
+  readonly event: CaptureEvent;
+  readonly error: Error;
+}
+
 export interface SplitRetryResult {
   /** Every event that ended up in a sub-batch whose `flushBatch` call
    * eventually resolved — i.e. actually committed. Order is not
    * meaningful (the two halves of a split are merged after both
    * resolve). */
   readonly committedEvents: readonly CaptureEvent[];
-  /** Events isolated as poison: each one, alone in a sub-batch of one,
-   * still failed after `maxAttemptsPerBatch` attempts. Never sent
-   * anywhere by this function — routing these to a DLQ is T3.3.4's job,
-   * not this file's. */
-  readonly poisonEvents: readonly CaptureEvent[];
+  /** Events isolated as poison, each paired with the Error that caused
+   * its final rejection (see {@link PoisonedEvent}) — every one, alone
+   * in a sub-batch of one, still failed after `maxAttemptsPerBatch`
+   * attempts. Never sent anywhere by `retryWithSplit` itself — routing
+   * these to a DLQ is `sendPoisonEventsToDlq`'s job (T3.3.4, below), not
+   * this function's. */
+  readonly poisonEvents: readonly PoisonedEvent[];
 }
 
 function validateOptions(options: SplitRetryOptions): void {
@@ -125,6 +151,15 @@ function validateOptions(options: SplitRetryOptions): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Normalises an unknown rejection into a real `Error` — the SAME value
+ * when it already IS one (preserving any extra property a caller
+ * attached, e.g. `pg`'s own `.code`/SQLSTATE), or a freshly constructed
+ * `Error` wrapping its string form otherwise (mirrors `errorMessage`,
+ * above, which this delegates to for that fallback case). */
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(errorMessage(error));
 }
 
 /** The single choke point every sub-batch (whole batch or a split half,
@@ -157,12 +192,13 @@ async function attemptBatch(
 
   if (events.length === 1) {
     const poisonEvent = events[0]!;
+    const error = toError(lastError);
     logger.error(
       `retryWithSplit: isolated poison event ${poisonEvent.event_id} after ${maxAttempts} failed ` +
         `attempt(s): ${message}`,
       { eventId: poisonEvent.event_id, attempts: maxAttempts },
     );
-    return { committedEvents: [], poisonEvents: [poisonEvent] };
+    return { committedEvents: [], poisonEvents: [{ event: poisonEvent, error }] };
   }
 
   logger.error(
@@ -212,4 +248,114 @@ export async function retryWithSplit(
   const logger = options.logger ?? consoleErrorLogger;
 
   return attemptBatch(events, flushBatch, options.maxAttemptsPerBatch, options.initialDelayMs, sleep, logger);
+}
+
+// T3.3.4 [E3, S3.3] — everything below is the bridge from a
+// `retryWithSplit` result to `EVENTS_DLQ_QUEUE`, via `DlqService`
+// (apps/worker/src/consumer/dlq.service.ts, T3.1.5). Deliberately its OWN
+// section, after `retryWithSplit` itself: this file's own header explains
+// why the retry/split algorithm stays unaware a DLQ exists — this is the
+// caller-side composition that closes that loop WITHOUT importing
+// `DlqService`, `@nestjs/bullmq`, or even `DlqReason` into this file.
+//
+// WHERE THIS IS ACTUALLY CALLED FROM — deliberately NOT this task's
+// concern: neither `retryWithSplit` nor `flush.ts`'s own `flushBatch` is
+// wired to call `sendPoisonEventsToDlq` yet, and this file does not wire
+// a real `DlqService` into it either — that wiring belongs wherever the
+// accumulator's flush callback is composed (`app.module.ts`), which is
+// NOT in this task's file list. `sendPoisonEventsToDlq` is built and
+// proven correct here (poison-dlq.test.ts) so that wiring is a pure
+// composition step for whichever later task does it, not a design
+// decision it has to make from scratch.
+
+/** The per-poison-event metadata `sendPoisonEventsToDlq` needs beyond the
+ * event and its error — see that function's own header for why
+ * `DlqSendMeta`'s `originalJobId`/`attemptsMade` (dlq.service.ts) don't
+ * map cleanly onto a flush-level poison event, and what stands in for
+ * them here. */
+export interface PoisonDlqMeta {
+  /** Stands in for `DlqSendMeta.originalJobId` — a poison event has no
+   * single originating BullMQ job id in that sense (it came from a
+   * BATCH, not a single job). The flush's own `batch_id` (minted once
+   * per batch by `BatchAccumulator`, T3.3.1) is the closest thing an
+   * operator could actually search logs for, so it stands in here. */
+  readonly batchId: string;
+  /** Stands in for `DlqSendMeta.attemptsMade` — not a per-job BullMQ
+   * counter (there isn't one at this level), but the SAME
+   * `maxAttemptsPerBatch` value `retryWithSplit` was called with: every
+   * poisoned event in a `retryWithSplit` result was retried exactly this
+   * many times, alone, before being declared poison. */
+  readonly maxAttemptsPerBatch: number;
+}
+
+/** The literal `DlqReason` value this file's own poison-routing seam
+ * sends (dlq.service.ts's own `DlqReason` union, extended by this task
+ * to include it). Exported as a named constant — the same
+ * `EVENTS_DLQ_JOB_NAME` precedent dlq.service.ts itself sets, so a
+ * caller wiring a real `DlqService` in later never has to hand-type the
+ * string a second time. Deliberately NOT imported from dlq.service.ts,
+ * even as a type-only import: this file's own header says
+ * `retryWithSplit` stays unaware `DlqService`/`EVENTS_DLQ_QUEUE` exist on
+ * purpose, and a type-only import would still wire this file into that
+ * module's existence in the build graph. Keep this value in sync with
+ * dlq.service.ts's `DlqReason` by hand — a mismatch fails to compile the
+ * moment a real `DlqService` is passed as a {@link PoisonDlqSink}
+ * (structural typing catches the drift there, not here). */
+export const FLUSH_POISON_DLQ_REASON = 'flush-poison';
+
+/** The narrow slice of `DlqService.send()`
+ * (apps/worker/src/consumer/dlq.service.ts, T3.1.5) `sendPoisonEventsToDlq`
+ * needs — matching that method's real signature closely enough that a
+ * real `DlqService` instance satisfies this interface with zero adapter
+ * code (TypeScript's structural typing, contravariant-checked parameters
+ * included), while poison-dlq.test.ts can substitute a plain recording
+ * double instead of booting a real BullMQ queue. The SAME "narrow,
+ * replaceable seam" discipline this file's own `SplitRetryLogger`/`Sleep`
+ * already follow. */
+export interface PoisonDlqSink {
+  send(
+    reason: typeof FLUSH_POISON_DLQ_REASON,
+    payload: unknown,
+    error: Error,
+    meta: { readonly originalJobId: string; readonly attemptsMade: number },
+  ): Promise<void>;
+}
+
+/**
+ * Routes every poisoned event from a `retryWithSplit` result to
+ * `dlqSink.send()` — one DLQ entry per poisoned event, each carrying that
+ * event's own full `CaptureEvent` as `rawPayload` and the ORIGINAL Error
+ * `retryWithSplit` isolated it with (never just its `.message` — see
+ * {@link PoisonedEvent}), so a real Postgres error's own `.code` (the
+ * SQLSTATE) survives into the stored DLQ entry via `DlqService.send()`'s
+ * own `sqlstate` field.
+ *
+ * Never called by `retryWithSplit` itself — see this file's own header
+ * for why the retry/split algorithm stays entirely unaware a DLQ exists.
+ * A caller composes this AFTER `retryWithSplit` resolves, typically once
+ * per flush, passing a real `DlqService` as `dlqSink`.
+ *
+ * Sequential, not `Promise.all`, across poisoned events — the SAME
+ * "recovery path, no latency budget worth racing for" reasoning this
+ * file's own header gives for running a split's two halves sequentially.
+ *
+ * A `dlqSink.send()` rejection is NOT swallowed here: it propagates to
+ * the caller. A poison event that fails to even reach the DLQ is exactly
+ * the "vanishes silently" outcome this task exists to prevent — a loud
+ * failure the caller must handle beats a quiet one this function hides.
+ *
+ * An empty `poisonEvents` array is a no-op: `dlqSink.send()` is never
+ * called.
+ */
+export async function sendPoisonEventsToDlq(
+  poisonEvents: readonly PoisonedEvent[],
+  dlqSink: PoisonDlqSink,
+  meta: PoisonDlqMeta,
+): Promise<void> {
+  for (const poisoned of poisonEvents) {
+    await dlqSink.send(FLUSH_POISON_DLQ_REASON, poisoned.event, poisoned.error, {
+      originalJobId: meta.batchId,
+      attemptsMade: meta.maxAttemptsPerBatch,
+    });
+  }
 }
