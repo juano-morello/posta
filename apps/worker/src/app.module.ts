@@ -1,7 +1,15 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { EVENTS_QUEUE } from '@posta/core';
-import { EVENT_SINK, EventsConsumer, NoopEventSink, type EventSink } from './consumer/events.consumer';
+import {
+  consoleErrorLogger,
+  EVENT_SINK,
+  EVENTS_CONSUMER_LOGGER,
+  EventsConsumer,
+  NoopEventSink,
+  type EventSink,
+  type EventsConsumerLogger,
+} from './consumer/events.consumer';
 
 // T3.1.2 [E3, S3.1] — establishes the worker's BullMQ ROOT CONNECTION so
 // T3.1.3 (the consumer, a `@Processor`/`WorkerHost` class with tuned
@@ -62,6 +70,12 @@ export interface AppModuleConfig {
    * real testcontainers Redis, with no database involved (T3.3.1 lands
    * the real accumulator sink later). */
   readonly eventSink?: EventSink;
+  /** Overrides the `EVENTS_CONSUMER_LOGGER` DI token `EventsConsumer`
+   * injects. Defaults to `consoleErrorLogger` when omitted — same
+   * override shape as `eventSink` above, for the same reason: a test
+   * substitutes a spy through the real production DI wiring rather than
+   * a parallel one. */
+  readonly logger?: EventsConsumerLogger;
 }
 
 @Module({})
@@ -97,6 +111,7 @@ export class AppModule {
       providers: [
         EventsConsumer,
         { provide: EVENT_SINK, useValue: config.eventSink ?? new NoopEventSink() },
+        { provide: EVENTS_CONSUMER_LOGGER, useValue: config.logger ?? consoleErrorLogger },
       ],
     };
   }

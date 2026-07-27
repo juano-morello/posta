@@ -3,7 +3,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { z } from 'zod';
 import { EVENTS_QUEUE, eventJobSchema } from '@posta/core';
-import type { CaptureEvent } from '@posta/contracts';
+import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
 
 // T3.1.3 [E3, S3.1] — the BullMQ CONSUMER half of the redirect hot
 // path's producer/consumer split (T2.4.2 enqueues from apps/api,
@@ -41,6 +41,28 @@ import type { CaptureEvent } from '@posta/contracts';
 // attempts first is T3.1.4's job, not this one (see events-queue.ts's
 // own header). Never a human/bot verdict here either [INV-4] — this
 // class only decodes and hands off.
+//
+// [T3.1.3 fix-forward, silent-failure review] REACHING BULLMQ IS NOT THE
+// SAME AS BEING VISIBLE: both failure paths in `process()` (a decode
+// failure and a rejecting `sink.handle()`) always propagated correctly
+// to BullMQ's own retry/attempts machinery via the thrown/rethrown error
+// — neither was ever silently swallowed. But until this fix, that error
+// only ever landed in BullMQ's Redis job hash (`job.failedReason`),
+// invisible to stdout/kubectl logs unless someone thought to query job
+// state by hand — not "full context in server logs" (CLAUDE.md). Both
+// paths now log FIRST, through an injected `EventsConsumerLogger`, THEN
+// re-throw the SAME error unchanged, so BullMQ's retry behavior is
+// byte-for-byte what it was before this fix. What gets logged is
+// deliberately narrow: job id / event_id / link_id / tenant_id, never
+// the raw job payload or a caught error's full object graph (mirrors
+// r2/client.ts (T3.4.1)'s own caution) — a payload that failed
+// `.strict()` validation is exactly the shape invariant 6 exists to keep
+// out of logs, and once T3.3.1's real accumulator can throw here, its
+// errors may originate from Postgres/R2 clients whose own `.message`
+// can embed connection-string credentials the same way
+// apps/api/src/redirect/enqueue.ts's header describes for Redis —
+// `redactCredentialsFromMessage` (the same redactor that call site
+// already uses) is applied here for the same reason.
 
 /** The minimal contract `EventsConsumer` needs from whatever consumes a
  * decoded event next. `NoopEventSink` (below) is the only implementation
@@ -55,6 +77,32 @@ export interface EventSink {
  * `REDIS_TIMEOUT_MARKER` precedent, so a token typo fails to resolve
  * rather than silently colliding with an unrelated string token. */
 export const EVENT_SINK = Symbol('EVENT_SINK');
+
+/** Minimal logger shape `EventsConsumer` needs — mirrors
+ * apps/worker/src/partitions/partition-maintenance.job.ts's own
+ * `PartitionMaintenanceLogger`/`consoleErrorLogger` (T1.3.5) and
+ * apps/api/src/redirect/resolve-tenant.ts's `ResolveLogger` on the API
+ * side: a `{ error(message, meta?): void }` shape, injectable, so a test
+ * can pass a spy instead of a real logger (no pino instance wired up
+ * anywhere in this codebase yet). Deliberately the SAME shape as those
+ * two rather than a new one, per this file's own fix-forward note above. */
+export interface EventsConsumerLogger {
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+/** Production default — `partition-maintenance.job.ts`'s own
+ * `consoleErrorLogger` writes to stdout the same way; this is a separate
+ * instance rather than an import because that file's `close()` and this
+ * class have no other reason to depend on each other. */
+export const consoleErrorLogger: EventsConsumerLogger = {
+  error(message, meta) {
+    console.error(message, meta);
+  },
+};
+
+/** The DI token `EventsConsumer` injects `EventsConsumerLogger` through
+ * — same Symbol-token discipline as `EVENT_SINK` above. */
+export const EVENTS_CONSUMER_LOGGER = Symbol('EVENTS_CONSUMER_LOGGER');
 
 /** The default `EventSink` — does nothing. Production wiring
  * (app.module.ts) uses this until T3.3.1 provides a real one; tests pass
@@ -110,19 +158,42 @@ export function readWorkerConcurrency(env: NodeJS.ProcessEnv = process.env): num
 @Processor(EVENTS_QUEUE, { concurrency: readWorkerConcurrency() })
 @Injectable()
 export class EventsConsumer extends WorkerHost {
-  constructor(@Inject(EVENT_SINK) private readonly sink: EventSink) {
+  constructor(
+    @Inject(EVENT_SINK) private readonly sink: EventSink,
+    @Inject(EVENTS_CONSUMER_LOGGER) private readonly logger: EventsConsumerLogger,
+  ) {
     super();
   }
 
-  async process(job: Job): Promise<void> {
+  async process(job: Job<unknown>): Promise<void> {
     const parsed = eventJobSchema.safeParse(job.data);
     if (!parsed.success) {
-      throw new Error(
+      const message = redactCredentialsFromMessage(
         `Job ${job.id ?? '(no id)'} failed eventJobSchema validation: ${parsed.error.message}`,
-        { cause: parsed.error },
       );
+      // Logged BEFORE throwing, then the SAME error is thrown unchanged
+      // below — see this file's own fix-forward header for why. Only the
+      // job id goes into `meta`, never `job.data` itself: that payload is
+      // exactly what just failed `.strict()` validation, so it is not
+      // safe to assume it is invariant-6-clean.
+      this.logger.error(message, { jobId: job.id });
+      throw new Error(message, { cause: parsed.error });
     }
 
-    await this.sink.handle(parsed.data);
+    const event = parsed.data;
+    try {
+      await this.sink.handle(event);
+    } catch (error) {
+      const causeMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        redactCredentialsFromMessage(`Sink failed to handle event ${event.event_id}: ${causeMessage}`),
+        { eventId: event.event_id, linkId: event.link_id, tenantId: event.tenant_id },
+      );
+      // Re-throw the ORIGINAL error, unchanged — BullMQ's own
+      // retry/attempts machinery must see exactly what `sink.handle()`
+      // rejected with, not a wrapped/redacted copy. The redaction above
+      // only ever touches what THIS class writes to its own log line.
+      throw error;
+    }
   }
 }
