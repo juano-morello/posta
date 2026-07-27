@@ -345,3 +345,24 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Triage:** silent-failure-hunter's MEDIUM (no upper bound on from/to range width — a wrong-century typo could generate ~87.6 million prefix strings, allocating gigabytes with no diagnosable error) was real and actionable, though not a live exploitable surface today since this function has no caller yet (the future replay CLI is a later, unbuilt task) — treated as worth closing now while cheap, matching this codebase's own "fail loud on clearly wrong input" discipline.
 **Fix-forward commit:** `c5bc44d` `fix: bound eventPrefixes' range to catch a wrong-century typo loudly` — added MAX_RANGE_DAYS = 3660 (10 calendar years accounting for leap days), with the arithmetic and reasoning documented inline (a replay CLI reprocesses a bounded, explicitly-named window, never "entire history" in one call). Verify I observed myself: `pnpm test prefixes.test.ts keys.test.ts` — 37/37 passed; `pnpm --filter @posta/core run build` — clean; `pnpm exec eslint` — clean.
 **Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.1.6 · `bbf137d` · 2026-07-27T17:02:45-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator, not just trusted):
+- `pnpm test shutdown.test.ts` (from repo root) — 3/3 pass
+- `pnpm exec vitest run apps/worker` — 130/132 pass; the 2 failures are the pre-existing, out-of-scope `partition-maintenance.job.test.ts` REDIS_URL-not-set failures (file untouched by this task)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+
+**Recovery context:** this task's previous implementer died mid-response (infra failure), leaving 254 uncommitted lines + an untracked, untested `shutdown.ts` in the tree. Treated as a reference draft, not accepted work: parked it, wrote `shutdown.test.ts` against an inert stub first, confirmed a genuine assertion-level RED (`expected 0 to be 30`), then restored/rewrote the draft's implementation to GREEN. The draft's core design (pause-then-flush, swallow-not-rethrow on timeout, verified against installed bullmq@5.80.10 source) held up.
+
+**Findings surviving triage**
+- MEDIUM · `apps/worker/src/app.module.ts` (DB_CLIENT factory) — fixed the known `exactOptionalPropertyTypes` build break (`max: config.dbPoolMax` → conditional spread), the one pre-identified compile error.
+- MEDIUM · `apps/worker/src/consumer/events.consumer.test.ts` (4 call sites) + `malformed-job.test.ts` (1 call site) — a second, previously-undiscovered compile break: `AppModuleConfig` gained required `databaseUrl`/`batchSize`/`batchIntervalMs`/`shutdownTimeoutMs` fields but these 5 call sites weren't updated. Invisible to `pnpm test` (esbuild strips types); only `pnpm typecheck:tests` catches it. Fixed by extending the existing `UNUSED_ACCUMULATOR_CONFIG` placeholder-config precedent from `dlq.service.test.ts` to both files.
+- HIGH (found and fixed during this task, not pre-flagged) · placeholder DB configs across all three test files omitted `dbPoolMax`. With `DB_POOL_MAX` unset in this shell/CI, `createDbClient()` throws inside a Nest `useFactory`; `NestFactory.createApplicationContext()` defaults to `abortOnError: true`, which calls `process.abort()` on that throw — a hard process-abort, not a catchable rejection, silently killing the vitest worker fork instead of failing a test normally. Fixed by adding `dbPoolMax: 5` to all three placeholder configs.
+
+**Deviation from plan:** file list expanded beyond the plan's stated three (`shutdown.ts`, `app.module.ts`, `shutdown.test.ts`) to include `env.ts`/`env.test.ts`/`main.ts`/`.env.example` (SHUTDOWN_TIMEOUT_MS wiring) and `events.consumer.ts`/`dlq.service.test.ts`/`events.consumer.test.ts`/`malformed-job.test.ts` (AccumulatingEventSink + BATCH_ACCUMULATOR DI wiring, and the required-config fallout above) — all necessary supporting wiring for this task's own DI surface, not scope creep into other tasks' territory.
+
+**Handed back to:** n/a — no unresolved findings remain.

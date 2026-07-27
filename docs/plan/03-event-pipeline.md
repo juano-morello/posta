@@ -43,7 +43,7 @@ A payload that fails `eventJobSchema` will never parse on a retry. Retrying it f
 `DlqService.send(reason, payload, error)` writes to `EVENTS_DLQ_QUEUE` and exposes `depth()`. Wired to the consumer's `failed` handler for jobs that exhaust `attempts`. The payload travels with the entry — a DLQ that records only "batch failed" cannot be replayed, which makes it a delete with extra steps.
 → **files** `apps/worker/src/consumer/dlq.service.ts` · `apps/worker/src/consumer/dlq.service.test.ts` · **verify** `pnpm test dlq.service.test.ts` forces a handler to throw on every attempt and asserts one DLQ entry carrying the full original payload, the error message, and `attemptsMade === 5` · **after** T3.1.4
 
-#### T3.1.6 · `feat: graceful shutdown flushes the in-memory batch`
+#### T3.1.6 · `feat: graceful shutdown flushes the in-memory batch` ✅ done (`bbf137d`)
 `onModuleDestroy` pauses the BullMQ worker so no new job is claimed, awaits in-flight handlers, then calls `flushNow()` on the accumulator before resolving. Bounded by a `SHUTDOWN_TIMEOUT_MS` so a wedged flush cannot block a deploy forever. This is the task that makes in-memory batching safe rather than merely fast.
 → **files** `apps/worker/src/consumer/shutdown.ts` · `apps/worker/src/app.module.ts` · `apps/worker/src/consumer/shutdown.test.ts` · **verify** `pnpm test shutdown.test.ts` fills a partial batch of 30, triggers `onModuleDestroy`, and asserts all 30 rows are in Postgres before the promise resolves · **after** T3.1.5, T3.3.1
 
