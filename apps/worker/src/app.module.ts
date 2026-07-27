@@ -1,6 +1,6 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { EVENTS_QUEUE } from '@posta/core';
+import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE } from '@posta/core';
 import {
   consoleErrorLogger,
   EVENT_SINK,
@@ -107,6 +107,15 @@ export class AppModule {
         // Redis connection definition in this module, not two that could
         // drift apart.
         BullModule.registerQueue({ name: EVENTS_QUEUE }),
+        // T3.1.4 — same "no connection override, share BullModule.forRoot()'s
+        // config" discipline as EVENTS_QUEUE above. EventsConsumer
+        // (./consumer/events.consumer.ts) injects the `Queue` instance
+        // this registration produces via `@InjectQueue(EVENTS_DLQ_QUEUE)`
+        // to route a job that fails eventJobSchema validation here
+        // instead of burning EVENTS_QUEUE's own retry attempts on it. No
+        // `@Processor` for this queue yet — draining EVENTS_DLQ_QUEUE is
+        // T3.1.5's job, not this one (events-queue.ts's own header).
+        BullModule.registerQueue({ name: EVENTS_DLQ_QUEUE }),
       ],
       providers: [
         EventsConsumer,

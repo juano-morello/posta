@@ -121,7 +121,19 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     }
   });
 
-  it('never hands a job that fails eventJobSchema validation to the sink, and the job ends failed', async () => {
+  it('never hands a job that fails eventJobSchema validation to the sink, and the job ends completed (routed to the DLQ, not retried)', async () => {
+    // [T3.1.4 update] This test previously asserted the job ended
+    // 'failed', on the theory that a decode failure should exhaust
+    // EVENTS_JOB_OPTIONS.attempts like any other processing error. T3.1.4
+    // changed that deliberately: a payload that can't parse never parses
+    // on a retry either, so burning all 5 attempts on it was pure waste.
+    // events.consumer.ts now routes a decode failure straight to
+    // EVENTS_DLQ_QUEUE and acks the original job instead — see
+    // malformed-job.test.ts for the full DLQ-routing assertions (DLQ
+    // contents, no-payload-in-logs); this test's own job here is only to
+    // keep proving the "sink is never called" half against the real
+    // production DI wiring, and that the job's own terminal state
+    // actually changed to match.
     const handle = vi.fn(async (_event: CaptureEvent): Promise<void> => {
       void _event;
     });
@@ -139,8 +151,6 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
 
       // `ip` is not a key eventJobSchema (.strict()) allows — invariant 6's
       // own enforcement mechanism (packages/core/src/queue/events-queue.ts).
-      // No `defaultJobOptions` on this Queue, so BullMQ's own default of a
-      // single attempt applies — the job reaches 'failed' fast.
       const job = await queue.add('capture', {
         ...buildCaptureEvent(),
         ip: '203.0.113.5',
@@ -148,7 +158,7 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
 
       await vi.waitFor(
         async () => {
-          expect(await job.getState()).toBe('failed');
+          expect(await job.getState()).toBe('completed');
         },
         { timeout: 30_000, interval: 100 },
       );
