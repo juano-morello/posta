@@ -39,7 +39,7 @@ This is an **extract-and-rewire** commit: T2.4.3 ships the producer with its que
 A payload that fails `eventJobSchema` will never parse on a retry. Retrying it five times only delays the inevitable while burning consumer slots, so the consumer sends it to `EVENTS_DLQ_QUEUE` with the raw payload plus the Zod issue list and acks the job. [security] — the raw payload is logged only to the DLQ record, never to stdout, since it is unvalidated external input.
 → **files** `apps/worker/src/consumer/events.consumer.ts` · `apps/worker/src/consumer/malformed-job.test.ts` · **verify** `pnpm test malformed-job.test.ts` enqueues `{ nonsense: true }` and asserts one DLQ entry after exactly one attempt, zero sink calls, and no payload content in captured logs · **after** T3.1.3
 
-#### T3.1.5 · `feat: dead-letter queue with payload and failure reason`
+#### T3.1.5 · `feat: dead-letter queue with payload and failure reason` ✅ done (`dba92d3`)
 `DlqService.send(reason, payload, error)` writes to `EVENTS_DLQ_QUEUE` and exposes `depth()`. Wired to the consumer's `failed` handler for jobs that exhaust `attempts`. The payload travels with the entry — a DLQ that records only "batch failed" cannot be replayed, which makes it a delete with extra steps.
 → **files** `apps/worker/src/consumer/dlq.service.ts` · `apps/worker/src/consumer/dlq.service.test.ts` · **verify** `pnpm test dlq.service.test.ts` forces a handler to throw on every attempt and asserts one DLQ entry carrying the full original payload, the error message, and `attemptsMade === 5` · **after** T3.1.4
 
