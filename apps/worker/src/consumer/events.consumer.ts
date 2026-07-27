@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
-import type { Job, Queue } from 'bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
+import type { Job } from 'bullmq';
 import { z } from 'zod';
 import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, eventJobSchema } from '@posta/core';
 import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
+import { DlqService, toDlqIssues } from './dlq.service';
 
 // T3.1.3 [E3, S3.1] — the BullMQ CONSUMER half of the redirect hot
 // path's producer/consumer split (T2.4.2 enqueues from apps/api,
@@ -80,6 +81,60 @@ import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contract
 // unvalidated request input, and `redactCredentialsFromMessage` (the
 // same redactor apps/api/src/redirect/enqueue.ts's header describes)
 // still guards it against embedded connection-string credentials.
+//
+// [T3.1.5] A SECOND DLQ REASON, AND ONE SHARED WRITER: T3.1.4 only ever
+// routed a job to `EVENTS_DLQ_QUEUE` for a decode failure
+// ('schema-validation-failed', below `routeToDlq()`). T3.1.5 adds the
+// OTHER failure path this class always had: a job that decodes fine but
+// keeps rejecting at `sink.handle()` until it exhausts every
+// `EVENTS_JOB_OPTIONS.attempts` (5). Two producers of the same DLQ shape
+// is exactly the case `DlqService` (./dlq.service.ts) exists to
+// consolidate — see that file's own header for the full
+// parallel-vs-shared-writer discussion. `routeToDlq()` below now calls
+// `DlqService.send()` instead of writing to the queue itself, and
+// `onFailed()` (this task's new method) is the second caller.
+//
+// TELLING "WILL RETRY" FROM "TRULY DONE": BullMQ's own `'failed'` event
+// fires on EVERY failed attempt, not just the final one — verified
+// against the installed bullmq@5.80.10 source
+// (node_modules/bullmq/dist/cjs/classes/worker.js,
+// `Worker.handleFailed()`, ~line 653): it always calls `await
+// job.moveToFailed(err, token, fetchNext)` and then unconditionally
+// `this.emit('failed', job, err, 'active')` — the decision of whether
+// THIS failure schedules a retry or ends the job happens INSIDE
+// `moveToFailed`'s own `shouldRetryJob()` (job.js), before the event ever
+// fires, not in a separate "is this the last one" event later.
+// `moveToFailed` is also where `job.attemptsMade` gets incremented (the
+// LAST thing it does, per job.js), so by the time `onFailed()` runs,
+// `job.attemptsMade` already reflects the attempt that just failed: 1
+// through 4 (< `job.opts.attempts`) on an attempt BullMQ has already
+// silently rescheduled a retry for, and exactly `job.opts.attempts` (5,
+// under `EVENTS_JOB_OPTIONS`) on the truly final one. `onFailed()`
+// compares these two numbers itself — there is no separate "is this the
+// last attempt" event BullMQ exposes to skip that comparison.
+//
+// [security, invariant 6 edge case] `onFailed()` re-validates `job.data`
+// against `eventJobSchema` before deciding what to write, rather than
+// trusting "it must still be valid, nothing changes between retries".
+// That trust is correct in the overwhelmingly normal case — this method
+// only ever runs for a job that reached `sink.handle()` at least once,
+// which requires it decoded successfully on attempt 1, and `job.data`
+// never changes across retries. It breaks in exactly one narrow edge
+// case `routeToDlq()`'s own catch block documents below: if
+// `DlqService.send()` itself throws (EVENTS_DLQ_QUEUE's own connection
+// down, not a validation problem), `routeToDlq()` re-throws and the job
+// retries EVENTS_QUEUE's own attempts/backoff — but the SAME schema
+// failure recurs every attempt (the payload never becomes valid), so the
+// job can exhaust its attempts and reach `onFailed()` with genuinely raw,
+// unvalidated `job.data` — the exact case `.strict()` exists to keep an
+// invariant-6-violating `ip` key out of. `onFailed()` re-checks for
+// precisely this: when re-validation fails, it reports
+// `reason: 'schema-validation-failed'` (with the freshly re-derived Zod
+// issues) instead of `'attempts-exhausted'` — reusing `routeToDlq()`'s
+// own already-reviewed "store the raw payload verbatim in the DLQ"
+// decision for what is, underneath, the identical category of data,
+// rather than this method inventing a second, un-reviewed redaction
+// policy for the same problem.
 
 /** The minimal contract `EventsConsumer` needs from whatever consumes a
  * decoded event next. `NoopEventSink` (below) is the only implementation
@@ -121,61 +176,16 @@ export const consoleErrorLogger: EventsConsumerLogger = {
  * — same Symbol-token discipline as `EVENT_SINK` above. */
 export const EVENTS_CONSUMER_LOGGER = Symbol('EVENTS_CONSUMER_LOGGER');
 
-/** The job name every DLQ routing `add()` call uses — mirrors
- * apps/api/src/redirect/enqueue.ts's own `CAPTURE_JOB_NAME` precedent (a
- * named export rather than a literal duplicated at every call site,
- * including tests). One name for `EVENTS_DLQ_QUEUE` regardless of WHY a
- * job landed there — `EventsDlqJobPayload.reason` (below) is what
- * distinguishes T3.1.4's `'schema-validation-failed'` from T3.1.5's
- * future `'attempts-exhausted'`, not the job name. */
-export const EVENTS_DLQ_JOB_NAME = 'dead-letter';
-
-/** One Zod validation issue, reduced to a JSON-serializable shape.
- * BullMQ persists job `data` as JSON in Redis, and a raw
- * `z.core.$ZodIssue` is not guaranteed to survive that round-trip
- * intact — some issue variants (e.g. `invalid_format`'s `pattern`) embed
- * a `RegExp`, which `JSON.stringify` silently collapses to `{}`. `path`
- * is stringified with `String()` per segment, never
- * `Array.prototype.join` directly (`PropertyKey[]` can contain a
- * `symbol`, and `[sym].join('.')` throws — `String(sym)` does not). */
-export interface EventsDlqIssue {
-  readonly path: string;
-  readonly message: string;
-  readonly code: string;
-}
-
-function toDlqIssues(issues: z.ZodError['issues']): EventsDlqIssue[] {
-  return issues.map((issue) => ({
-    path: issue.path.map(String).join('.'),
-    message: issue.message,
-    code: issue.code,
-  }));
-}
-
 /**
- * `EVENTS_DLQ_QUEUE`'s own job payload for a job that never even reached
- * `sink.handle()` — routed here straight out of `eventJobSchema`
- * validation, T3.1.4's own reason. `reason` is a literal (not a shared
- * union with T3.1.5's future variant) deliberately: this file only ever
- * produces `'schema-validation-failed'`, and widening the type to
- * include a reason this file can never actually emit would just be
- * guessing at T3.1.5's own shape ahead of that task.
+ * `EventsDlqJobPayload` (and the reason/issue shapes it's built from) now
+ * live in ./dlq.service.ts — DlqService is the one writer both
+ * `routeToDlq()` (below) and `onFailed()` (below) call, per this file's
+ * own T3.1.5 header note. Re-exported here, unchanged, purely so existing
+ * callers that import the TYPE from this module (malformed-job.test.ts)
+ * keep working without an import-path change — this file is no longer
+ * where the shape is DEFINED.
  */
-export interface EventsDlqJobPayload {
-  readonly reason: 'schema-validation-failed';
-  /** The job's `data`, byte-for-byte as BullMQ delivered it — including
-   * whatever made it fail `eventJobSchema` (e.g. an invariant-6-violating
-   * `ip` key). Deliberately `unknown`, never `CaptureEvent`: this is
-   * exactly the payload that did NOT decode as one. */
-  readonly rawPayload: unknown;
-  readonly issues: readonly EventsDlqIssue[];
-  readonly originalJobId: string;
-  /** ISO 8601, `new Date().toISOString()` — same wire format
-   * `CaptureEvent.occurred_at` (packages/contracts/src/capture.ts) uses,
-   * for the same reason: a `Date` value would not survive this job's own
-   * BullMQ round-trip through Redis intact. */
-  readonly failedAt: string;
-}
+export type { EventsDlqJobPayload } from './dlq.service';
 
 /** The default `EventSink` — does nothing. Production wiring
  * (app.module.ts) uses this until T3.3.1 provides a real one; tests pass
@@ -234,7 +244,12 @@ export class EventsConsumer extends WorkerHost {
   constructor(
     @Inject(EVENT_SINK) private readonly sink: EventSink,
     @Inject(EVENTS_CONSUMER_LOGGER) private readonly logger: EventsConsumerLogger,
-    @InjectQueue(EVENTS_DLQ_QUEUE) private readonly dlqQueue: Queue<EventsDlqJobPayload>,
+    // Not `@Inject` + a Symbol token: `DlqService` is a normal
+    // `@Injectable()` class provider (app.module.ts), and Nest resolves a
+    // constructor parameter typed as a concrete class by that class
+    // itself — the same way `NestFactory`/`ModuleRef` resolve any other
+    // provider class, no token needed.
+    private readonly dlq: DlqService,
   ) {
     super();
   }
@@ -283,16 +298,20 @@ export class EventsConsumer extends WorkerHost {
   private async routeToDlq(job: Job<unknown>, error: z.ZodError): Promise<void> {
     const issues = toDlqIssues(error.issues);
     const originalJobId = job.id ?? '(no id)';
-    const payload: EventsDlqJobPayload = {
-      reason: 'schema-validation-failed',
-      rawPayload: job.data,
-      issues,
-      originalJobId,
-      failedAt: new Date().toISOString(),
-    };
 
     try {
-      await this.dlqQueue.add(EVENTS_DLQ_JOB_NAME, payload);
+      // `attemptsMade: 1` is a literal, not `job.attemptsMade`: this path
+      // NEVER retries (`process()` always returns normally after this
+      // call, so the job completes on its first and only attempt), and
+      // `moveToCompleted()` — the only place BullMQ itself increments
+      // `attemptsMade` for a job that finishes this way (job.js) — has
+      // not run yet at this point, so `job.attemptsMade` would still read
+      // 0 here despite the job genuinely having run once.
+      await this.dlq.send('schema-validation-failed', job.data, error, {
+        originalJobId,
+        attemptsMade: 1,
+        issues,
+      });
     } catch (dlqError) {
       const dlqErrorMessage = dlqError instanceof Error ? dlqError.message : String(dlqError);
       // An INFRASTRUCTURE failure (EVENTS_DLQ_QUEUE itself unreachable),
@@ -302,6 +321,11 @@ export class EventsConsumer extends WorkerHost {
       // dropped. `redactCredentialsFromMessage`: `dlqErrorMessage`
       // originates from OUR OWN Redis client, the same category
       // `enqueue.ts`'s header describes, not from the untrusted payload.
+      // [T3.1.5] If this keeps failing across all of EVENTS_QUEUE's own
+      // retries, the job eventually reaches `onFailed()` below with
+      // genuinely raw, unvalidated `job.data` — see this file's own
+      // header for why `onFailed()` re-validates rather than trusting
+      // that can never happen.
       this.logger.error(
         redactCredentialsFromMessage(
           `Job ${originalJobId} failed eventJobSchema validation AND failed to route to ` +
@@ -315,6 +339,87 @@ export class EventsConsumer extends WorkerHost {
     this.logger.error(
       `Job ${originalJobId} failed eventJobSchema validation; routed to ${EVENTS_DLQ_QUEUE} ` +
         `(${issues.length} issue(s)), job acked with no retry`,
+      { jobId: job.id },
+    );
+  }
+
+  /**
+   * T3.1.5 — the OTHER DLQ path: a job that decoded fine but keeps
+   * rejecting at `sink.handle()` until BullMQ's own retry machinery gives
+   * up. See this file's own header for the verified BullMQ semantics this
+   * relies on (`'failed'` fires on every attempt; `job.attemptsMade` vs
+   * `job.opts.attempts` is the only reliable "is this truly the last one"
+   * signal available inside the event itself) and for the invariant-6
+   * re-validation edge case below.
+   *
+   * Logs once on a successful DLQ write (mirroring `routeToDlq()`'s own
+   * "acked, here's where it went" line) AND, separately, once if the DLQ
+   * write itself fails — never both for the same outcome. The success
+   * line is genuinely new information even though the underlying failure
+   * was already logged on every prior attempt (`process()`'s sink-failure
+   * catch, or `routeToDlq()`'s own DLQ-write-failure catch in the edge
+   * case above): "this job is now permanently dead-lettered" is a
+   * distinct, operationally useful fact from "this attempt failed, a
+   * retry is scheduled", and only this method knows which one just
+   * happened.
+   */
+  @OnWorkerEvent('failed')
+  async onFailed(job: Job<unknown>, error: Error): Promise<void> {
+    const attemptsAllowed = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attemptsAllowed) {
+      // Not the final attempt — BullMQ has already scheduled (or is
+      // about to schedule) a retry for this exact job. Either a later
+      // attempt succeeds and this job is never seen again, or it fails
+      // again and this handler runs once more with `attemptsMade` one
+      // higher.
+      return;
+    }
+
+    const originalJobId = job.id ?? '(no id)';
+    const attemptsMade = job.attemptsMade;
+    // [security, invariant 6] see this file's own header for why this
+    // re-validation is necessary despite job.data never changing between
+    // retries in the normal case.
+    const parsed = eventJobSchema.safeParse(job.data);
+
+    try {
+      if (parsed.success) {
+        await this.dlq.send('attempts-exhausted', parsed.data, error, {
+          originalJobId,
+          attemptsMade,
+        });
+      } else {
+        await this.dlq.send('schema-validation-failed', job.data, error, {
+          originalJobId,
+          attemptsMade,
+          issues: toDlqIssues(parsed.error.issues),
+        });
+      }
+    } catch (dlqError) {
+      const dlqErrorMessage = dlqError instanceof Error ? dlqError.message : String(dlqError);
+      // Unlike `routeToDlq()`'s own DLQ-write failure, there is no retry
+      // machinery left to fall back into: BullMQ has already finalized
+      // this job as 'failed' (`moveToFailed()` already ran, before this
+      // event even fired) by the time this handler runs, and this is a
+      // plain EventEmitter listener, not a job processor whose thrown
+      // error BullMQ would catch and act on — throwing here would only
+      // become an unhandled rejection. The original job stays inspectable
+      // in EVENTS_QUEUE itself (`removeOnFail: false`, events-queue.ts)
+      // even though it never made it into the DLQ; the failure to route
+      // it is still logged, loudly, with full context, rather than
+      // silently dropped.
+      this.logger.error(
+        redactCredentialsFromMessage(
+          `Job ${originalJobId} exhausted all ${attemptsMade} attempt(s) AND failed to route to ` +
+            `${EVENTS_DLQ_QUEUE}: ${dlqErrorMessage}`,
+        ),
+        { jobId: job.id },
+      );
+      return;
+    }
+
+    this.logger.error(
+      `Job ${originalJobId} exhausted all ${attemptsMade} attempt(s); routed to ${EVENTS_DLQ_QUEUE}`,
       { jobId: job.id },
     );
   }

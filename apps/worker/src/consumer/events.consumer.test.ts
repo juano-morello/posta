@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Queue } from 'bullmq';
 import { NestFactory } from '@nestjs/core';
 import type { INestApplicationContext } from '@nestjs/common';
-import { EVENTS_QUEUE, newId } from '@posta/core';
+import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, newId } from '@posta/core';
 import { startRedisContainer, type RedisContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -219,7 +219,18 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
       const failedJob = await queue.getJob(job.id ?? '');
       expect(failedJob?.failedReason).toBe(sinkError.message);
 
-      expect(errorSpy).toHaveBeenCalledTimes(1);
+      // [T3.1.5 update] A single-attempt job (no `defaultJobOptions`, same
+      // as before) is now ALSO "exhausted" the instant it fails —
+      // EventsConsumer's new `onFailed()` 'failed'-event handler
+      // (dlq.service.ts's `DlqService.send()`) routes it to
+      // `EVENTS_DLQ_QUEUE` and logs a second, distinct line once that
+      // succeeds. This test's OWN original concern — the sink failure
+      // itself is logged, once, with the event's identifying context,
+      // before BullMQ's retry/attempts machinery ever sees it — is still
+      // exactly what the FIRST call below asserts; the second call is
+      // `onFailed()`'s own routing confirmation, asserted separately so
+      // this test keeps proving both without conflating them.
+      expect(errorSpy).toHaveBeenCalledTimes(2);
       const [message, meta] = errorSpy.mock.calls[0] ?? [];
       expect(message).toContain(event.event_id);
       expect(message).toContain(sinkError.message);
@@ -228,6 +239,11 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
         linkId: event.link_id,
         tenantId: event.tenant_id,
       });
+
+      const [dlqMessage, dlqMeta] = errorSpy.mock.calls[1] ?? [];
+      expect(dlqMessage).toContain('exhausted all 1 attempt(s)');
+      expect(dlqMessage).toContain(EVENTS_DLQ_QUEUE);
+      expect(dlqMeta).toEqual({ jobId: job.id });
     } finally {
       await queue.obliterate({ force: true });
       await queue.close();

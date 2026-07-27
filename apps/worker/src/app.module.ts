@@ -10,6 +10,7 @@ import {
   type EventSink,
   type EventsConsumerLogger,
 } from './consumer/events.consumer';
+import { DlqService } from './consumer/dlq.service';
 
 // T3.1.2 [E3, S3.1] — establishes the worker's BullMQ ROOT CONNECTION so
 // T3.1.3 (the consumer, a `@Processor`/`WorkerHost` class with tuned
@@ -108,17 +109,26 @@ export class AppModule {
         // drift apart.
         BullModule.registerQueue({ name: EVENTS_QUEUE }),
         // T3.1.4 — same "no connection override, share BullModule.forRoot()'s
-        // config" discipline as EVENTS_QUEUE above. EventsConsumer
-        // (./consumer/events.consumer.ts) injects the `Queue` instance
-        // this registration produces via `@InjectQueue(EVENTS_DLQ_QUEUE)`
-        // to route a job that fails eventJobSchema validation here
-        // instead of burning EVENTS_QUEUE's own retry attempts on it. No
-        // `@Processor` for this queue yet — draining EVENTS_DLQ_QUEUE is
-        // T3.1.5's job, not this one (events-queue.ts's own header).
+        // config" discipline as EVENTS_QUEUE above. `DlqService`
+        // (./consumer/dlq.service.ts) injects the `Queue` instance this
+        // registration produces via `@InjectQueue(EVENTS_DLQ_QUEUE)` — the
+        // ONE writer both of EventsConsumer's DLQ paths (a decode failure,
+        // and T3.1.5's attempts-exhausted path) call through, rather than
+        // either writing to this queue directly. No `@Processor` for this
+        // queue yet — draining EVENTS_DLQ_QUEUE is a later task's job, not
+        // this one (events-queue.ts's own header).
         BullModule.registerQueue({ name: EVENTS_DLQ_QUEUE }),
       ],
       providers: [
         EventsConsumer,
+        // T3.1.5 — a normal class provider, not exposed through
+        // `AppModuleConfig`: unlike `EVENT_SINK`/`EVENTS_CONSUMER_LOGGER`,
+        // no test needs to substitute a fake `DlqService` — every DLQ test
+        // (dlq.service.test.ts) either exercises the class directly
+        // against a real testcontainers Redis `Queue`, or boots THIS real
+        // wiring end to end, same "real BullMQ, no mocks" discipline as
+        // the rest of this module.
+        DlqService,
         { provide: EVENT_SINK, useValue: config.eventSink ?? new NoopEventSink() },
         { provide: EVENTS_CONSUMER_LOGGER, useValue: config.logger ?? consoleErrorLogger },
       ],
