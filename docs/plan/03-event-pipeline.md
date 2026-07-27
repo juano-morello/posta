@@ -256,7 +256,7 @@ This story exists because an untested rebuild capability is indistinguishable fr
 
 **Tasks:**
 
-#### T3.6.1 · `feat: date-range prefix enumeration for the R2 event log`
+#### T3.6.1 · `feat: date-range prefix enumeration for the R2 event log` ✅ done (`6161e09`)
 `eventPrefixes(from, to)` yields `events/dt=YYYY-MM-DD/hour=HH/` for every hour in an inclusive UTC range — the exact inverse of T3.4.3's key builder, so a change to the layout breaks one test rather than silently narrowing a replay. Pure and testable without R2 or a network.
 → **files** `packages/core/src/r2/keys.ts` · `packages/core/src/r2/prefixes.test.ts` · **verify** `pnpm test prefixes.test.ts` asserts a single day yields 24 prefixes, a 3-day range yields 72, `from === to` yields 24 not 0, and that every emitted prefix is a prefix of a key produced by `eventBatchKey` for an instant inside the range · **after** T3.4.3
 
