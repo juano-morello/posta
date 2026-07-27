@@ -35,7 +35,7 @@ This is an **extract-and-rewire** commit: T2.4.3 ships the producer with its que
 `EventsConsumer` processing `EVENTS_QUEUE` with concurrency from `WORKER_CONCURRENCY` (default 8). Each job is decoded with `eventJobSchema` and handed to an injected sink interface — a no-op sink until the accumulator lands in T3.3.1 — so the consumer stays testable without a database.
 → **files** `apps/worker/src/consumer/events.consumer.ts` · `apps/worker/src/consumer/events.consumer.test.ts` · **verify** `pnpm test events.consumer.test.ts` pushes 20 jobs onto a testcontainer Redis and asserts the sink receives 20 decoded payloads with `event_id` unchanged · **after** T3.1.2
 
-#### T3.1.4 · `feat: route undecodable jobs straight to the DLQ`
+#### T3.1.4 · `feat: route undecodable jobs straight to the DLQ` ✅ done (`378d661`)
 A payload that fails `eventJobSchema` will never parse on a retry. Retrying it five times only delays the inevitable while burning consumer slots, so the consumer sends it to `EVENTS_DLQ_QUEUE` with the raw payload plus the Zod issue list and acks the job. [security] — the raw payload is logged only to the DLQ record, never to stdout, since it is unvalidated external input.
 → **files** `apps/worker/src/consumer/events.consumer.ts` · `apps/worker/src/consumer/malformed-job.test.ts` · **verify** `pnpm test malformed-job.test.ts` enqueues `{ nonsense: true }` and asserts one DLQ entry after exactly one attempt, zero sink calls, and no payload content in captured logs · **after** T3.1.3
 
