@@ -387,3 +387,23 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Deviation from plan:** none beyond the necessary supporting change to `accumulator.ts` (adding `lastFlushAgeMs()`) and `main.ts` (removing the old always-200 hand-rolled `/health` middleware it replaces) — both required for this task's own file-listed `app.module.ts` wiring to work.
 
 **Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.3 · `acc5d88` · 2026-07-27T20:06:39-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test split-retry.test.ts` — 15/15 pass
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test flush.test.ts` — 17/17 pass, no regression
+
+**Recovery context:** second dead-agent recovery today, same pattern as T3.1.6 — the first implementer died mid-response (infra "connection closed" failure), leaving a complete-looking but wholly untested `split-retry.ts` (215 lines, untracked, no git history, no test file). Applied the same recipe: parked the draft, wrote `split-retry.test.ts` against a deliberately-wrong stub first, confirmed a genuine assertion-level RED (6 real failures — wrong committed/poison counts, wrong round-trip counts, empty backoff sequence), then restored the draft (verified byte-identical to the backup) to GREEN.
+
+**Judgment call reviewed and accepted — test level:** the implementer checked `packages/core/migrations/sql/001_events.sql` before choosing: `events.slug` is `text NOT NULL` with no length constraint (no CHECK, no varchar(n)), and Postgres `text` is TOASTable to ~1GB, so a genuine testcontainer "oversized slug" INSERT rejection is not actually reachable through the current schema. Used a plain injected `FlushBatch` double instead (matching `split-retry.ts`'s own documented "GENERIC OVER flushBatch, NOT COUPLED TO POSTGRES" contract) with a synthetic oversized-slug event (`length > SLUG_MAX_LENGTH` from `@posta/contracts`) that fails all-or-nothing, mirroring real multi-row-INSERT semantics. `flush.test.ts` already covers the real-Postgres INSERT side. Reasonable and documented in the test file's own header — accepted without requiring a redo.
+
+**O(log n) proof:** not a hardcoded constant — asserts call-count growth stays sub-linear across a 16x batch-size increase (50 → 800 events), plus separately verifies the exponential backoff sequence (`[100, 200, 400]`) and that split halves run sequentially (peak in-flight calls === 1, not `Promise.all`).
+
+**Findings surviving triage:** none — clean recovery, no scope deviation.
+
+**Handed back to:** n/a.
