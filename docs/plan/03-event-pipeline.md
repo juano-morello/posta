@@ -92,7 +92,7 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 `destHost(destination)` parses the stored destination with `URL` and returns the lowercased host, dropping query, fragment, port and userinfo. Returns `null` on an unparseable value instead of throwing. The strip happens here rather than at capture (E2 stores the destination verbatim) so the raw destination stays recoverable from R2.
 → **files** `packages/core/src/enrichment/dest-host.ts` · `packages/core/src/enrichment/dest-host.test.ts` · **verify** `pnpm test dest-host.test.ts` asserts `https://Shop.Example.com:443/a?utm_source=ig#x` → `shop.example.com`, that `not a url` and `''` return `null`, and that a URL with credentials does not leak them into the result · **after** T3.2.1
 
-#### T3.2.5 · `feat: compose enrichment into one pure enrich() over a capture payload`
+#### T3.2.5 · `feat: compose enrichment into one pure enrich() over a capture payload` ✅ done (`87acd22`)
 `enrich(payload)` returns exactly the seven enrichment columns from spec §8 — `browser`, `browser_version`, `os`, `device_type`, `source_platform`, `is_in_app`, `dest_host` — with a return type that structurally cannot carry an eighth field. One entry point so the live flush path (T3.3.2) and replay (T3.6.3) enrich identically.
 → **files** `packages/core/src/enrichment/index.ts` · `packages/core/src/enrichment/enrich.test.ts` · **verify** `pnpm test enrich.test.ts` asserts the returned key set equals the seven column names exactly, and that a payload with every field null returns seven nulls without throwing · **after** T3.2.3, T3.2.4
 
