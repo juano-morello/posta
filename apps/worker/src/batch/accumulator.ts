@@ -120,6 +120,13 @@ export class BatchAccumulator<T> {
   private readonly flush: BatchFlushCallback<T>;
   private readonly logger: BatchAccumulatorLogger;
   private currentBatch: OpenBatch<T> | null = null;
+  // [T3.1.7] Construction counts as an implicit "flush" for staleness
+  // purposes — a freshly booted accumulator with nothing flushed yet must
+  // report a small age, not look instantly stale to the health endpoint
+  // this field exists for (see `lastFlushAgeMs()` below). Only ever
+  // advanced from `runFlush()`, and only on a SUCCESSFUL flush — never on
+  // construction again, never on a rejected one.
+  private lastFlushAt: number = Date.now();
 
   constructor(options: BatchAccumulatorOptions<T>) {
     if (!Number.isInteger(options.batchSize) || options.batchSize <= 0) {
@@ -192,6 +199,24 @@ export class BatchAccumulator<T> {
     return this.currentBatch?.events.length ?? 0;
   }
 
+  /**
+   * Milliseconds since the last flush that completed SUCCESSFULLY —
+   * construction time counts as an implicit flush for this purpose (see
+   * the `lastFlushAt` field's own comment above), so a freshly booted
+   * accumulator with nothing flushed yet reports a small age rather than
+   * looking instantly stale. A REJECTED flush does NOT advance this: the
+   * batch is gone either way (this class's own "swap before invoke"
+   * design, this file's own header), but a flush that keeps failing
+   * (Postgres/R2 down) must keep making this number grow, since "the
+   * accumulator keeps swapping in new batches that keep failing to write"
+   * is exactly the kind of stuck-not-idle state T3.1.7's health endpoint
+   * exists to surface. Built for T3.1.7's health endpoint, same as
+   * `size()` immediately above.
+   */
+  lastFlushAgeMs(): number {
+    return Date.now() - this.lastFlushAt;
+  }
+
   private startBatch(): OpenBatch<T> {
     const batchId = newId();
     const timer = setTimeout(() => {
@@ -258,6 +283,10 @@ export class BatchAccumulator<T> {
   private async runFlush(events: readonly T[], batchId: string): Promise<void> {
     try {
       await this.flush(events, batchId);
+      // [T3.1.7] Only a SUCCESSFUL flush advances this — see
+      // `lastFlushAgeMs()`'s own doc comment for why a rejecting flush
+      // deliberately does NOT reach this line.
+      this.lastFlushAt = Date.now();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {

@@ -1,7 +1,6 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import type { Request, Response } from 'express';
 import { formatEnvFailures, loadEnv } from '@posta/contracts';
 import { AppModule } from './app.module';
 import { workerEnvSchema } from './env';
@@ -45,12 +44,12 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  // The worker is a BullMQ consumer with no routed API of its own — this
-  // is the only endpoint it serves, so Kubernetes can probe liveness
-  // without the consumer needing a real router.
-  app.use('/health', (_req: Request, res: Response) => {
-    res.status(200).send('ok');
-  });
+  // [T3.1.7] `GET /health` is now served by the real `HealthController`
+  // (health.controller.ts), registered through `AppModule.forRoot()`
+  // above — it reports queue depth, DLQ depth, and flush staleness
+  // instead of this file's former hand-rolled `app.use('/health', ...)`
+  // middleware, which always answered `200 ok` regardless of actual
+  // worker health. See that file's own header for the full rationale.
 
   // T0.7.8 (revised in review) — SIGTERM-clean shutdown, scoped to
   // SIGTERM only. See apps/api/src/main.ts for the full rationale; same

@@ -22,6 +22,7 @@ import {
   ShutdownService,
   type ShutdownLogger,
 } from './consumer/shutdown';
+import { FLUSH_INTERVAL_MS, HealthController } from './health.controller';
 
 /** The DI token the worker's real Postgres `DbClient` (packages/core's
  * `createDbClient`, T1.1.1) is registered under — internal to this
@@ -178,6 +179,11 @@ export class AppModule {
         // this one (events-queue.ts's own header).
         BullModule.registerQueue({ name: EVENTS_DLQ_QUEUE }),
       ],
+      // T3.1.7 — HealthController serves `GET /health`, replacing main.ts's
+      // former hand-rolled `app.use('/health', ...)` middleware (T3.1.2)
+      // that always answered `200 ok`. See health.controller.ts's own
+      // header for the full design rationale.
+      controllers: [HealthController],
       providers: [
         EventsConsumer,
         // T3.1.5 — a normal class provider, not exposed through
@@ -264,6 +270,13 @@ export class AppModule {
         { provide: SHUTDOWN_TIMEOUT_MS, useValue: config.shutdownTimeoutMs },
         { provide: SHUTDOWN_LOGGER, useValue: config.shutdownLogger ?? shutdownConsoleErrorLogger },
         ShutdownService,
+        // T3.1.7 — HealthController's own staleness-threshold input.
+        // `config.batchIntervalMs` is already validated (env.EVENT_BATCH_
+        // INTERVAL_MS, passed through above to BATCH_ACCUMULATOR's own
+        // useFactory) — this is the SAME value, exposed under a second
+        // token because HealthController has no reason to depend on the
+        // accumulator's own construction options object to read it.
+        { provide: FLUSH_INTERVAL_MS, useValue: config.batchIntervalMs },
       ],
     };
   }
