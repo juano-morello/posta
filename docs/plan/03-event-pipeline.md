@@ -22,12 +22,12 @@
 
 **Tasks:**
 
-#### T3.1.1 · `feat: shared events queue contract in packages/core`
+#### T3.1.1 · `feat: shared events queue contract in packages/core` ✅ done (`31434cd`)
 `EVENTS_QUEUE`, `EVENTS_DLQ_QUEUE`, and `EVENTS_JOB_OPTIONS` (`attempts: 5`, exponential backoff from 1000 ms, `removeOnComplete: 1000`, `removeOnFail: false`) plus an `eventJobSchema` wrapping the capture DTO from T2.3.1. `core` is the one package both `api` and `worker` import, so this is the only place the two sides can agree about the queue. A name mismatch is the worst kind of bug here — the producer enqueues happily, the consumer waits on an empty queue, and nothing errors.
 This is an **extract-and-rewire** commit: T2.4.3 ships the producer with its queue name inline, and this task lifts that into `core` and repoints the producer at it — so it touches `apps/api` as well. BullMQ sets `attempts`/`backoff` as *job options at `queue.add()` time*, which means the retry policy is producer-side and cannot live purely in the consumer.
 → **files** `packages/core/src/queue/events-queue.ts` · `packages/core/src/queue/events-queue.test.ts` · `apps/api/src/redirect/enqueue.ts` · **verify** `pnpm test events-queue.test.ts` asserts the retry policy is exponential with ≥3 attempts, that `eventJobSchema` rejects a payload carrying an `ip` key, and that no file under `apps/` declares a literal queue-name string · **after** T2.4.3
 
-#### T3.1.2 · `feat: worker bootstrap with BullMQ connection and shutdown hooks`
+#### T3.1.2 · `feat: worker bootstrap with BullMQ connection and shutdown hooks` ✅ done (`f7c8b2f`)
 `main.ts` parses the worker env (T0.3.6) as its first statement, then boots `AppModule` with the BullMQ root connection pointed at `REDIS_URL` and `app.enableShutdownHooks()` so Nest's `onModuleDestroy` fires on SIGTERM — the hook the flush in T3.1.6 hangs off. No consumer registered yet.
 → **files** `apps/worker/src/main.ts` · `apps/worker/src/app.module.ts` · **verify** `pnpm --filter @posta/worker start` boots against the compose Redis, and `kill -TERM` exits 0 within 5 s instead of being killed by the timeout · **after** T0.1.9, T0.3.6, T3.1.1
 
@@ -76,11 +76,11 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 
 **Tasks:**
 
-#### T3.2.1 · `feat: null-safe UA parser wrapper in packages/core/src/enrichment`
+#### T3.2.1 · `feat: null-safe UA parser wrapper in packages/core/src/enrichment` ✅ done (`7c1b9dd`)
 `parseUserAgent(ua: string | null)` returns `{ browser, browser_version, os, device_type }`, every field nullable, wrapping `ua-parser-js` in a try/catch that yields all-nulls rather than throwing. `device_type` is normalised to `'mobile' | 'tablet' | 'desktop' | null`. Pure: no DB, no I/O, no clock.
 → **files** `packages/core/src/enrichment/ua.ts` · `packages/core/src/enrichment/ua.test.ts` · **verify** `pnpm test ua.test.ts` is table-driven over desktop Chrome, iOS Safari, the Instagram in-app UA, `facebookexternalhit`, `null`, `''`, and a 4 KB binary-garbage string — asserting no throw on any of them and all-nulls on the last three · **after** T0.1.7
 
-#### T3.2.2 · `feat: in-app browser marker table and isInApp detection`
+#### T3.2.2 · `feat: in-app browser marker table and isInApp detection` ✅ done (`b001ec2`)
 `IN_APP_MARKERS` (`Instagram`, `FBAN`, `FBAV`, `TikTok`, `BytedanceWebview`, `Line`) and `isInApp(ua)` returning a boolean, case-sensitive against the marker list. The marker table lives here rather than being inlined because T3.2.3 resolves `source_platform` from the same strings — two copies would drift, and the drift shows up as an event that is `is_in_app: true` with `source_platform: 'directo'`.
 → **files** `packages/core/src/enrichment/source-platform.ts` · `packages/core/src/enrichment/is-in-app.test.ts` · **verify** `pnpm test is-in-app.test.ts` asserts each of the six markers matches, that a plain Chrome UA and `null` both return `false`, and that the exported marker list has exactly six entries · **after** T3.2.1
 
@@ -88,7 +88,7 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 `resolveSourcePlatform(referer, ua)` returns `'instagram' | 'whatsapp' | 'tiktok' | 'facebook' | 'x' | 'directo'`. Referer host is checked first (it is the stronger signal and survives UA spoofing), falling back to the in-app markers from T3.2.2, then `'directo'`. **This field is descriptive, not a verdict** [INV-4] — it names where a hit came from, never whether it was a human.
 → **files** `packages/core/src/enrichment/source-platform.ts` · `packages/core/src/enrichment/source-platform.test.ts` · **verify** `pnpm test source-platform.test.ts` asserts `l.instagram.com` → `instagram`, `t.co` and `twitter.com` → `x`, `lm.facebook.com` → `facebook`, a null referer with the Instagram in-app UA → `instagram`, and null/null → `directo` · **after** T3.2.2
 
-#### T3.2.4 · `feat: dest_host extraction with query string stripped`
+#### T3.2.4 · `feat: dest_host extraction with query string stripped` ✅ done (`aec5e15`)
 `destHost(destination)` parses the stored destination with `URL` and returns the lowercased host, dropping query, fragment, port and userinfo. Returns `null` on an unparseable value instead of throwing. The strip happens here rather than at capture (E2 stores the destination verbatim) so the raw destination stays recoverable from R2.
 → **files** `packages/core/src/enrichment/dest-host.ts` · `packages/core/src/enrichment/dest-host.test.ts` · **verify** `pnpm test dest-host.test.ts` asserts `https://Shop.Example.com:443/a?utm_source=ig#x` → `shop.example.com`, that `not a url` and `''` return `null`, and that a URL with credentials does not leak them into the result · **after** T3.2.1
 
@@ -166,7 +166,7 @@ Feeds 10k generated events through accumulator → enrichment → insert against
 
 **Tasks:**
 
-#### T3.4.1 · `feat: S3-compatible R2 client in packages/core/src/r2`
+#### T3.4.1 · `feat: S3-compatible R2 client in packages/core/src/r2` ✅ done (`787d817`)
 A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET_EVENTS` (already validated in T0.3.6), with `forcePathStyle: true` so the same code addresses MinIO locally and R2 in production. Constructed once at module load, never per batch. [security] — credentials are read from env and never logged, including in the SDK's error paths.
 → **files** `packages/core/src/r2/client.ts` · `packages/core/src/r2/client.test.ts` · **verify** `pnpm test r2/client.test.ts` puts and re-reads an object against the compose MinIO from T0.4.4, and asserts a forced auth failure produces an error message containing no part of the secret key · **after** T0.4.4, T0.3.6
 

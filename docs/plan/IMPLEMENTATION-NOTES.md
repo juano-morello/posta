@@ -143,3 +143,60 @@ Commit: b141bda
 **Deviation from plan, disclosed in-file:** the obvious candidate — widening the job's scope from `apps/api/src/redirect/test/` to the whole `apps/api/src/redirect/` directory — was evaluated and rejected in favor of the narrower, explicit-file fix. Measured both from the same clean tree: whole directory = 28 files / 350 tests / ~54s (two runs: 53.80s, 53.25s); `test/` + `ordering.test.ts` only = 10 files / 60 tests / ~32s (three runs: 33.23s, 31.61s [red], 31.55s). The wider directory re-runs ~18 files (host.test.ts, resolve-tenant.test.ts, resolve-link.test.ts, capture.test.ts, capture-privacy.test.ts, enqueue.test.ts, enqueue-logging.test.ts, escape-html.test.ts, middleware.test.ts, not-found*.test.ts, open-redirect.test.ts, redirect-response.test.ts, resolve-degraded.test.ts, resolve-link-tombstone.test.ts, resolve-redis.test.ts, visitor-hash.test.ts) that the `ci` job's own "Test (with coverage)" step already runs and gates — ~75% more wall-clock for zero net new coverage, and it directly contradicts the job's own pre-existing header comment explaining why that wider scope was excluded on purpose. It also pulls in 7 more testcontainers-booting files (enqueue.test.ts, open-redirect.test.ts, resolve-link-tombstone.test.ts, visitor-hash.test.ts, resolve-link.test.ts, resolve-degraded.test.ts, resolve-tenant.test.ts) into a job whose own `--no-file-parallelism` flag exists specifically to avoid container-boot contention — more containers serialized through one runner is more of exactly the risk that flag was added for T2.6.10's first pass. One transient flake WAS observed locally in `queue-down.test.ts` (51 vs 50 log lines, the same known timing-sensitive assertion T2.6.10's first pass already documented) while testing the narrower combo once, under real contention from a concurrent agent's own `no-ip.test.ts` run in this same shared worktree (confirmed via `ps aux` — genuine local resource contention, not reproduced on a clean re-run of the identical command); flagged here for completeness, not treated as a scope-choice problem, since it reproduces the exact pre-existing, already-documented flake mechanism rather than a new one.
 **Handed back to:** n/a — passed first time. `docs/plan/02-redirect-hot-path.md`'s T2.6.10 verify line and this task's own dispatch are both satisfied; no further action recommended beyond the main thread reviewing and committing `.github/workflows/ci.yml` (and this note).
 Commit: (uncommitted — left in the working tree per this task's own instruction not to commit)
+
+---
+
+## T3.1.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test events-queue.test.ts` (9/9), `pnpm test apps/api/src/redirect/enqueue.test.ts` (10/10), `pnpm exec depcruise` clean.
+**Findings surviving triage:** none blocking. code-reviewer flagged two "HIGH" items (retry policy attempts:5/backoff, and removeOnFail:false) but both are exactly what the task brief specified verbatim, already reasoned at length in the code's own docstring; reviewer's own conclusion was "no fix required, accepted trade-off."
+**Forward note for T3.1.5 (DLQ):** `removeOnFail: false` on EVENTS_JOB_OPTIONS only stays bounded because the DLQ handler (T3.1.4/T3.1.5) is expected to remove/ack the original failed job after moving it to the DLQ. When T3.1.5 lands, confirm its DlqService actually does this — if it doesn't, EVENTS_QUEUE's failed set grows unbounded under `volatile-lru` Redis (CLAUDE.md decision log).
+**Deviation from plan:** none.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.2.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test ua.test.ts` (15/15).
+**Findings surviving triage:** none blocking. code-reviewer and typescript-reviewer both APPROVE, 0 findings. silent-failure-hunter raised 3 MEDIUM items (non-standard device types collapsing to null same as unparseable; broad try/catch scope; no observability on catch) — verified against the task brief, which explicitly mandates "map anything outside mobile/tablet/desktop to null, do not invent a fourth bucket" and explicitly notes this is a pure function with no logger available to it. All three are deliberate, already-documented design decisions, not defects.
+**Deviation from plan:** none.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.4.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test r2/client.test.ts` (3/3, against real MinIO).
+**Findings surviving triage:** MEDIUM (security-reviewer, fixed in follow-up commit ced92fa) — the original credential-leak test's "fully serialized error" assertion used `JSON.stringify(caught, Object.getOwnPropertyNames(caught))`, whose array-form replacer applies the same top-level allowlist at every nesting level rather than recursing, so nested `$response`/`$metadata` silently collapsed to `{}` and the assertion passed vacuously — false confidence on the exact property this security-tagged test exists to prove. Fixed by switching to `util.inspect(caught, { depth: null, showHidden: true })`, which genuinely walks the full object graph. Independently re-verified: the real secretAccessKey never appears anywhere in the graph (SigV4 sends only the computed signature, never the secret); the accessKeyId DOES appear in cleartext nested in `$response`'s raw HTTP internals on auth failure — expected AWS/R2 protocol behavior (SigV4 always sends the key id), not a leak, and the client.ts docstring was extended to warn future callers never to log a caught S3 error wholesale.
+**Open item (deliberately unresolved, flagged by implementer):** when `R2_ENDPOINT` is empty (production's documented value), `createR2Client` omits `endpoint` and falls through to the AWS SDK's default resolution, which does not correctly address a real R2 account — R2's actual default endpoint needs `R2_ACCOUNT_ID`, which this task's own 4-var brief did not include. Left unresolved exactly as instructed; needs a decision in a later R2-writer task (T3.4.4 or thereabouts).
+**Deviation from plan:** none beyond the review-driven test-hardening fix above.
+**Handed back to:** T3.4.1 implementer (agent a824343e9defd4b25), fix verified and committed as ced92fa (follow-up `fix:` commit, since 787d817 was no longer HEAD by the time the fix landed).
+
+---
+
+## T3.1.2 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm --filter @posta/worker start` boots against compose Redis, `/health` returns ok, `kill -TERM` exits 0 in 9ms (well under 5s bound) — observed directly, twice.
+**Findings surviving triage:** none blocking. code-reviewer and typescript-reviewer both APPROVE, 0 findings. silent-failure-hunter raised a CRITICAL (no Redis-connection readiness gate before `/health` returns 200) plus 3 related MEDIUMs (no connect timeout, no connection logging, no PING verification). Triaged as out-of-scope for this task, not a regression: this task's own brief is explicitly "root connection only, no consumer yet," its verify command only covers boot+SIGTERM, and the plan already has a dedicated downstream task, T3.1.7 ("worker health endpoint with queue depth and last-flush age"), that exists specifically to build real Redis/queue-aware health reporting. Forcing readiness-gating here would pre-empt T3.1.7's own scope with no test requiring it now.
+**Forward note for T3.1.7:** when dispatched, make sure the health endpoint actually reflects Redis/queue reachability (ping, connection state) rather than the current static `res.status(200).send('ok')` — this is exactly the gap silent-failure-hunter flagged on T3.1.2, correctly deferred here.
+**Deviation from plan:** none. Implementer chose `@nestjs/bullmq`'s `BullModule.forRoot()` DI pattern over api's hand-rolled functional pattern, reasoned explicitly (worker is not the hot path; T3.1.3's `@Processor` needs DI discovery) and documented at length in app.module.ts.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.2.2 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test is-in-app.test.ts` (11/11).
+**Findings surviving triage:** review fan-out not yet dispatched for this task at time of this note (queued next in batch); implementation-level check (build, typecheck) clean.
+**Deviation from plan:** none. Marker table lives in source-platform.ts (not is-in-app.ts) per plan's own filename choice, since T3.2.3 will extend the same file.
+**Handed back to:** n/a.
+
+---
+
+## T3.2.4 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test dest-host.test.ts` (4/4), including the userinfo-credential-leak check (embedded username:password in a destination URL does not leak into the returned host).
+**Findings surviving triage:** review fan-out not yet dispatched for this task at time of this note; implementation-level check (build, typecheck) clean.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
