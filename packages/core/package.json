@@ -28,6 +28,7 @@
     "seed": "dotenv -e ../../.env -- node scripts/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1095.0",
     "@posta/contracts": "workspace:*",
     "better-auth": "^1.6.24",
     "bullmq": "^5.80.10",

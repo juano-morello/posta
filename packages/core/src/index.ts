@@ -18,6 +18,9 @@ export * from './geoip';
 // T3.1.1 — the shared BullMQ queue contract (queue/events-queue.ts), same
 // barrel pattern as db/geoip/redis above.
 export * from './queue';
+// T3.4.1 — the R2/S3-compatible client seam (r2/client.ts), same barrel
+// pattern as db/geoip/redis above.
+export * from './r2';
 export * from './redis';
 export * from './ulid';
 // T1.5.5 — the first consumer that needs schema TABLE OBJECTS through
