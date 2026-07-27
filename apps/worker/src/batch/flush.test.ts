@@ -1,10 +1,10 @@
 import path from 'node:path';
 import type { Pool, QueryResult } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { links, newId, runSqlMigrations, user } from '@posta/core';
 import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
-import { createFlushBatch, type FlushBatch } from './flush';
+import { createFlushBatch, type FlushBatch, type FlushBatchLogger } from './flush';
 
 // T3.3.2 [E3, S3.3][INV-8] — flushBatch's own suite. `events` is
 // hand-written SQL (packages/core/migrations/sql/001_events.sql,
@@ -112,6 +112,32 @@ function spyOnPoolQueries(pool: Pool): QuerySpy {
   };
 }
 
+interface LoggerCall {
+  readonly message: string;
+  readonly meta?: Record<string, unknown>;
+}
+
+interface RecordingLogger extends FlushBatchLogger {
+  readonly calls: LoggerCall[];
+  reset(): void;
+}
+
+/** A plain recording double for {@link FlushBatchLogger} — the SAME
+ * shape as the querySpy above (a `reset()`-able array), no `vi.fn()`
+ * needed for a single-method interface this simple. */
+function makeRecordingLogger(): RecordingLogger {
+  const calls: LoggerCall[] = [];
+  return {
+    calls,
+    error(message, meta) {
+      calls.push(meta !== undefined ? { message, meta } : { message });
+    },
+    reset() {
+      calls.length = 0;
+    },
+  };
+}
+
 function insertStatements(calls: readonly QuerySpyCall[]): QuerySpyCall[] {
   return calls.filter((call) => /^\s*insert\s+into\s+"?events"?/i.test(call.text));
 }
@@ -213,6 +239,10 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
   let finalRowCount: number;
   let emptyBatchCalls: QuerySpyCall[];
 
+  let firstFlushLoggerCalls: LoggerCall[];
+  let secondFlushLoggerCalls: LoggerCall[];
+  let emptyBatchLoggerCalls: LoggerCall[];
+
   beforeAll(async () => {
     handle = await startPgContainer();
     await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
@@ -299,20 +329,27 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
     profile4EventId = events100[4]!.event_id;
     profile5EventId = events100[5]!.event_id;
 
-    const flushBatch: FlushBatch = createFlushBatch(handle.db);
+    const flushLogger = makeRecordingLogger();
+    const flushBatch: FlushBatch = createFlushBatch({ db: handle.db, logger: flushLogger });
     const querySpy = spyOnPoolQueries(handle.pool);
 
     querySpy.reset();
+    flushLogger.reset();
     await flushBatch(events100);
     firstFlushCalls = [...querySpy.calls];
+    firstFlushLoggerCalls = [...flushLogger.calls];
 
     querySpy.reset();
+    flushLogger.reset();
     await flushBatch(events100); // [INV-8] the SAME batch, again
     secondFlushCalls = [...querySpy.calls];
+    secondFlushLoggerCalls = [...flushLogger.calls];
 
     querySpy.reset();
+    flushLogger.reset();
     await flushBatch([]);
     emptyBatchCalls = [...querySpy.calls];
+    emptyBatchLoggerCalls = [...flushLogger.calls];
 
     querySpy.restore();
 
@@ -353,6 +390,62 @@ describe('createFlushBatch / flushBatch (T3.3.2)', () => {
 
   it('an empty batch issues zero statements and is a pure no-op', () => {
     expect(emptyBatchCalls).toHaveLength(0);
+  });
+
+  // [review round 2, observability fix] profiles 4 (not-found, 16 of the
+  // 100 events) and 5 (tenant-mismatch, 16 of the 100 events) are exactly
+  // the "some link_ids didn't resolve" case flushBatch must now surface —
+  // one summary line per flush, not per event.
+  it('logs exactly ONE batch-level summary when some events fail to resolve a destination, naming both failure reasons', () => {
+    expect(firstFlushLoggerCalls).toHaveLength(1);
+    const [call] = firstFlushLoggerCalls;
+    expect(call?.message).toContain('32 of 100');
+    expect(call?.meta).toMatchObject({
+      batchSize: 100,
+      distinctLinkIdCount: 5,
+      unresolvedCount: 32,
+      notFoundCount: 16,
+      tenantMismatchCount: 16,
+    });
+  });
+
+  it('the second (re-)flush logs the SAME summary again — resolution is recomputed every flush, not remembered from the first', () => {
+    expect(secondFlushLoggerCalls).toHaveLength(1);
+    expect(secondFlushLoggerCalls[0]?.meta).toMatchObject({
+      unresolvedCount: 32,
+      notFoundCount: 16,
+      tenantMismatchCount: 16,
+    });
+  });
+
+  it('an empty batch logs nothing', () => {
+    expect(emptyBatchLoggerCalls).toHaveLength(0);
+  });
+
+  it('logs nothing when every event in a batch resolves cleanly — no noise on the happy path', async () => {
+    const tenant = await seedTenant(handle);
+    const link = await seedLink(handle, tenant, 'clean', 'https://clean.example.com/ok');
+    const logger = makeRecordingLogger();
+    const flush = createFlushBatch({ db: handle.db, logger });
+    const cleanEvent = buildCaptureEvent({ tenant_id: tenant, link_id: link, slug: 'clean' });
+
+    await flush([cleanEvent]);
+
+    expect(logger.calls).toHaveLength(0);
+  });
+
+  it('defaults to consoleErrorLogger (writes to console.error) when no logger is injected', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const flush = createFlushBatch({ db: handle.db });
+      const orphanEvent = buildCaptureEvent({}); // random tenant_id/link_id, never seeded -> not-found
+
+      await flush([orphanEvent]);
+
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 
   it('populates enrichment columns for a real desktop-Chrome + Instagram-referer + resolvable-destination hit', async () => {

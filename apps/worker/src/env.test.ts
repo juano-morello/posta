@@ -77,6 +77,23 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  // [review round 2, database-reviewer finding] EVENT_BATCH_SIZE governs
+  // flushBatch's own single multi-row INSERT (apps/worker/src/batch/
+  // flush.ts, T3.3.2) — 31 bind params per row, so an unbounded value
+  // risks exceeding Postgres's own per-statement parameter ceiling with a
+  // cryptic runtime error instead of a loud, named one at boot.
+  it('accepts EVENT_BATCH_SIZE at the upper bound (500)', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, EVENT_BATCH_SIZE: '500' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects EVENT_BATCH_SIZE above the upper bound (501)', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, EVENT_BATCH_SIZE: '501' });
+
+    expect(result.success).toBe(false);
+  });
+
   it('rejects a LOG_LEVEL that is not a recognized pino level', () => {
     const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, LOG_LEVEL: 'banana' });
 

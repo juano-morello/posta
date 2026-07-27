@@ -40,7 +40,19 @@ export const workerEnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
 
   // Event pipeline batching (S3.3) — flush on whichever trips first.
-  EVENT_BATCH_SIZE: z.coerce.number().int().positive(),
+  // EVENT_BATCH_SIZE is capped at 500 [review round 2, database-reviewer
+  // finding]: it governs BOTH BatchAccumulator's count trigger AND how
+  // many rows land in flushBatch's own single multi-row INSERT
+  // (apps/worker/src/batch/flush.ts, T3.3.2) — each row binds 31
+  // parameters (schema/events.ts's full column count), so Postgres's own
+  // ~65,535-parameter-per-statement ceiling divided by 31 is ~2,114. 500
+  // is comfortably clear of that ceiling (500 * 31 = 15,500 params, ~24%
+  // of the limit) while still far above any batch size this system would
+  // operationally want (.env.example's default is 100) — an operator
+  // typo (e.g. "3000" meant as "300") now fails LOUD at boot, via this
+  // schema, instead of surfacing as a cryptic "too many parameters"
+  // Postgres error the next time a batch actually fills.
+  EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(500),
   EVENT_BATCH_INTERVAL_MS: z.coerce.number().int().positive(),
 });
 
