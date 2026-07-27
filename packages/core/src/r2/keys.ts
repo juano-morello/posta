@@ -63,6 +63,21 @@ function parseInstant(value: string, fnName: string, paramName: string): Date {
 const HOURS_PER_DAY = 24;
 const MS_PER_DAY = HOURS_PER_DAY * 60 * 60 * 1000;
 
+// [review round 1, silent-failure-hunter finding] MAX_RANGE_DAYS bounds
+// eventPrefixes()'s day-granularity walk below so an obvious operator typo
+// in a `from`/`to` pair (wrong century, wrong year — e.g.
+// `from='0001-01-01T00:00:00Z'`, `to='9999-12-31T00:00:00Z'`) fails LOUD
+// with the actual span named, instead of silently allocating tens of
+// millions of prefix strings and hanging. 3,660 UTC days is 10 calendar
+// years (accounting for leap days: 10 * 366 = 3,660, the worst case):
+// comfortably more than any single replay call this product would ever
+// legitimately need (a replay CLI reprocesses a bounded window it names
+// explicitly, not "the product's entire history" in one call), while a
+// genuine typo that swaps a digit or a century overshoots it by orders of
+// magnitude and gets caught here rather than downstream in an OOM or a
+// multi-minute hang with no diagnosable cause.
+const MAX_RANGE_DAYS = 3660;
+
 /**
  * Builds the partitioned R2 key a batch's NDJSON body is written to:
  * `events/dt=YYYY-MM-DD/hour=HH/<batchId>.ndjson`.
@@ -147,10 +162,13 @@ export function eventBatchKey(batchId: string, occurredAt: string): string {
  * either time-of-day order are not an error, since they produce
  * byte-identical output either way (both truncate to the same day).
  *
- * Throws if `from` or `to` does not parse to a valid instant, or if `from`
- * falls on a UTC calendar day after `to` — the same "throw loudly rather
- * than silently produce a wrong/partial range" discipline as
- * `eventBatchKey`.
+ * Throws if `from` or `to` does not parse to a valid instant, if `from`
+ * falls on a UTC calendar day after `to`, or if the resulting range spans
+ * more than `MAX_RANGE_DAYS` days — a bound that exists to catch an
+ * obvious operator typo (wrong century/year) before it allocates an
+ * unbounded array and hangs; see `MAX_RANGE_DAYS`'s own comment above for
+ * the arithmetic behind the number. Same "throw loudly rather than
+ * silently produce a wrong/partial range" discipline as `eventBatchKey`.
  */
 export function eventPrefixes(from: string, to: string): string[] {
   const fromParsed = parseInstant(from, 'eventPrefixes', 'from');
@@ -161,6 +179,14 @@ export function eventPrefixes(from: string, to: string): string[] {
 
   if (fromDayMs > toDayMs) {
     throw new Error(`eventPrefixes: from ("${from}") falls on a UTC calendar day after to ("${to}")`);
+  }
+
+  const rangeDays = (toDayMs - fromDayMs) / MS_PER_DAY + 1;
+
+  if (rangeDays > MAX_RANGE_DAYS) {
+    throw new Error(
+      `eventPrefixes: range from "${from}" to "${to}" spans ${rangeDays} UTC days, which exceeds the ${MAX_RANGE_DAYS}-day maximum (check for a typo in the year or century)`
+    );
   }
 
   const prefixes: string[] = [];

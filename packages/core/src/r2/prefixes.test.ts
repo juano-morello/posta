@@ -142,4 +142,42 @@ describe('eventPrefixes (T3.6.1)', () => {
       expect(() => eventPrefixes('2026-07-22T00:00:00.000Z', '2026-07-21T23:59:59.999Z')).toThrow();
     });
   });
+
+  describe('MAX_RANGE_DAYS ceiling — protects against unbounded allocation', () => {
+    // [review round 1, silent-failure-hunter finding] an unbounded range
+    // (e.g. an operator typo swapping the century) would otherwise
+    // allocate tens of millions of prefix strings and hang with no
+    // diagnosable error. 3,660 is MAX_RANGE_DAYS's own value in keys.ts
+    // (10 UTC calendar years, accounting for leap days) — hardcoded here
+    // rather than imported, matching this codebase's own convention for
+    // boundary constants (see apps/worker/src/env.test.ts's own literal
+    // "500" for EVENT_BATCH_SIZE's upper bound).
+    const MAX_RANGE_DAYS = 3660;
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+    const FROM = '2016-07-21T00:00:00.000Z';
+
+    function toDate(daysAfterFrom: number): string {
+      return new Date(new Date(FROM).getTime() + daysAfterFrom * ONE_DAY_MS).toISOString();
+    }
+
+    it('does not throw at exactly the MAX_RANGE_DAYS boundary', () => {
+      const to = toDate(MAX_RANGE_DAYS - 1);
+
+      const prefixes = eventPrefixes(FROM, to);
+
+      expect(prefixes).toHaveLength(MAX_RANGE_DAYS * HOURS_PER_DAY);
+    });
+
+    it('throws just one day past the MAX_RANGE_DAYS boundary', () => {
+      const to = toDate(MAX_RANGE_DAYS);
+
+      expect(() => eventPrefixes(FROM, to)).toThrow(/exceeds the 3660-day maximum/);
+    });
+
+    it('throws for a pathologically wide range (wrong-century operator typo) with a diagnosable message, rather than allocating tens of millions of prefixes', () => {
+      expect(() => eventPrefixes('0001-01-01T00:00:00.000Z', '9999-12-31T00:00:00.000Z')).toThrow(
+        /exceeds the 3660-day maximum/
+      );
+    });
+  });
 });
