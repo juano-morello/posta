@@ -1,5 +1,7 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { EVENTS_QUEUE } from '@posta/core';
+import { EVENT_SINK, EventsConsumer, NoopEventSink, type EventSink } from './consumer/events.consumer';
 
 // T3.1.2 [E3, S3.1] — establishes the worker's BullMQ ROOT CONNECTION so
 // T3.1.3 (the consumer, a `@Processor`/`WorkerHost` class with tuned
@@ -8,6 +10,18 @@ import { BullModule } from '@nestjs/bullmq';
 // job, not this one. "Root connection, no consumer yet" is deliberate:
 // see this file's own header below for why the connection seam is
 // established here rather than deferred alongside the consumer.
+//
+// [T3.1.3 update] `BullModule.registerQueue({ name: EVENTS_QUEUE })`,
+// `EventsConsumer`, and the `EVENT_SINK` provider now live in THIS
+// dynamic module rather than a separate one, so `AppModule.forRoot()`
+// stays the single thing main.ts (production) and
+// events.consumer.test.ts (a real testcontainers-Redis integration test)
+// both boot through — the test proves the actual production wiring,
+// never a parallel test-only module. `AppModuleConfig.eventSink` is an
+// optional override specifically so that test can substitute an
+// observing sink through the same `EVENT_SINK` DI token production uses
+// for `NoopEventSink`, without needing `@nestjs/testing` (not a
+// dependency of this app) or `overrideProvider`.
 //
 // TWO ESTABLISHED PRECEDENTS, one judgment call:
 //   1. apps/api's main.ts builds its BullMQ producer
@@ -41,6 +55,13 @@ export interface AppModuleConfig {
    * `env.REDIS_URL`, passed through, never re-read from process.env
    * here. */
   readonly redisUrl: string;
+  /** Overrides the `EVENT_SINK` DI token `EventsConsumer` injects.
+   * Defaults to `NoopEventSink` when omitted — production (main.ts)
+   * never sets this. events.consumer.test.ts passes its own observing
+   * sink here to assert what the consumer actually decoded, against a
+   * real testcontainers Redis, with no database involved (T3.3.1 lands
+   * the real accumulator sink later). */
+  readonly eventSink?: EventSink;
 }
 
 @Module({})
@@ -65,6 +86,17 @@ export class AppModule {
             maxRetriesPerRequest: null,
           },
         }),
+        // T3.1.3 — no `connection` override here: leaving it unset means
+        // this queue's options fall back to the shared config the
+        // `BullModule.forRoot()` import above just registered (globally,
+        // by `@nestjs/bullmq`'s own design), so there is exactly one
+        // Redis connection definition in this module, not two that could
+        // drift apart.
+        BullModule.registerQueue({ name: EVENTS_QUEUE }),
+      ],
+      providers: [
+        EventsConsumer,
+        { provide: EVENT_SINK, useValue: config.eventSink ?? new NoopEventSink() },
       ],
     };
   }
