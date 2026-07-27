@@ -366,3 +366,24 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Deviation from plan:** file list expanded beyond the plan's stated three (`shutdown.ts`, `app.module.ts`, `shutdown.test.ts`) to include `env.ts`/`env.test.ts`/`main.ts`/`.env.example` (SHUTDOWN_TIMEOUT_MS wiring) and `events.consumer.ts`/`dlq.service.test.ts`/`events.consumer.test.ts`/`malformed-job.test.ts` (AccumulatingEventSink + BATCH_ACCUMULATOR DI wiring, and the required-config fallout above) — all necessary supporting wiring for this task's own DI surface, not scope creep into other tasks' territory.
 
 **Handed back to:** n/a — no unresolved findings remain.
+
+---
+
+## T3.1.7 · `9397d42` · 2026-07-27T17:17:13-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test health.controller.test.ts` — 5/5 pass
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test shutdown.test.ts accumulator.test.ts dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts` — 44/44 pass, no regression from the new `BatchAccumulator.lastFlushAgeMs()`/`HealthController` wiring
+
+**Findings surviving triage:** none — clean implementation.
+
+**Judgment calls made by the implementer, reviewed and accepted:**
+- `last_flush_age_ms` tracks last-*successful*-flush only (a rejecting flush does not reset the clock), matching the plan's acceptance wording literally.
+- 503 threshold is unconditional `> 3 × batchIntervalMs` with no queue-depth gating, per the plan's literal wording — flagged by the implementer that a genuinely idle worker (zero traffic, batch never opens) will also trip 503 after 3 idle intervals, indistinguishable from wedged. Implemented as specified rather than silently softened; worth a second look only if `EVENT_BATCH_INTERVAL_MS` is ever tuned aggressively relative to real traffic gaps.
+- Test level is fast unit-style against a REAL `BatchAccumulator` + two plain-object doubles (not testcontainers) — DI wiring correctness covered incidentally via the 4 existing `AppModule.forRoot()`-booting suites (shutdown/dlq/events.consumer/malformed-job), all of which still construct cleanly with the new `HealthController`/`FLUSH_INTERVAL_MS` tokens registered.
+
+**Deviation from plan:** none beyond the necessary supporting change to `accumulator.ts` (adding `lastFlushAgeMs()`) and `main.ts` (removing the old always-200 hand-rolled `/health` middleware it replaces) — both required for this task's own file-listed `app.module.ts` wiring to work.
+
+**Handed back to:** n/a — no unresolved findings.

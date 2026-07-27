@@ -47,7 +47,7 @@ A payload that fails `eventJobSchema` will never parse on a retry. Retrying it f
 `onModuleDestroy` pauses the BullMQ worker so no new job is claimed, awaits in-flight handlers, then calls `flushNow()` on the accumulator before resolving. Bounded by a `SHUTDOWN_TIMEOUT_MS` so a wedged flush cannot block a deploy forever. This is the task that makes in-memory batching safe rather than merely fast.
 → **files** `apps/worker/src/consumer/shutdown.ts` · `apps/worker/src/app.module.ts` · `apps/worker/src/consumer/shutdown.test.ts` · **verify** `pnpm test shutdown.test.ts` fills a partial batch of 30, triggers `onModuleDestroy`, and asserts all 30 rows are in Postgres before the promise resolves · **after** T3.1.5, T3.3.1
 
-#### T3.1.7 · `feat: worker health endpoint with queue depth and last-flush age`
+#### T3.1.7 · `feat: worker health endpoint with queue depth and last-flush age` ✅ done (`9397d42`)
 `GET /health` on the worker returns `{ status, queue_depth, dlq_depth, last_flush_age_ms, batch_size }` and answers 503 when `last_flush_age_ms` exceeds three flush intervals. Queue depth alone looks healthy while the worker is wedged; the flush age is the signal that actually distinguishes idle from stuck.
 → **files** `apps/worker/src/health.controller.ts` · `apps/worker/src/health.controller.test.ts` · **verify** `pnpm test health.controller.test.ts` asserts 200 with a fresh flush, 503 after advancing fake timers past the threshold, and that `dlq_depth` reflects a planted DLQ entry · **after** T3.1.6
 
