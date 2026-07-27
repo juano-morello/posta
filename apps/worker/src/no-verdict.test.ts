@@ -73,6 +73,23 @@ import { describe, expect, it } from 'vitest';
 //      literals, and longer identifiers. This is the "importable function
 //      unit-tested against a string" approach the task explicitly allows,
 //      in preference to committing a real violating file.
+//
+// [fix-forward, review round 1] REFUSING A BROKEN PARSE: ts.createSourceFile()
+// parses LENIENTLY — a file with a genuine syntax error still returns a
+// best-effort AST (the errors land in the source file's own diagnostics,
+// never thrown), and a corrupted region of that tree can hide a banned
+// identifier from visit()'s walk while this scan silently reports zero
+// violations for the file. getParseDiagnostics() below reads those
+// diagnostics and scanSourceForVerdictVocabulary() throws, naming the file
+// and the parser's own message, rather than trusting a parse tree it never
+// verified was complete. Every file this scan actually encounters already
+// has to pass this repo's own tsc/build gate to exist validly under
+// packages/core/src/enrichment/** or apps/worker/src/**, so this is not a
+// live production gap — but an invariant-ENFORCING test silently trusting
+// unverified input is exactly the "fail loud, don't assume" discipline
+// this epic applies everywhere else (T3.4.3's eventBatchKey throwing on a
+// NaN-producing input rather than emitting a corrupt key is the most
+// recent precedent), so it is closed here too.
 
 const BANNED_IDENTIFIERS = [
   'is_bot',
@@ -117,14 +134,59 @@ function extractStaticNameText(nameNode: ts.PropertyName | ts.BindingName): stri
 }
 
 /**
+ * `ts.SourceFile.parseDiagnostics` is not part of the compiler API's
+ * documented public `.d.ts` surface, but it is populated by every
+ * `ts.createSourceFile()` call at runtime — confirmed directly against the
+ * installed typescript@5.9.3 package before relying on it here:
+ * `ts.createSourceFile('bad.ts', 'const x = { incomplete', ...)
+ * .parseDiagnostics` returns a genuine one-element array whose flattened
+ * message is `"'}' expected."`. Read defensively (`Array.isArray`, not a
+ * direct property assertion or cast-and-trust) so a future TypeScript
+ * release renaming or dropping this internal field degrades to "no
+ * diagnostics found" here rather than crashing this accessor — the
+ * "throws on a deliberately broken fixture" regression test below is what
+ * actually guards against that drift going unnoticed, the same way this
+ * whole file already relies on tests, not types, to prove runtime
+ * behavior matches an unofficial/undocumented API surface.
+ */
+interface SourceFileWithParseDiagnostics {
+  readonly parseDiagnostics?: unknown;
+}
+
+function getParseDiagnostics(sourceFile: ts.SourceFile): readonly ts.Diagnostic[] {
+  const diagnostics = (sourceFile as unknown as SourceFileWithParseDiagnostics).parseDiagnostics;
+  return Array.isArray(diagnostics) ? (diagnostics as readonly ts.Diagnostic[]) : [];
+}
+
+/**
  * Parses `sourceText` (as `fileName`, purely for reporting — never read
  * from disk here) with the TypeScript compiler API and reports every
  * genuine declaration/assignment whose name is exactly one of
  * BANNED_IDENTIFIERS. Pure: no filesystem access, so this is directly
  * unit-testable against an in-memory fixture string.
+ *
+ * Throws, naming `fileName` and the parser's own diagnostic message(s),
+ * if `sourceText` has a genuine syntax error — see this file's own header
+ * ("REFUSING A BROKEN PARSE") for why a lenient AST is not trustworthy
+ * input for this scan.
  */
 function scanSourceForVerdictVocabulary(sourceText: string, fileName: string): VerdictVocabularyHit[] {
   const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+  const parseDiagnostics = getParseDiagnostics(sourceFile);
+  if (parseDiagnostics.length > 0) {
+    const messages = parseDiagnostics
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+      .join('; ');
+    throw new Error(
+      `${fileName} has a syntax error and cannot be reliably scanned for verdict ` +
+        `vocabulary (invariant 4): ${messages}. ts.createSourceFile() parses leniently — ` +
+        `a corrupted region of a syntactically broken file could hide a banned identifier ` +
+        `from this scan's AST walk while it silently reported zero violations for the ` +
+        `file. Fix the syntax error before this scan's "clean" result can be trusted.`,
+    );
+  }
+
   const hits: VerdictVocabularyHit[] = [];
 
   function recordIfBanned(nameNode: ts.PropertyName | ts.BindingName | undefined): void {
@@ -419,6 +481,32 @@ describe('scanSourceForVerdictVocabulary detection (in-memory fixtures, never wr
     );
 
     expect(hits).toEqual([]);
+  });
+});
+
+describe('scanSourceForVerdictVocabulary refuses to trust a syntactically broken parse', () => {
+  it('throws instead of silently reporting zero violations for a file with an unclosed brace', () => {
+    expect(() => scanSourceForVerdictVocabulary('const x = { incomplete', 'broken.ts')).toThrow();
+  });
+
+  it('the thrown message names the file', () => {
+    expect(() => scanSourceForVerdictVocabulary('const x = { incomplete', 'broken.ts')).toThrow(/broken\.ts/);
+  });
+
+  it("the thrown message includes the parser's own diagnostic text, not a generic placeholder", () => {
+    expect(() => scanSourceForVerdictVocabulary('const x = { incomplete', 'broken.ts')).toThrow(
+      /'}' expected/,
+    );
+  });
+
+  it('a syntactically VALID fixture with zero parse diagnostics never throws (no false positive from this guard)', () => {
+    expect(() => scanSourceForVerdictVocabulary('const safe = true;\n', 'fixture.ts')).not.toThrow();
+  });
+
+  it('a syntactically valid fixture that also happens to violate the ban both throws never and still detects the violation', () => {
+    const hits = scanSourceForVerdictVocabulary("const isBot = ua.includes('bot');\n", 'fixture.ts');
+
+    expect(hits).toEqual([{ file: 'fixture.ts', line: 1, identifier: 'isBot' }]);
   });
 });
 
