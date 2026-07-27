@@ -12,6 +12,9 @@ export * from './db';
 // T2.3.4 — the GeoIP loader seam (geoip/loader.ts), same barrel pattern
 // as db/redis above.
 export * from './geoip';
+// T3.1.1 — the shared BullMQ queue contract (queue/events-queue.ts), same
+// barrel pattern as db/geoip/redis above.
+export * from './queue';
 export * from './redis';
 export * from './ulid';
 // T1.5.5 — the first consumer that needs schema TABLE OBJECTS through

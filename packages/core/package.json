@@ -30,6 +30,7 @@
   "dependencies": {
     "@posta/contracts": "workspace:*",
     "better-auth": "^1.6.24",
+    "bullmq": "^5.80.10",
     "drizzle-orm": "^0.45.2",
     "ioredis": "^5.11.1",
     "maxmind": "^5.0.6",
