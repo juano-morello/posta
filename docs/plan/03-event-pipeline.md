@@ -174,7 +174,7 @@ A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACC
 `serializeBatch(events)` emits one JSON object per line, newline-terminated, UTF-8. Fields are copied through an **explicit allowlist** matching the `events` column set from spec §8 — not a spread — so a future extra field on the payload cannot silently reach the durable log. An `ip` or a verdict cannot appear in the log because the serializer has no key for one.
 → **files** `packages/core/src/r2/ndjson.ts` · `packages/core/src/r2/ndjson.test.ts` · **verify** `pnpm test ndjson.test.ts` asserts line count equals batch length, every line round-trips through `JSON.parse`, the emitted key set equals the `events` column list, and a payload with planted `ip` and `classification` keys serializes without them · **after** T3.2.5
 
-#### T3.4.3 · `feat: partitioned R2 key scheme`
+#### T3.4.3 · `feat: partitioned R2 key scheme` ✅ done (`f1af8f2`)
 `eventBatchKey(batchId, occurredAt)` → `events/dt=YYYY-MM-DD/hour=HH/<batchId>.ndjson`, always in UTC so a São Paulo `-03:00` timestamp partitions by its instant and not its local date. The key is derived from the `batch_id` minted once in T3.3.1, so every retry of the same batch PUTs to the same key and overwrites rather than duplicating.
 → **files** `packages/core/src/r2/keys.ts` · `packages/core/src/r2/keys.test.ts` · **verify** `pnpm test keys.test.ts` asserts `2026-07-21T02:30:00-03:00` produces `dt=2026-07-21/hour=05`, that hours are zero-padded, and that the same `batch_id` yields a byte-identical key across calls · **after** T3.4.2
 
