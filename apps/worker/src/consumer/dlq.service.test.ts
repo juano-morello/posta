@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import type { INestApplicationContext } from '@nestjs/common';
 import { EVENTS_DLQ_QUEUE, EVENTS_JOB_OPTIONS, EVENTS_QUEUE, newId } from '@posta/core';
 import { startRedisContainer, type RedisContainerHandle } from '@posta/core/testing';
-import type { CaptureEvent } from '@posta/contracts';
+import { SECRET_REDACTION_PLACEHOLDER, type CaptureEvent } from '@posta/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../app.module';
 import { DlqService, type EventsDlqJobPayload } from './dlq.service';
@@ -102,11 +102,54 @@ describe('DlqService — unit (real BullMQ queue, no consumer)', () => {
       const entry = jobs[0]!.data;
       expect(entry.reason).toBe('attempts-exhausted');
       expect(entry.rawPayload).toEqual(payload);
+      // [security fix, review round 1] `errorMessage` now goes through
+      // `redactCredentialsFromMessage` (send()'s own header) before
+      // storage — this specific message carries no `scheme://...`
+      // credential for that redactor to find, so it passes through
+      // BYTE-FOR-BYTE unchanged, same as before the fix. See the
+      // dedicated "redacts a connection-string credential" test below
+      // for proof the redaction itself is real, not a no-op fix.
       expect(entry.errorMessage).toBe('sink rejected forever');
       expect(entry.attemptsMade).toBe(5);
       expect(entry.originalJobId).toBe('job-123');
       expect(entry.issues).toEqual([]);
       expect(new Date(entry.failedAt).toISOString()).toBe(entry.failedAt);
+    } finally {
+      await queue.obliterate({ force: true });
+      await queue.close();
+    }
+  });
+
+  it('send() redacts a connection-string credential embedded in the error message before storing it', async () => {
+    // [security fix, review round 1] Proves the redaction added to
+    // send() is REAL, not a no-op: ioredis (and `pg`) embed the
+    // connection URL — password included — directly in a connection
+    // error's own `.message` (send()'s own header links this to
+    // enqueue.ts's identical documented risk). Once a real sink lands
+    // (T3.3.1) and starts rejecting with errors that originate from a
+    // Postgres/R2 client, this is exactly the shape `error.message` can
+    // take by the time it reaches DlqService.send().
+    const queue = new Queue<EventsDlqJobPayload>(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    const service = new DlqService(queue);
+
+    try {
+      const error = new Error('connect ECONNREFUSED redis://user:s3cret@localhost:6379');
+
+      await service.send('attempts-exhausted', {}, error, {
+        originalJobId: 'job-789',
+        attemptsMade: 5,
+      });
+
+      const jobs = await queue.getJobs(['waiting']);
+      expect(jobs).toHaveLength(1);
+
+      const entry = jobs[0]!.data;
+      expect(entry.errorMessage).not.toContain('s3cret');
+      expect(entry.errorMessage).toBe(
+        `connect ECONNREFUSED redis://${SECRET_REDACTION_PLACEHOLDER}@localhost:6379`,
+      );
     } finally {
       await queue.obliterate({ force: true });
       await queue.close();
@@ -224,6 +267,11 @@ describe('EventsConsumer — attempts-exhausted routes to the DLQ (real BullMQ, 
       const entry = dlqJobs[0]!.data;
       expect(entry.reason).toBe('attempts-exhausted');
       expect(entry.rawPayload).toEqual(event);
+      // `sinkError.message` ('accumulator write failed forever', below)
+      // carries no `scheme://...` credential, so DlqService.send()'s own
+      // redaction (dlq.service.test.ts's dedicated "redacts a
+      // connection-string credential" test proves it is real) is a
+      // no-op here — this stays a byte-for-byte match, not a regression.
       expect(entry.errorMessage).toBe(sinkError.message);
       expect(entry.attemptsMade).toBe(5);
       expect(entry.originalJobId).toBe(job.id);

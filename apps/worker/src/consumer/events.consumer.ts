@@ -254,6 +254,42 @@ export class EventsConsumer extends WorkerHost {
     super();
   }
 
+  /**
+   * [security/silent-failure fix, review round 1] Every `this.logger
+   * .error(...)` call in this class goes through here instead of calling
+   * the injected logger directly — a THROWING logger must never mask
+   * whatever the SURROUNDING logic was already going to do next (rethrow
+   * the real error, or simply return/continue). Same discipline
+   * apps/worker/src/batch/accumulator.ts's own `runFlush()` established
+   * (fix-forward, T3.3.1 review) for the identical risk, applied here
+   * consistently across every call site rather than only the ones a
+   * single task happened to add — a logger call this class already had
+   * (`process()`'s sink-failure branch, T3.1.3) was exactly as exposed to
+   * this as the two `onFailed()` added (T3.1.5).
+   *
+   * The risk differs by call site but the fix is the same everywhere: in
+   * `process()`/`routeToDlq()`, BullMQ DOES await the promise this method
+   * is called from, so an unguarded throwing logger would replace the
+   * REAL error/outcome with the logger's own — strictly worse
+   * information for whoever reads BullMQ's `failedReason` next, even
+   * though BullMQ's own machinery would still technically catch it.
+   * `onFailed()` is worse: it is a plain `@OnWorkerEvent` EventEmitter
+   * listener whose return value BullMQ never awaits (verified against
+   * the installed bullmq@5.80.10 source — `Worker`'s `emit('failed', ...)`
+   * call, worker.js, is fire-and-forget from the emitter's own
+   * perspective), so an unguarded throw there becomes a genuine unhandled
+   * rejection, not something BullMQ's own machinery would catch at all.
+   */
+  private safeLog(message: string, meta?: Record<string, unknown>): void {
+    try {
+      this.logger.error(message, meta);
+    } catch {
+      // The logger itself failed — nothing further to do about that
+      // here; the caller continues with whatever it was already going to
+      // do (rethrow the original error, or simply return) regardless.
+    }
+  }
+
   async process(job: Job<unknown>): Promise<void> {
     const parsed = eventJobSchema.safeParse(job.data);
     if (!parsed.success) {
@@ -266,7 +302,7 @@ export class EventsConsumer extends WorkerHost {
       await this.sink.handle(event);
     } catch (error) {
       const causeMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(
+      this.safeLog(
         redactCredentialsFromMessage(`Sink failed to handle event ${event.event_id}: ${causeMessage}`),
         { eventId: event.event_id, linkId: event.link_id, tenantId: event.tenant_id },
       );
@@ -326,7 +362,7 @@ export class EventsConsumer extends WorkerHost {
       // genuinely raw, unvalidated `job.data` — see this file's own
       // header for why `onFailed()` re-validates rather than trusting
       // that can never happen.
-      this.logger.error(
+      this.safeLog(
         redactCredentialsFromMessage(
           `Job ${originalJobId} failed eventJobSchema validation AND failed to route to ` +
             `${EVENTS_DLQ_QUEUE}: ${dlqErrorMessage}`,
@@ -336,7 +372,7 @@ export class EventsConsumer extends WorkerHost {
       throw dlqError;
     }
 
-    this.logger.error(
+    this.safeLog(
       `Job ${originalJobId} failed eventJobSchema validation; routed to ${EVENTS_DLQ_QUEUE} ` +
         `(${issues.length} issue(s)), job acked with no retry`,
       { jobId: job.id },
@@ -408,7 +444,7 @@ export class EventsConsumer extends WorkerHost {
       // even though it never made it into the DLQ; the failure to route
       // it is still logged, loudly, with full context, rather than
       // silently dropped.
-      this.logger.error(
+      this.safeLog(
         redactCredentialsFromMessage(
           `Job ${originalJobId} exhausted all ${attemptsMade} attempt(s) AND failed to route to ` +
             `${EVENTS_DLQ_QUEUE}: ${dlqErrorMessage}`,
@@ -418,7 +454,7 @@ export class EventsConsumer extends WorkerHost {
       return;
     }
 
-    this.logger.error(
+    this.safeLog(
       `Job ${originalJobId} exhausted all ${attemptsMade} attempt(s); routed to ${EVENTS_DLQ_QUEUE}`,
       { jobId: job.id },
     );

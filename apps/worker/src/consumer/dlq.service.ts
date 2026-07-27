@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { EVENTS_DLQ_QUEUE } from '@posta/core';
+import { redactCredentialsFromMessage } from '@posta/contracts';
 
 // T3.1.5 [E3, S3.1] — the ONE writer EVENTS_DLQ_QUEUE has. Before this
 // task, T3.1.4's EventsConsumer.routeToDlq() built a DLQ entry and wrote
@@ -102,10 +103,14 @@ export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted';
 export interface EventsDlqJobPayload {
   readonly reason: DlqReason;
   readonly rawPayload: unknown;
-  /** The underlying error's own `.message` — the sink's rejection reason
-   * for 'attempts-exhausted', or a ZodError's own (JSON-ish) `.message`
-   * for 'schema-validation-failed' (the structured, human-readable
-   * equivalent lives in `issues` for that reason). */
+  /** The underlying error's own `.message`, REDACTED via
+   * `redactCredentialsFromMessage` before storage (`send()`, below) — the
+   * sink's rejection reason for 'attempts-exhausted' (once a real sink
+   * lands in T3.3.1, that error can originate from a Postgres/R2 client
+   * whose own `.message` embeds a connection-string credential, exactly
+   * the case `enqueue.ts`'s header describes), or a ZodError's own
+   * (JSON-ish) `.message` for 'schema-validation-failed' (the structured,
+   * human-readable equivalent lives in `issues` for that reason). */
   readonly errorMessage: string;
   /** Non-empty only for 'schema-validation-failed' — `[]` otherwise. See
    * this file's own "flat shape" reasoning for why this field exists
@@ -153,7 +158,18 @@ export class DlqService {
     const entry: EventsDlqJobPayload = {
       reason,
       rawPayload: payload,
-      errorMessage: error.message,
+      // [security fix, review round 1] `error.message` is redacted here,
+      // in this ONE shared writer, rather than trusting each of
+      // routeToDlq()/onFailed() (events.consumer.ts) to remember to do it
+      // at their own call sites — a single guard point protects both
+      // today's callers and any future one, the same reasoning
+      // `redactCredentialsFromMessage`'s own header gives for living in
+      // packages/contracts instead of being copied per call site.
+      // Deliberately NOT applied to `rawPayload` (this file's own header,
+      // "[security, invariant 6] rawPayload is stored EXACTLY as
+      // received, unredacted" — a different, already-reviewed decision
+      // this fix does not touch).
+      errorMessage: redactCredentialsFromMessage(error.message),
       issues: meta.issues ?? [],
       attemptsMade: meta.attemptsMade,
       originalJobId: meta.originalJobId,

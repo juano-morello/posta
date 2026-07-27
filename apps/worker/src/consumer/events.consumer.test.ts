@@ -250,6 +250,92 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
       await app?.close();
     }
   });
+
+  it('a throwing logger never masks the original sink error, and onFailed() still completes the DLQ routing', async () => {
+    // [security/silent-failure fix, review round 1] Proves
+    // EventsConsumer's safeLog() wrapper across BOTH of the risk
+    // categories its own doc comment describes, with a logger that
+    // throws on every call: (1) process()'s sink-failure branch — BullMQ
+    // DOES await this promise, so `failedJob.failedReason` must still be
+    // the ORIGINAL sink error, never the logger's own thrown error
+    // replacing it; (2) onFailed() — a plain @OnWorkerEvent listener
+    // BullMQ never awaits — must still complete normally and write
+    // exactly one DLQ entry despite the same throwing logger, rather than
+    // becoming a genuine unhandled rejection (mirrors
+    // apps/worker/src/batch/accumulator.test.ts's own precedent test for
+    // the identical risk in runFlush()).
+    const sinkError = new Error('accumulator write failed');
+    const loggerError = new Error('logger transport down');
+    const handle = vi.fn(async (_event: CaptureEvent): Promise<void> => {
+      void _event;
+      throw sinkError;
+    });
+    const sink: EventSink = { handle };
+    const logger: EventsConsumerLogger = {
+      error: () => {
+        throw loggerError;
+      },
+    };
+
+    const queue = new Queue<CaptureEvent>(EVENTS_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    const dlqQueue = new Queue(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+
+    let app: INestApplicationContext | undefined;
+    try {
+      // Earlier tests in this describe block share one Redis container
+      // and never obliterate EVENTS_DLQ_QUEUE themselves (a pre-existing
+      // gap, not something this test's own fix touches) — worse, several
+      // of them DO obliterate EVENTS_QUEUE in their own `finally`, which
+      // resets ITS auto-increment job-id counter, so a later test's
+      // auto-generated `job.id` can coincidentally collide with an
+      // `originalJobId` an earlier, never-cleaned-up DLQ entry already
+      // recorded. Filtering by id is therefore not reliable either —
+      // clearing this queue's own state up front is what actually
+      // guarantees the length assertion below means what it says.
+      await dlqQueue.obliterate({ force: true });
+
+      app = await NestFactory.createApplicationContext(
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, logger }),
+      );
+
+      // No `defaultJobOptions` — a single attempt, same as the test above,
+      // so this job is both 'failed' and immediately "exhausted".
+      const job = await queue.add('capture', buildCaptureEvent());
+
+      await vi.waitFor(
+        async () => {
+          expect(await job.getState()).toBe('failed');
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+
+      const failedJob = await queue.getJob(job.id ?? '');
+      expect(failedJob?.failedReason).toBe(sinkError.message);
+
+      // onFailed() runs asynchronously off BullMQ's own 'failed' event,
+      // decoupled from the job's own state transition above — waited for
+      // separately rather than assumed to have already happened by the
+      // time job.getState() settled.
+      await vi.waitFor(
+        async () => {
+          const dlqJobs = await dlqQueue.getJobs(['waiting']);
+          expect(dlqJobs).toHaveLength(1);
+          expect((dlqJobs[0]!.data as { originalJobId?: unknown }).originalJobId).toBe(job.id);
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+    } finally {
+      await queue.obliterate({ force: true });
+      await queue.close();
+      await dlqQueue.obliterate({ force: true });
+      await dlqQueue.close();
+      await app?.close();
+    }
+  });
 });
 
 describe('readWorkerConcurrency', () => {
