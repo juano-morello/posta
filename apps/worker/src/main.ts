@@ -18,7 +18,15 @@ if (!envResult.ok) {
 const env = envResult.data;
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // T3.1.2 [E3, S3.1] — AppModule.forRoot() wires the BullMQ root
+  // connection (BullModule.forRoot, app.module.ts) from env.REDIS_URL,
+  // already validated above. See app.module.ts's own header for why this
+  // is a DynamicModule factory rather than a bare `@Module({})`: the
+  // module needs the already-validated REDIS_URL passed in, not a second
+  // read of process.env.
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule.forRoot({ redisUrl: env.REDIS_URL }),
+  );
 
   // The worker is a BullMQ consumer with no routed API of its own — this
   // is the only endpoint it serves, so Kubernetes can probe liveness
