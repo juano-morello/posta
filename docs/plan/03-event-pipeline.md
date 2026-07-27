@@ -31,7 +31,7 @@ This is an **extract-and-rewire** commit: T2.4.3 ships the producer with its que
 `main.ts` parses the worker env (T0.3.6) as its first statement, then boots `AppModule` with the BullMQ root connection pointed at `REDIS_URL` and `app.enableShutdownHooks()` so Nest's `onModuleDestroy` fires on SIGTERM — the hook the flush in T3.1.6 hangs off. No consumer registered yet.
 → **files** `apps/worker/src/main.ts` · `apps/worker/src/app.module.ts` · **verify** `pnpm --filter @posta/worker start` boots against the compose Redis, and `kill -TERM` exits 0 within 5 s instead of being killed by the timeout · **after** T0.1.9, T0.3.6, T3.1.1
 
-#### T3.1.3 · `feat: BullMQ consumer with tuned concurrency`
+#### T3.1.3 · `feat: BullMQ consumer with tuned concurrency` ✅ done (`52ab3e9`)
 `EventsConsumer` processing `EVENTS_QUEUE` with concurrency from `WORKER_CONCURRENCY` (default 8). Each job is decoded with `eventJobSchema` and handed to an injected sink interface — a no-op sink until the accumulator lands in T3.3.1 — so the consumer stays testable without a database.
 → **files** `apps/worker/src/consumer/events.consumer.ts` · `apps/worker/src/consumer/events.consumer.test.ts` · **verify** `pnpm test events.consumer.test.ts` pushes 20 jobs onto a testcontainer Redis and asserts the sink receives 20 decoded payloads with `event_id` unchanged · **after** T3.1.2
 
@@ -84,7 +84,7 @@ Boots the real worker as a child process against testcontainer Redis + Postgres,
 `IN_APP_MARKERS` (`Instagram`, `FBAN`, `FBAV`, `TikTok`, `BytedanceWebview`, `Line`) and `isInApp(ua)` returning a boolean, case-sensitive against the marker list. The marker table lives here rather than being inlined because T3.2.3 resolves `source_platform` from the same strings — two copies would drift, and the drift shows up as an event that is `is_in_app: true` with `source_platform: 'directo'`.
 → **files** `packages/core/src/enrichment/source-platform.ts` · `packages/core/src/enrichment/is-in-app.test.ts` · **verify** `pnpm test is-in-app.test.ts` asserts each of the six markers matches, that a plain Chrome UA and `null` both return `false`, and that the exported marker list has exactly six entries · **after** T3.2.1
 
-#### T3.2.3 · `feat: source_platform resolver — referer first, then UA markers`
+#### T3.2.3 · `feat: source_platform resolver — referer first, then UA markers` ✅ done (`43644ad`)
 `resolveSourcePlatform(referer, ua)` returns `'instagram' | 'whatsapp' | 'tiktok' | 'facebook' | 'x' | 'directo'`. Referer host is checked first (it is the stronger signal and survives UA spoofing), falling back to the in-app markers from T3.2.2, then `'directo'`. **This field is descriptive, not a verdict** [INV-4] — it names where a hit came from, never whether it was a human.
 → **files** `packages/core/src/enrichment/source-platform.ts` · `packages/core/src/enrichment/source-platform.test.ts` · **verify** `pnpm test source-platform.test.ts` asserts `l.instagram.com` → `instagram`, `t.co` and `twitter.com` → `x`, `lm.facebook.com` → `facebook`, a null referer with the Instagram in-app UA → `instagram`, and null/null → `directo` · **after** T3.2.2
 
