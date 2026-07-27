@@ -126,7 +126,7 @@ The failure mode this guards is not a wrong field, it is a stalled pipeline: one
 
 **Tasks:**
 
-#### T3.3.1 · `feat: batch accumulator with count and time triggers`
+#### T3.3.1 · `feat: batch accumulator with count and time triggers` ✅ done (`349f489`)
 `BatchAccumulator` opens a batch on the first event, mints its `batch_id` ULID once (T3.4.3 keys the R2 object off it), and fires the injected flush callback at `EVENT_BATCH_SIZE` events or `EVENT_BATCH_INTERVAL_MS` since batch open, whichever first — both from the worker env schema (T0.3.6), defaulting to 100 and 2000. Exposes `flushNow()` for shutdown and `size()` for the health endpoint. No database here: the callback seam is what keeps the timing logic unit-testable with fake timers.
 → **files** `apps/worker/src/batch/accumulator.ts` · `apps/worker/src/batch/accumulator.test.ts` · **verify** `pnpm test accumulator.test.ts` with fake timers asserts 100 events flush at the 100th with no timer elapsed, 99 events flush at exactly 2000 ms, events added during an in-flight flush land in the next batch and are not lost, and `batch_id` is stable across the batch's lifetime · **after** T3.1.3, T0.3.6
 
