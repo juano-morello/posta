@@ -709,3 +709,19 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 Recommend option 1 (redefine + record the gap explicitly) as the least-surprising path, consistent with this epic's existing "amend the prose when the code/architecture is right and the text is wrong" precedent — but this decision affects a genuine data-loss window's user-facing guarantee, not just test wording, so it should go to the user rather than be assumed.
 
 **Handed back to:** orchestrator escalating to user. No implementer thread to resume — nothing was built, nothing to hand back to; a fresh dispatch can implement whichever option is chosen once decided.
+
+---
+
+## T3.6.3 · `5c95d35` · 2026-07-28T12:29:09-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test replay-driver.test.ts` — 8/8 pass, unaffected by the docs-only change.
+
+**Decision executed (per user instruction, sixth orchestrator session):** amended `docs/plan/03-event-pipeline.md`'s T3.6.3 body and verify text — same precedent as T3.3.2 (`1ca1758`) and T3.6.2 (`a639db9`). Dropped the unsatisfiable "no `INSERT INTO events` string literal outside flush.ts" clause (that literal lives in 5 unrelated partition-boundary fixtures; the real insert is a Drizzle builder in `packages/core/src/db/events.ts`, never a raw string, so the grep could never pass regardless of implementation). Replaced with what the implementation actually guarantees: replay reuses the logged `dest_host` and never calls `enrich()`/`flushBatch`. Also corrected the body's "calls flushBatch" claim — the shipped code correctly reuses `toNewEventRow`/`insertEventsBatch` directly instead, which is what keeps replay from re-resolving destinations at replay time and silently rewriting history (the S3.6 anti-staleness constraint, `53ef776`).
+
+**Commit:** `5c95d35` — docs: amend T3.6.3's verify to the staleness guarantee it actually proves. Scoped to exactly the T3.6.3 entry (2 lines changed), `files`/`after` untouched.
+
+**Stamped against:** `e7990b1` — feat: replay feeds records through the live insert path (the original implementation commit; the docs amendment is a separate, later commit on top of it, matching precedent).
+
+**Findings surviving triage:** none.
+**Deviation from plan:** the plan-prose amendment itself, pre-authorized by explicit user decision.
+**Handed back to:** n/a — closed.
