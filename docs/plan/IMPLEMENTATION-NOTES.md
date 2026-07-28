@@ -587,3 +587,22 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none.
 **Deviation from plan:** none.
 **Handed back to:** n/a.
+
+---
+
+## general · `e0f719f` · 2026-07-28T10:30:02-03:00
+
+**Cross-cutting fix, no plan task ID — dispatched per explicit instruction to close it before S3.5's suite grows.**
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test events.consumer.test.ts malformed-job.test.ts dlq.service.test.ts` — 18/18 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Bug (previously documented under the T3.1.5 note):** `events.consumer.test.ts`'s first describe block runs 4 `it()`s against one shared Redis testcontainer. Two of them (the eventJobSchema-validation-failure test and the sink-failure-logging test) produce a real `EVENTS_DLQ_QUEUE` entry as a side effect but only obliterated `EVENTS_QUEUE` in their own cleanup, never the DLQ queue — leaving a stale `originalJobId` behind that a later test's freshly-auto-incremented `job.id` (reset to 1 by the very obliterate that skipped the DLQ) could collide with.
+
+**Fix:** both gapped tests now obliterate + close both queues, matching the fourth test's already-correct pattern. `malformed-job.test.ts` and `dlq.service.test.ts` were audited the same way (every `Queue(...)` construction cross-referenced against every `obliterate` call) and needed no changes — both already obliterate every queue they construct.
+
+**Evidence the fix is real (not cosmetic):** a disposable, uncommitted repro script against the real installed bullmq + local Redis reproduced the exact mechanism — obliterating only queue A after seeding a DLQ-shaped entry in queue B produced a false-positive id match on a fresh job; obliterating both queues did not. Suite also run 3x in a row post-fix with 18/18 every time.
+
+**Scope note:** a grep-only pass (not a full audit) suggests `coupled-writes.test.ts`, `poison-dlq.test.ts`, `throughput.bench.test.ts`, `sigterm-flush.test.ts`, and `apps/api/src/redirect/enqueue.test.ts` already pair their obliterate calls correctly. Not independently verified line-by-line — worth a look if S3.5 surfaces similar flakiness elsewhere.
+
+**Commit:** `e0f719f` — test: obliterate both EVENTS_QUEUE and EVENTS_DLQ_QUEUE in every consumer test's cleanup.
+**Handed back to:** n/a — no unresolved findings.
