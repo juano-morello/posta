@@ -189,8 +189,17 @@ export function parseReplayArgs(argv: readonly string[]): ReplayCliOptions {
 
   let batchSize: number | undefined;
   if (rawBatchSize !== undefined) {
+    // [review round 2, database-reviewer finding] `Number.parseInt`
+    // stops at the first non-digit rather than requiring the WHOLE
+    // string to be numeric — `Number.parseInt('500abc', 10)` is `500`,
+    // and `Number.isInteger(500)` is `true`, so `--batch-size 500abc`
+    // would otherwise sail through as a silently-guessed `500`. The
+    // full-string check below closes that gap before `parseInt` is ever
+    // trusted, matching this function's own "fail loudly, name the
+    // flag" discipline rather than silently accepting trailing garbage.
+    const isFullyNumeric = /^\d+$/.test(rawBatchSize);
     const parsed = Number.parseInt(rawBatchSize, 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
+    if (!isFullyNumeric || !Number.isInteger(parsed) || parsed <= 0) {
       throw new ReplayArgsError(`posta replay: --batch-size "${rawBatchSize}" must be a positive integer`);
     }
     if (parsed > MAX_BATCH_SIZE) {
@@ -407,26 +416,53 @@ export async function main(): Promise<void> {
       r2Bucket: env.R2_BUCKET_EVENTS,
     });
   } catch (error) {
+    /* v8 ignore next -- runReplayCli's own docstring guarantees it never
+     * throws: every failure mode it can hit (bad args, a real R2/
+     * Postgres error) is caught internally and reflected in its
+     * returned exitCode instead. This catch exists only as a defense
+     * against that contract being violated by a future change, not a
+     * path any real invocation can reach today. */
     runError = error;
   }
 
-  let closeError: unknown;
+  // [review round 2, silent-failure-hunter finding 1] r2Client.destroy()
+  // and dbClient.closeDb() are two INDEPENDENT resources — the previous
+  // shared try/catch let a destroy() throw skip closeDb() entirely,
+  // silently leaking the Postgres pool. Same discipline as migrate.ts's
+  // own main(): one try/catch PER resource, each into its own variable,
+  // so one failure can never prevent the other's cleanup from running.
+  let r2CloseError: unknown;
   try {
     r2Client.destroy();
+  } catch (error) {
+    r2CloseError = error;
+  }
+
+  let dbCloseError: unknown;
+  try {
     await dbClient.closeDb();
   } catch (error) {
-    closeError = error;
+    dbCloseError = error;
   }
 
   const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-  if (runError && closeError) {
-    throw new Error(
-      `posta replay: failed with "${describe(runError)}", then closing resources also failed with ` +
-        `"${describe(closeError)}".`,
-    );
+
+  // Fold every failure that actually happened into ONE thrown error when
+  // more than one occurred, never silently dropping any of the (up to
+  // three) independent failure sources above in favor of another. When
+  // exactly one occurred, it is thrown as-is (preserving its own type/
+  // stack) — matching this function's pre-fix single-failure behavior.
+  const failures: string[] = [];
+  if (runError) failures.push(`the replay itself failed with "${describe(runError)}"`);
+  if (r2CloseError) failures.push(`closing the R2 client failed with "${describe(r2CloseError)}"`);
+  if (dbCloseError) failures.push(`closing the db pool failed with "${describe(dbCloseError)}"`);
+
+  if (failures.length > 1) {
+    throw new Error(`posta replay: multiple failures — ${failures.join('; then, separately, ')}.`);
   }
   if (runError) throw runError;
-  if (closeError) throw closeError;
+  if (r2CloseError) throw r2CloseError;
+  if (dbCloseError) throw dbCloseError;
 
   process.exitCode = result?.exitCode ?? EXIT_RUNTIME_ERROR;
 }
@@ -440,7 +476,7 @@ export async function main(): Promise<void> {
 /* v8 ignore start */
 if (require.main === module) {
   main().catch((error: unknown) => {
-    console.error('posta replay: fatal error:', error instanceof Error ? error.message : error);
+    console.error('posta replay: fatal error:', error instanceof Error ? error.message : String(error));
     process.exitCode = EXIT_RUNTIME_ERROR;
   });
 }

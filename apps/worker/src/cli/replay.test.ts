@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DeleteObjectsCommand, type S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, S3Client } from '@aws-sdk/client-s3';
+import { Pool } from 'pg';
 import ts from 'typescript';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createR2Client,
   destHost,
@@ -18,6 +19,7 @@ import { startPgContainer, type PgContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { createFlushBatch, type FlushBatch } from '../batch/flush';
 import {
+  main,
   parseReplayArgs,
   runReplayCli,
   ReplayArgsError,
@@ -94,6 +96,20 @@ const FIXTURE_DAY_MS = Date.UTC(2110, 0, 1) + Math.floor(Math.random() * 2920) *
 const FIXTURE_HOUR_OFFSET = 9;
 const FIXTURE_OCCURRED_AT = new Date(FIXTURE_DAY_MS + FIXTURE_HOUR_OFFSET * ONE_HOUR_MS).toISOString();
 const DAY_INSTANT = new Date(FIXTURE_DAY_MS).toISOString();
+
+// A SEPARATE random window (2119-2126, deliberately non-overlapping with
+// FIXTURE_DAY_MS's own 2110-2118 range above) for the main()-entrypoint
+// describe block below — it boots its OWN Postgres testcontainer (main()
+// has no DI seam, so it must construct a real DbClient from env vars) but
+// writes into the SAME shared MinIO bucket as the rest of this file, so it
+// gets its own collision-avoidance window for the same reason the comment
+// above already explains.
+const MAIN_FIXTURE_DAY_MS = Date.UTC(2119, 0, 1) + Math.floor(Math.random() * 2920) * ONE_DAY_MS;
+const MAIN_FIXTURE_HOUR_OFFSET = 10;
+const MAIN_FIXTURE_OCCURRED_AT = new Date(
+  MAIN_FIXTURE_DAY_MS + MAIN_FIXTURE_HOUR_OFFSET * ONE_HOUR_MS,
+).toISOString();
+const MAIN_DAY_INSTANT = new Date(MAIN_FIXTURE_DAY_MS).toISOString();
 
 const DESKTOP_CHROME_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
@@ -293,6 +309,19 @@ describe('parseReplayArgs (T3.6.4) — fails loudly, naming the offending flag [
       '500',
     ]);
     expect(options.batchSize).toBe(500);
+  });
+
+  it('rejects --batch-size trailing garbage, naming the flag [review round 2, database-reviewer finding: Number.parseInt("500abc", 10) stops at the first non-digit and silently returns 500, contradicting this file\'s own "fail loudly, name the flag" discipline]', () => {
+    expect(() =>
+      parseReplayArgs([
+        '--from',
+        '2026-01-01T00:00:00Z',
+        '--to',
+        '2026-01-02T00:00:00Z',
+        '--batch-size',
+        '500abc',
+      ]),
+    ).toThrow(/--batch-size/);
   });
 
   it('parses a minimal valid invocation, omitting tenantId/batchSize when not given', () => {
@@ -596,6 +625,289 @@ describe('runReplayCli (T3.6.4) — real replay against Postgres + MinIO [INV-6]
     expect(warning).toMatch(/--tenant/);
     expect(warning).toMatch(/matched 0/);
   });
+});
+
+// ---------------------------------------------------------------------
+// main() — the real, env-driven CLI entrypoint. [review round 2,
+// database-reviewer finding] main() had ZERO test coverage despite its
+// own docstring's claim of "the same 'main() itself is fully covered
+// above' pattern migrate.test.ts already establishes" — measured at
+// 71.95% lines / 66.15% branches on this file before this block existed,
+// with lines 385-431 (essentially all of main()) never once executed.
+// This block follows migrate.test.ts's own `describe('main() — the real
+// pnpm migrate CLI entrypoint (coverage, S1.5 review)')` precedent
+// (packages/core/src/db/migrate.test.ts:90-131): real env vars, a real
+// Postgres, `main()` called directly, asserting on `process.exitCode`/
+// rejection — never a mock of `runReplayCli` itself (main() has no DI
+// seam for that; see the runError v8-ignore comment in replay.ts's own
+// main() for why).
+//
+// Boots its OWN Postgres testcontainer (`mainPg`), not the outer
+// describe's `pg` — same "a fresh container per describe" precedent
+// migrate.test.ts's own main() block already establishes, and the only
+// option here anyway: main() builds its own DbClient/S3Client internally
+// from process.env, with no seam to hand it an already-open handle. Still
+// reuses this file's own `startPgContainer`/`createR2Client` imports and
+// the SAME real MinIO instance (REAL_R2_CONFIG) as every other describe
+// in this file — MinIO is shared docker-compose infra, not a per-test
+// testcontainer, so there is nothing to boot fresh there.
+// ---------------------------------------------------------------------
+describe('main() — the real posta replay CLI entrypoint (coverage, review round 2 findings)', () => {
+  const ENV_KEYS = [
+    'DATABASE_URL_WORKER',
+    'DATABASE_URL',
+    'DB_POOL_MAX',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET_EVENTS',
+    'R2_ENDPOINT',
+  ] as const;
+  type MainEnvKey = (typeof ENV_KEYS)[number];
+
+  let mainPg: PgContainerHandle;
+  let mainR2Client: S3Client;
+  const mainR2CreatedKeys: string[] = [];
+  const originalEnv: Partial<Record<MainEnvKey, string | undefined>> = {};
+  let originalArgv: string[];
+  let originalExitCode: typeof process.exitCode;
+
+  beforeAll(async () => {
+    mainPg = await startPgContainer();
+    // startPgContainer() only applies drizzle-kit's own migrations — the
+    // partitioned `events` table (and its partitions) come from the
+    // hand-written SQL migrations, same as the outer describe's own `pg`
+    // setup above.
+    await runSqlMigrations(mainPg.pool, { migrationsDir: MIGRATIONS_DIR });
+    mainR2Client = createR2Client(REAL_R2_CONFIG);
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    if (mainR2CreatedKeys.length > 0) {
+      await mainR2Client.send(
+        new DeleteObjectsCommand({
+          Bucket: REAL_R2_CONFIG.bucket,
+          Delete: { Objects: mainR2CreatedKeys.map((key) => ({ Key: key })) },
+        }),
+      );
+    }
+    mainR2Client.destroy();
+    await mainPg.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
+    originalArgv = process.argv;
+    originalExitCode = process.exitCode;
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+  });
+
+  /** Points every env var main() reads at the real test Postgres/MinIO.
+   * `DATABASE_URL` (no `_WORKER` suffix) is deliberately left UNSET —
+   * `createDbClient`'s own default fallback reads exactly that var when
+   * no `connectionString` is passed, so if main() ever silently used the
+   * wrong one instead of `DATABASE_URL_WORKER`, that fallback would find
+   * nothing and throw `"DATABASE_URL must be set"` (packages/core/src/db/
+   * client.ts). A test below succeeding at all is therefore already part
+   * of the proof that `DATABASE_URL_WORKER` specifically is what drives
+   * the client, not a coincidence. */
+  function setRealEnv(overrides: Partial<Record<MainEnvKey, string>> = {}): void {
+    delete process.env.DATABASE_URL;
+    process.env.DATABASE_URL_WORKER = overrides.DATABASE_URL_WORKER ?? mainPg.url;
+    process.env.DB_POOL_MAX = overrides.DB_POOL_MAX ?? '5';
+    process.env.R2_ACCESS_KEY_ID = overrides.R2_ACCESS_KEY_ID ?? REAL_R2_CONFIG.accessKeyId;
+    process.env.R2_SECRET_ACCESS_KEY = overrides.R2_SECRET_ACCESS_KEY ?? REAL_R2_CONFIG.secretAccessKey;
+    process.env.R2_BUCKET_EVENTS = overrides.R2_BUCKET_EVENTS ?? REAL_R2_CONFIG.bucket;
+    process.env.R2_ENDPOINT = overrides.R2_ENDPOINT ?? REAL_R2_CONFIG.endpoint;
+  }
+
+  it('fails fast with exitCode 1 (never throwing) when required env vars are missing, before touching Postgres or R2', async () => {
+    delete process.env.DATABASE_URL_WORKER;
+    delete process.env.DATABASE_URL;
+    delete process.env.R2_ACCESS_KEY_ID;
+    delete process.env.R2_SECRET_ACCESS_KEY;
+    delete process.env.R2_BUCKET_EVENTS;
+    delete process.env.R2_ENDPOINT;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    process.exitCode = undefined;
+
+    await expect(main()).resolves.toBeUndefined();
+
+    expect(process.exitCode).toBe(1);
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('[a][b] happy path: replays a real seeded event through completion using DATABASE_URL_WORKER/R2_* env vars, exitCode 0 — the row only reappears because THOSE env vars drove main()\'s own DB/R2 clients', async () => {
+    const tenantId = newId();
+    const linkId = newId();
+    await mainPg.db.insert(user).values({
+      id: tenantId,
+      name: 'main() coverage tenant',
+      email: `${tenantId.toLowerCase()}@example.test`,
+    });
+    await mainPg.db.insert(links).values({
+      id: linkId,
+      tenantId,
+      slug: 'main-entrypoint',
+      destination: 'https://Example.test/main-entrypoint',
+    });
+
+    const flushBatch: FlushBatch = createFlushBatch({
+      db: mainPg.db,
+      r2Client: mainR2Client,
+      r2Bucket: REAL_R2_CONFIG.bucket,
+    });
+    const batchId = newId();
+    mainR2CreatedKeys.push(eventBatchKey(batchId, MAIN_FIXTURE_OCCURRED_AT));
+    await flushBatch(
+      [
+        buildCaptureEvent({
+          tenant_id: tenantId,
+          link_id: linkId,
+          slug: 'main-entrypoint',
+          occurred_at: MAIN_FIXTURE_OCCURRED_AT,
+          user_agent: DESKTOP_CHROME_UA,
+        }),
+      ],
+      batchId,
+    );
+
+    // flushBatch above already inserted this row into Postgres directly
+    // (the live path) — delete it so the row main() finds afterward can
+    // ONLY have come from main()'s OWN replay, never a leftover.
+    await mainPg.pool.query('DELETE FROM events WHERE tenant_id = $1', [tenantId]);
+
+    setRealEnv();
+    process.argv = [
+      'node',
+      'replay',
+      '--from',
+      MAIN_DAY_INSTANT,
+      '--to',
+      MAIN_DAY_INSTANT,
+      '--tenant',
+      tenantId,
+    ];
+    process.exitCode = undefined;
+
+    await expect(main()).resolves.toBeUndefined();
+    expect(process.exitCode).toBe(0);
+
+    const rows = await mainPg.pool.query('SELECT event_id FROM events WHERE tenant_id = $1', [tenantId]);
+    expect(rows.rows).toHaveLength(1);
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('[b] R2_BUCKET_EVENTS genuinely drives the R2 client — a nonexistent bucket surfaces as a real runtime failure (exitCode 2), never silently ignored', async () => {
+    setRealEnv({ R2_BUCKET_EVENTS: `posta-events-does-not-exist-${newId().toLowerCase()}` });
+    process.argv = [
+      'node',
+      'replay',
+      '--from',
+      MAIN_DAY_INSTANT,
+      '--to',
+      MAIN_DAY_INSTANT,
+      '--dry-run',
+    ];
+    process.exitCode = undefined;
+
+    await expect(main()).resolves.toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('[Finding 1, silent-failure-hunter] r2Client.destroy() throwing does NOT skip dbClient.closeDb() — the two resource cleanups are independent', async () => {
+    setRealEnv();
+    process.argv = [
+      'node',
+      'replay',
+      '--from',
+      MAIN_DAY_INSTANT,
+      '--to',
+      MAIN_DAY_INSTANT,
+      '--dry-run',
+    ];
+    process.exitCode = undefined;
+
+    // main() constructs its own r2Client/dbClient internally — no DI
+    // seam — so a scoped prototype spy is the only realistic way to
+    // force ONE resource's own close call to fail without fighting the
+    // real AWS SDK or pg driver. Restored by this describe's own
+    // `afterEach` (`vi.restoreAllMocks()`).
+    const destroySpy = vi.spyOn(S3Client.prototype, 'destroy').mockImplementation(() => {
+      throw new Error('forced r2Client.destroy() failure for Finding 1 coverage');
+    });
+    const poolEndSpy = vi.spyOn(Pool.prototype, 'end');
+
+    await expect(main()).rejects.toThrow(/forced r2Client\.destroy\(\) failure/);
+
+    expect(destroySpy).toHaveBeenCalled();
+    // The pre-fix bug: a shared try/catch meant destroy() throwing
+    // aborted BEFORE `await dbClient.closeDb()` (-> `pool.end()`) ever
+    // ran, leaking the Postgres pool silently. This assertion is the
+    // one that would have failed against that code.
+    expect(poolEndSpy).toHaveBeenCalled();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('[Finding 1] dbClient.closeDb() throwing does NOT prevent r2Client.destroy() from having already run, and is still surfaced (never silently dropped)', async () => {
+    setRealEnv();
+    process.argv = [
+      'node',
+      'replay',
+      '--from',
+      MAIN_DAY_INSTANT,
+      '--to',
+      MAIN_DAY_INSTANT,
+      '--dry-run',
+    ];
+    process.exitCode = undefined;
+
+    const destroySpy = vi.spyOn(S3Client.prototype, 'destroy');
+    const poolEndSpy = vi
+      .spyOn(Pool.prototype, 'end')
+      .mockRejectedValue(new Error('forced dbClient.closeDb() failure for Finding 1 coverage'));
+
+    await expect(main()).rejects.toThrow(/forced dbClient\.closeDb\(\) failure/);
+
+    expect(destroySpy).toHaveBeenCalled();
+    expect(poolEndSpy).toHaveBeenCalled();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('[Finding 1] BOTH r2Client.destroy() and dbClient.closeDb() failing in the same run combines both messages, never silently dropping either', async () => {
+    setRealEnv();
+    process.argv = [
+      'node',
+      'replay',
+      '--from',
+      MAIN_DAY_INSTANT,
+      '--to',
+      MAIN_DAY_INSTANT,
+      '--dry-run',
+    ];
+    process.exitCode = undefined;
+
+    vi.spyOn(S3Client.prototype, 'destroy').mockImplementation(() => {
+      throw new Error('r2 destroy boom');
+    });
+    vi.spyOn(Pool.prototype, 'end').mockRejectedValue(new Error('db close boom'));
+
+    let caught: unknown;
+    try {
+      await main();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/r2 destroy boom/);
+    expect((caught as Error).message).toMatch(/db close boom/);
+  }, CONTAINER_TEST_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------
