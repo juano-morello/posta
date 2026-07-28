@@ -667,3 +667,20 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none blocking this task's own correctness.
 **Deviation from plan:** file list expanded to include `pipeline-harness.ts` (additive `redeliver()` method) — necessary, the harness's `push()` always minted fresh event_ids and had no way to re-enqueue identical events before this.
 **Handed back to:** n/a.
+
+---
+
+## general · `c79d74b` · 2026-07-28T11:29:19-03:00
+
+**Cross-cutting fix-forward to T3.5.1, no plan task ID.** Surfaced by T3.5.3's own regression sweep and independently reproduced by the orchestrator (`pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts` crashed reliably with `ENOENT: no such file or directory, mkdir '.../apps/worker/dist/.pipeline-harness-build.lock'`).
+
+**Root cause:** `pipeline-harness-process.ts`'s `buildWorkerExclusively()` cross-process build mutex lived inside `apps/worker/dist/`, which `nest-cli.json`'s `deleteOutDir: true` wipes and recreates on every build. A second process polling for the lock could catch the first mid-wipe and see `ENOENT` instead of the tolerated `EEXIST`, crashing instead of retrying.
+
+**Fix — notably better than the originally-suggested patch:** the dispatched agent found that merely tolerating ENOENT and recreating the parent directory inline would have opened a WORSE, silent bug — a waiting process's next retry could fabricate a fresh lock directory and believe it holds exclusivity while the original build is still running, turning a loud crash into a silent double-build. Fixed at the root instead: the lock now lives at `apps/worker/.pipeline-harness-build.lock`, outside `dist/` entirely, a path `nest build` never touches — structurally eliminating the ENOENT rather than tolerating it. ENOENT tolerance was kept in the retry loop anyway as defense-in-depth, extracted into an independently-testable `acquireBuildLock()`.
+
+**Proved two ways:** a mocked-`fs` unit test (`pipeline-harness-process.test.ts`) confirmed RED against the pre-fix code with the exact real error message, then GREEN after; plus the original repro command run 3x post-fix with zero ENOENT crashes.
+
+**Verify passed (independently re-observed):** `pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts e2e-duplicate-delivery.test.ts pipeline-harness-process.test.ts` — 17/17 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Commit:** `c79d74b` — fix: tolerate a transient ENOENT in the pipeline harness's build lock.
+**Handed back to:** n/a — no unresolved findings.
