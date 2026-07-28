@@ -192,13 +192,54 @@ export const consoleErrorLogger: FlushBatchLogger = {
   },
 };
 
+/** [T3.2.8] Postgres `text` columns reject a value containing a literal
+ * NUL byte (U+0000) outright — `error: invalid byte sequence for encoding
+ * "UTF8": 0x00` (SQLSTATE 22021), confirmed against a real Postgres
+ * instance while building hostile-ua.test.ts. Because the INSERT below is
+ * ONE multi-row statement for the WHOLE flush (this file's own header —
+ * "never chunked, never per-row"), a NUL byte hiding in even ONE row's
+ * raw header value rejects the ENTIRE statement, taking down all 100 rows
+ * in the batch, not just the poisoned one — precisely the "stalled
+ * pipeline" failure mode hostile-ua.test.ts exists to catch.
+ *
+ * In real production traffic this specific byte never reaches here at
+ * all: Node's own HTTP parser rejects a NUL byte in a header value with
+ * 400 before app code ever runs (see docs/plan/02-redirect-hot-path.md's
+ * own note on the visitor-hash NUL delimiter). But `toNewEventRow` has no
+ * way to assume every `CaptureEvent` it is ever handed arrived via that
+ * HTTP path — a directly-constructed event (hostile-ua.test.ts's own
+ * harness, or T3.6.3's future R2 replay tooling) is not covered by that
+ * upstream guarantee, so this function defends at its own boundary
+ * instead of relying on a layer it does not control.
+ *
+ * Nulls the WHOLE field rather than stripping just the offending
+ * character(s) out of the middle of the string — the same "cannot
+ * represent it cleanly, so null it, never invent a mangled substring"
+ * discipline ua.ts's own catch-and-null-everything already follows for
+ * unparseable UAs. Nothing invariant 7 promises is lost: R2 (the true
+ * source of truth) already received the untouched raw value via
+ * `loggedEvents`/`serializeBatch` above, entirely independent of this
+ * function — only this rebuildable Postgres projection drops what it
+ * structurally cannot hold. */
+function sanitizeForPostgresText(value: string | null): string | null {
+  return value !== null && value.includes('\u0000') ? null : value;
+}
+
 /** Maps a `LoggedEvent` (the merged, snake_case `CaptureEvent &
  * EnrichmentResult` shape) onto `NewEvent` (schema/events.ts's
  * camelCase Drizzle insert shape) — one property per `events` column,
  * by name, deliberately not a spread: an object literal here gets a
  * compile-time excess-property error if it ever names an unexpected
  * key, the same discipline ndjson.ts's toLogLine() follows for the
- * identical reason. */
+ * identical reason.
+ *
+ * [T3.2.8] Every raw, header-derived text field (never the enrichment
+ * columns below them, which enrich() already derives fresh from parsed
+ * facts rather than copying attacker-controlled input verbatim) is passed
+ * through `sanitizeForPostgresText` — see that function's own docstring
+ * for why this cannot be narrowed to `userAgent` alone: the Postgres
+ * constraint it works around applies uniformly to every `text` column,
+ * not specifically to User-Agent. */
 function toNewEventRow(logged: LoggedEvent): NewEvent {
   return {
     eventId: logged.event_id,
@@ -206,24 +247,24 @@ function toNewEventRow(logged: LoggedEvent): NewEvent {
     tenantId: logged.tenant_id,
     linkId: logged.link_id,
     slug: logged.slug,
-    visitorHash: logged.visitor_hash,
-    httpMethod: logged.http_method,
-    userAgent: logged.user_agent,
-    referer: logged.referer,
-    accept: logged.accept,
-    acceptLanguage: logged.accept_language,
-    secFetchSite: logged.sec_fetch_site,
-    secFetchMode: logged.sec_fetch_mode,
-    secFetchDest: logged.sec_fetch_dest,
-    secFetchUser: logged.sec_fetch_user,
-    secPurpose: logged.sec_purpose,
-    secChUa: logged.sec_ch_ua,
-    secChUaMobile: logged.sec_ch_ua_mobile,
-    secChUaPlatform: logged.sec_ch_ua_platform,
-    purpose: logged.purpose,
-    xPurpose: logged.x_purpose,
-    xMoz: logged.x_moz,
-    country: logged.country,
+    visitorHash: sanitizeForPostgresText(logged.visitor_hash),
+    httpMethod: sanitizeForPostgresText(logged.http_method),
+    userAgent: sanitizeForPostgresText(logged.user_agent),
+    referer: sanitizeForPostgresText(logged.referer),
+    accept: sanitizeForPostgresText(logged.accept),
+    acceptLanguage: sanitizeForPostgresText(logged.accept_language),
+    secFetchSite: sanitizeForPostgresText(logged.sec_fetch_site),
+    secFetchMode: sanitizeForPostgresText(logged.sec_fetch_mode),
+    secFetchDest: sanitizeForPostgresText(logged.sec_fetch_dest),
+    secFetchUser: sanitizeForPostgresText(logged.sec_fetch_user),
+    secPurpose: sanitizeForPostgresText(logged.sec_purpose),
+    secChUa: sanitizeForPostgresText(logged.sec_ch_ua),
+    secChUaMobile: sanitizeForPostgresText(logged.sec_ch_ua_mobile),
+    secChUaPlatform: sanitizeForPostgresText(logged.sec_ch_ua_platform),
+    purpose: sanitizeForPostgresText(logged.purpose),
+    xPurpose: sanitizeForPostgresText(logged.x_purpose),
+    xMoz: sanitizeForPostgresText(logged.x_moz),
+    country: sanitizeForPostgresText(logged.country),
     asn: logged.asn,
     browser: logged.browser,
     browserVersion: logged.browser_version,
