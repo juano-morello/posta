@@ -187,6 +187,19 @@ export interface PipelineHarness {
    * this codebase uses. Returns the exact events enqueued, so a caller
    * can assert against their own `event_id`s afterward. */
   push(n: number): Promise<readonly CaptureEvent[]>;
+  /** T3.5.3 [E3, S3.5][INV-8] — re-enqueues the EXACT `CaptureEvent`s
+   * given (byte-identical `event_id`/`occurred_at`/every other field — no
+   * new event is minted, unlike `push()`), simulating BullMQ's own
+   * at-least-once redelivery of an already-processed job. The intended
+   * caller is a test holding the array `push()` already returned,
+   * resubmitting some or all of it a second time. Sets the SAME internal
+   * "last enqueue started at" marker `push()` sets, so a subsequent
+   * `drain()` waits for a flush covering THESE re-delivered jobs
+   * specifically — including the case where the earlier `push()` already
+   * drained and its own batch flushed and closed, which is what makes the
+   * redelivered events land in a genuinely NEW batch rather than being
+   * folded into one already flushed. */
+  redeliver(events: readonly CaptureEvent[]): Promise<void>;
   /** Polls `GET /health` until every event this harness has ever pushed
    * has genuinely landed (see this file's own header for the three-part
    * signal this checks). Throws, naming the last observed health body,
@@ -308,6 +321,19 @@ export async function startPipelineHarness(options: PipelineHarnessOptions = {})
   // `lastFlushAt` as already satisfying it.
   let lastPushStartedAtMs = Date.now();
 
+  // Shared by push() and redeliver(): stamps the "last enqueue started at"
+  // marker drain() reads, then enqueues every event onto EVENTS_QUEUE.
+  // 'capture' — CAPTURE_JOB_NAME's own literal value
+  // (apps/api/src/redirect/enqueue.ts) can't be imported here: apps/worker
+  // never imports apps/api (CLAUDE.md's one-way dependency arrows), so
+  // this literal is duplicated intentionally, the SAME way
+  // sigterm-flush.test.ts's own `eventsQueue.add('capture', event)`
+  // already does.
+  async function enqueue(events: readonly CaptureEvent[]): Promise<void> {
+    lastPushStartedAtMs = Date.now();
+    await Promise.all(events.map((event) => queue.add('capture', event)));
+  }
+
   async function push(n: number): Promise<readonly CaptureEvent[]> {
     const corpus = loadCorpus();
     const events: CaptureEvent[] = Array.from({ length: n }, (_unused, index) =>
@@ -319,16 +345,13 @@ export async function startPipelineHarness(options: PipelineHarnessOptions = {})
       }),
     );
 
-    lastPushStartedAtMs = Date.now();
-    // 'capture' — CAPTURE_JOB_NAME's own literal value
-    // (apps/api/src/redirect/enqueue.ts) can't be imported here: apps/worker
-    // never imports apps/api (CLAUDE.md's one-way dependency arrows), so
-    // this literal is duplicated intentionally, the SAME way
-    // sigterm-flush.test.ts's own `eventsQueue.add('capture', event)`
-    // already does.
-    await Promise.all(events.map((event) => queue.add('capture', event)));
+    await enqueue(events);
 
     return events;
+  }
+
+  async function redeliver(events: readonly CaptureEvent[]): Promise<void> {
+    await enqueue(events);
   }
 
   async function drain(): Promise<void> {
@@ -376,6 +399,7 @@ export async function startPipelineHarness(options: PipelineHarnessOptions = {})
     occurredAt,
     port,
     push,
+    redeliver,
     drain,
     stop,
   };
