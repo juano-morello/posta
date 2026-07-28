@@ -104,7 +104,7 @@ A committed fixture of ~40 real `{ user_agent, referer, destination }` triples w
 Scans `packages/core/src/enrichment/**` and `apps/worker/src/**` for `is_bot`, `isBot`, `is_human`, `isHuman`, `classification`, `verdict`, `humano`, `unfurler` and `prefetch` used as an assigned value, and fails naming the file and line. T1.2.5 proves there is nowhere to *store* a verdict; this proves nobody computed one on the way there.
 → **files** `apps/worker/src/no-verdict.test.ts` · **verify** `pnpm test no-verdict.test.ts` passes on the current tree and fails with file:line against an inline fixture containing `const isBot = ua.includes('bot')` · **after** T3.2.6
 
-#### T3.2.8 · `test: garbage UA yields nulls and the batch still commits`
+#### T3.2.8 · `test: garbage UA yields nulls and the batch still commits` ✅ done (`87f7bdf`)
 The failure mode this guards is not a wrong field, it is a stalled pipeline: one exception thrown during enrichment takes down the whole batch and, with retries, the whole queue. Pushes a batch of 100 in which 5 carry hostile UA strings (binary, 64 KB, null bytes, lone surrogates) and asserts all 100 rows commit with nulls on the bad five.
 → **files** `apps/worker/src/batch/hostile-ua.test.ts` · **verify** `pnpm test hostile-ua.test.ts` asserts 100 rows in Postgres, `browser IS NULL` for exactly the 5 hostile events, and zero DLQ entries · **after** T3.2.7, T3.3.2
 

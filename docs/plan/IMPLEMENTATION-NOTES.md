@@ -523,3 +523,13 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none.
 **Deviation from plan:** none.
 **Handed back to:** n/a.
+
+---
+
+## T3.2.8 · `87f7bdf` · 2026-07-27T23:16:16-03:00
+
+**Outcome:** done · verify passed (re-run independently): pnpm test hostile-ua.test.ts - 4/4 pass; pnpm typecheck:tests clean; pnpm --filter @posta/worker run build clean; wide regression sweep (flush.test.ts coupled-writes.test.ts r2-put.test.ts idempotency.test.ts poison-dlq.test.ts reconciliation.test.ts) - 43/43 pass, zero regression from the shared flush.ts change. Confirmed the committed flush.ts contains zero raw NUL bytes (implementer flagged and self-caught an in-flight Edit-tool mistranscription of an escape sequence into a literal NUL byte before committing - verified independently via byte count on the committed blob).
+**RED phase finding (real gap, correctly scoped):** enrich()/parseUserAgent already degrade gracefully on garbage UA input (no gap there) - the actual gap was one layer downstream: Postgres text columns reject any value containing a literal NUL byte (SQLSTATE 22021), and since the flush INSERT is one multi-row statement per batch, a NUL byte in even one row's raw header field rejected all 100 rows. Fixed via a new sanitizeForPostgresText() applied to every raw header-derived text field in toNewEventRow (not just user_agent) - nulls the field, never mangles a substring; R2 keeps the untouched raw value so invariant 7 is unaffected.
+**Findings surviving triage:** none blocking. Note for future reference: schema-boundary check confirmed CaptureEventSchema's user_agent has no length/charset restriction, so this defense genuinely matters (not merely defense-in-depth against an unreachable input) for any direct-construction path (this test's harness, future R2 replay) that bypasses the HTTP layer's own NUL-byte rejection.
+**Deviation from plan:** file list expanded to include flush.ts, necessary since the RED-phase gap was found one layer downstream of where the task text pointed ("during enrichment") - documented and justified above.
+**Handed back to:** n/a.
