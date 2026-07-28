@@ -759,3 +759,20 @@ Recommend option 1 (redefine + record the gap explicitly) as the least-surprisin
 **Deviation from plan:** none beyond what was already pre-approved (test: task carries its required production fix, same precedent as T3.2.8) and the commit-history squash described above (mechanical, not a scope change).
 
 **Handed back to:** n/a — no CRITICAL/HIGH findings, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.5.5 · `f8aed29` · 2026-07-28T14:14:58-03:00
+
+**Outcome:** done · verify passed: `pnpm test e2e-enrichment.test.ts` (85/85 passed) · `pnpm typecheck:tests` (exit 0) — both run fresh by the orchestrator, not assumed.
+
+This task's review fan-out (code-reviewer, silent-failure-hunter, typescript-reviewer, database-reviewer) died in a network outage on the previous orchestrator session. Re-ran the full fan-out from scratch against the already-committed f8aed29.
+
+**Findings surviving triage**
+- MEDIUM (code-reviewer) / re-flagged HIGH-but-acknowledged-pre-existing (silent-failure-hunter) · apps/worker/src/test/e2e-enrichment.test.ts:283 — `.catch(() => undefined)` on the R2 DeleteObjectsCommand teardown carries no comment. Verified independently: byte-identical, uncommented, in three already-merged sibling files on this branch (e2e-duplicate-delivery.test.ts:223, e2e-exactly-once.test.ts:185, pipeline-harness.test.ts:93). T3.5.4's own stamp note (2920401) hit the analogous `queue.obliterate().catch(() => undefined)` pattern and explicitly declined to act, citing established precedent. Followed the same precedent here for consistency — not acted on. A repo-wide comment sweep across all four instances would be in scope for a future cleanup task, not this one.
+- LOW (database-reviewer) · apps/worker/src/test/e2e-enrichment.test.ts:193-197 — `fetchPgRows`'s SELECT has no `occurred_at` bound, so it can't leverage partition pruning. Explicitly judged inconsequential for this test (fresh empty testcontainer, one partition, ~44 rows) — flagged only so this query isn't later copy-pasted as a template for a real dashboard/analytics query. Not acted on.
+- Dropped as over-report: silent-failure-hunter's two MEDIUM suggestions to wrap `streamEventLog`/`ListObjectsV2Command` calls (lines 210, 227) with error-context rethrows — both already fail loudly (propagate to `beforeAll`, no silent swallowing), just without extra annotation; no sibling e2e file in this epic follows that pattern either.
+- Dropped as cosmetic: typescript-reviewer's MEDIUM on the `as unknown as Record<string, unknown>` double-cast pattern (lines 315/328/348) — safe, documented, consistent.
+
+**Deviation from plan:** none.
+**Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.

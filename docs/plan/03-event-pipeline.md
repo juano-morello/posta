@@ -226,7 +226,7 @@ Re-enqueues 500 of the 10k jobs with their original `event_id` values after the 
 SIGKILL — not SIGTERM, which T3.1.8 already covers — while a partial batch is buffered, then restart and drain. Asserts BullMQ redelivers the un-acked jobs and the final row count equals the distinct `event_id` count. This is the case where idempotency stops being theoretical: the buffered events *will* arrive twice.
 → **files** `apps/worker/src/test/e2e-kill-recovery.test.ts` · **verify** `pnpm test e2e-kill-recovery.test.ts` asserts no loss and no duplication after SIGKILL at three different points in the batch window · **after** T3.5.3
 
-#### T3.5.5 · `test: enrichment fields correct end-to-end across the UA fixture corpus`
+#### T3.5.5 · `test: enrichment fields correct end-to-end across the UA fixture corpus` ✅ done (`f8aed29`)
 Pushes the whole T3.2.6 corpus through the live pipeline and asserts each row's enrichment columns match the fixture's expected values, and that the NDJSON line for the same event agrees. The unit test proves the function; this proves nothing between the consumer and the two writers drops or reorders a field.
 → **files** `apps/worker/src/test/e2e-enrichment.test.ts` · **verify** `pnpm test e2e-enrichment.test.ts` asserts every fixture's expected enrichment in both stores, and that no row carries a non-null value in a column the fixture expects null · **after** T3.5.4
 
