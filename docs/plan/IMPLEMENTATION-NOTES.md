@@ -501,3 +501,14 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** one real, pre-existing gap outside this task's scope — `dlq.service.ts`'s `extractSqlState` duck-types any error's string `.code`, not specifically a Postgres SQLSTATE; a transport-level `ECONNREFUSED` (from the genuinely stopped MinIO) lands in `sqlstate` despite that file's own header claiming `'r2-put-failed'` entries are "always null" there. Implementer adjusted its own test assertion to match observed reality rather than asserting something false, and documented it inline. Not actioned as a fix — belongs to whoever next touches `dlq.service.ts`'s header/`extractSqlState` claim.
 **Deviation from plan:** file list expanded to include `app.module.ts` for the DLQ sink DI wiring, necessary for the one production call site — same pattern as T3.4.4/T3.1.7.
 **Handed back to:** n/a — no unresolved findings blocking this task itself (the extractSqlState note above is a forward-pointer, not a defect in this task's own work).
+
+---
+
+## T3.4.7 · `e3ce531` · 2026-07-27T23:13:24-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test reconciliation.test.ts` — 14/14 pass; `pnpm typecheck:tests` clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, and the two direct dependency files (flush.test.ts, coupled-writes.test.ts) — 18/18 pass, zero regression.
+**RED phase:** temporarily inserted a synthetic Postgres-only row (raw SQL, no R2 counterpart) against the full 10k-event run, observed genuine assertion failures (10001 vs 10000, real onlyInFirst/onlyInSecond diffs) proving the bidirectional symmetric-difference check catches what a one-directional check would miss. Reverted before commit.
+**Judgment call:** drove the 10k events through `flushBatch()` directly in 500-event chunks, not through BatchAccumulator/BullMQ — justified by the plan's own text at a later S3.5 task explicitly describing itself as the "whole pipe including consumer and queue" test, implying T3.4.7 is the flush-path-only one. R2 test-data isolated to a distinct 2050-2057 fixture window plus tenant_id filtering, defensive against sibling-agent contamination in the shared MinIO bucket.
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.

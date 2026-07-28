@@ -190,7 +190,7 @@ Exponential backoff over 5 attempts on retryable S3 errors (5xx, timeouts, throt
 Flush order becomes R2 PUT **then** the Postgres insert. If the PUT exhausts its retries, the transaction is never opened and the batch goes to the DLQ whole. The reverse order is the one that quietly kills invariant 7: Postgres would hold rows the log has never seen, and the "rebuildable projection" would rebuild into something smaller than what it replaced. The surviving asymmetry — R2 ahead of Postgres — is the recoverable one, because replay closes it.
 → **files** `apps/worker/src/batch/flush.ts` · `apps/worker/src/batch/coupled-writes.test.ts` · **verify** `pnpm test coupled-writes.test.ts` stops the MinIO container mid-run and asserts zero new rows in `events`, one DLQ entry, and that after MinIO returns the DLQ entry replays into both stores · **after** T3.4.5
 
-#### T3.4.7 · `test: both stores agree after 10k events` [INV-7]
+#### T3.4.7 · `test: both stores agree after 10k events` [INV-7] ✅ done (`e3ce531`)
 Pushes 10k events, drains, lists every NDJSON object in the covered hour prefixes, and compares the `event_id` set against Postgres **in both directions** — a one-directional check passes while Postgres silently holds extra rows, which is exactly the divergence T3.4.6 exists to prevent.
 → **files** `apps/worker/src/batch/reconciliation.test.ts` · **verify** `pnpm test reconciliation.test.ts` asserts the two sets are equal, that the symmetric difference is empty in both directions, and that each event's enrichment fields match between the NDJSON line and its row · **after** T3.4.6
 
