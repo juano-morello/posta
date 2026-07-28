@@ -533,3 +533,19 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none blocking. Note for future reference: schema-boundary check confirmed CaptureEventSchema's user_agent has no length/charset restriction, so this defense genuinely matters (not merely defense-in-depth against an unreachable input) for any direct-construction path (this test's harness, future R2 replay) that bypasses the HTTP layer's own NUL-byte rejection.
 **Deviation from plan:** file list expanded to include flush.ts, necessary since the RED-phase gap was found one layer downstream of where the task text pointed ("during enrichment") - documented and justified above.
 **Handed back to:** n/a.
+
+---
+
+## T3.6.2 · `a639db9` · 2026-07-28T09:49:34-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test stream-read.test.ts` — 2/2 pass, real RSS-growth (2.77 MB) and heapUsed-growth (0.14 MB) both well under the amended thresholds; `pnpm typecheck:tests` clean; `pnpm --filter @posta/core run build` clean.
+
+**User decision, executed:** the growth-based verify reframing recommended by the previous orchestrator was reviewed by the user, who chose to amend the plan (not build the child-process/`--max-old-space-size` isolation route). Landed as a standalone `docs:` commit `a639db9` (`docs: amend T3.6.2's verify to a growth-based memory metric`), separate from the implementation commit, mirroring how T3.3.2's amendment (`1ca1758`) was handled. The plan's body prose was also extended in that commit to state why growth beats an absolute ceiling here: absolute RSS has a fixed ~90-160 MB floor from Node/V8 + `@aws-sdk/client-s3` middleware overhead unrelated to whether the reader itself streams or buffers, so it cannot discriminate a correct streaming implementation from an incorrect buffering one; growth from a forced-GC baseline can and does — ~14 MB heapUsed growth for the real reader vs ~38 MB for a deliberately-buffering rewrite over the same 50,000 records.
+
+**Stamped against:** `e8af718` (the implementation commit — unchanged from when it landed; only the plan prose changed, in a separate commit).
+
+**Findings surviving triage:** none new — this note only closes out the hold recorded against this task previously.
+
+**Deviation from plan:** the plan's own verify text, amended by explicit user decision as described above — not a unilateral redefinition.
+
+**Handed back to:** n/a — resolved.
