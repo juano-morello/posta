@@ -85,6 +85,27 @@ export interface ReplayCliOptions {
   readonly batchSize?: number;
 }
 
+// [review round 1, database-reviewer finding] MAX_BATCH_SIZE bounds
+// `--batch-size` the same way `apps/worker/src/env.ts`'s `EVENT_BATCH_SIZE`
+// already bounds the live path's own batch trigger (`.max(500)`, that
+// schema's own comment): each replayed row binds all 31 `events` columns
+// (schema/events.ts), and `insertEventsBatch` (packages/core/src/db/
+// events.ts) issues one multi-row INSERT per batch, so Postgres's own
+// ~65,535-parameter-per-statement ceiling divided by 31 is ~2,114 — the
+// hard, driver-enforced limit. 500 is used here instead of that raw
+// ceiling, matching `EVENT_BATCH_SIZE`'s own choice and
+// `DEFAULT_REPLAY_BATCH_SIZE`'s own header (replay-driver.ts: "so replay
+// never issues a larger single INSERT than the live path ever does") —
+// an operator overriding `--batch-size` should never be able to make a
+// replay less safe, parameter-wise, than the live flush path already is.
+// Without this bound, `--batch-size 3000` (a plausible "meant 300" typo)
+// would sail past `parseReplayArgs` cleanly and only fail once a batch
+// actually filled, as an opaque Postgres "too many parameters" error —
+// exactly the class of failure this file's own docstring elsewhere
+// promises never happens ("the message always names which flag, so an
+// operator never has to guess").
+const MAX_BATCH_SIZE = 500;
+
 /** Parses `--from`/`--to` into a `Date`, throwing a {@link ReplayArgsError}
  * that names `flag` (never a bare "invalid date") when the flag is
  * missing or its value does not parse as an ISO-8601 instant — the same
@@ -172,6 +193,12 @@ export function parseReplayArgs(argv: readonly string[]): ReplayCliOptions {
     if (!Number.isInteger(parsed) || parsed <= 0) {
       throw new ReplayArgsError(`posta replay: --batch-size "${rawBatchSize}" must be a positive integer`);
     }
+    if (parsed > MAX_BATCH_SIZE) {
+      throw new ReplayArgsError(
+        `posta replay: --batch-size "${rawBatchSize}" exceeds the maximum of ${MAX_BATCH_SIZE} ` +
+          '(matches EVENT_BATCH_SIZE\'s own production ceiling — apps/worker/src/env.ts)',
+      );
+    }
     batchSize = parsed;
   }
 
@@ -211,6 +238,39 @@ const EXIT_OK = 0;
 const EXIT_ARGS_ERROR = 1;
 const EXIT_RUNTIME_ERROR = 2;
 
+/** [review round 1, silent-failure-hunter finding] A `--tenant` that
+ * matches zero of the records genuinely present in `[from, to]` is not an
+ * error (exit stays 0 — the range and the tool both worked correctly;
+ * the tenant simply has nothing there) and not necessarily a mistake
+ * (an operator sizing a job ahead of time, per `--dry-run`'s own stated
+ * purpose, might reasonably probe a tenant that turns out to be empty
+ * for that window). But a silent `0 batches, exit 0` gives an operator
+ * NO way to tell "this tenant genuinely has nothing here" apart from
+ * "I fat-fingered the tenant id" — this warning exists only to close
+ * that gap, never to change the exit code or refuse the (correct, if
+ * empty) result. Fires identically for `--dry-run` (matchedCount) and a
+ * real replay (batchesWritten) — `replayEventLog`'s own contract flushes
+ * whatever matched at least once at the end of the stream (see
+ * replay-driver.ts's own `flushBuffer` call after its loop), so
+ * `batchesWritten === 0` with `recordsRead > 0` can ONLY mean "the
+ * filter matched nothing," never "matched something too small to flush."
+ * Silent when `tenantId` is unset (no filter to have matched nothing) or
+ * `recordsRead === 0` (an empty range is already a distinct, visible
+ * signal via the success line's own "read 0 record(s)"). */
+function warnIfTenantMatchedNothing(
+  stderr: (line: string) => void,
+  tenantId: string | undefined,
+  recordsRead: number,
+  matchedCount: number,
+): void {
+  if (tenantId === undefined || recordsRead === 0 || matchedCount > 0) return;
+
+  stderr(
+    `posta replay: --tenant "${tenantId}" matched 0 of ${recordsRead} record(s) read in range — ` +
+      'not an error, but double-check the tenant id if that is unexpected.',
+  );
+}
+
 /**
  * Runs one `posta replay` invocation end to end: parse argv, compute the
  * `[from, to]` prefix range (`eventPrefixes`, T3.6.1), then either count
@@ -245,9 +305,12 @@ export async function runReplayCli(
 
     if (options.dryRun) {
       let matchedCount = 0;
+      let totalRead = 0;
       for await (const record of streamEventLog(deps.r2Client, deps.r2Bucket, prefixes)) {
+        totalRead += 1;
         if (matchesTenant(record)) matchedCount += 1;
       }
+      warnIfTenantMatchedNothing(stderr, tenantId, totalRead, matchedCount);
       stdout(
         `posta replay --dry-run: ${matchedCount} record(s) would be replayed` +
           (tenantId !== undefined ? ` for tenant "${tenantId}"` : '') +
@@ -265,6 +328,7 @@ export async function runReplayCli(
       ...(options.batchSize !== undefined ? { batchSize: options.batchSize } : {}),
     });
 
+    warnIfTenantMatchedNothing(stderr, tenantId, summary.recordsRead, summary.batchesWritten);
     stdout(
       `posta replay: read ${summary.recordsRead} record(s), wrote ${summary.batchesWritten} batch(es)` +
         (tenantId !== undefined ? ` (filtered to tenant "${tenantId}")` : ''),

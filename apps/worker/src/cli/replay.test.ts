@@ -259,6 +259,42 @@ describe('parseReplayArgs (T3.6.4) — fails loudly, naming the offending flag [
     ).toThrow(/--batch-size/);
   });
 
+  it('rejects a --batch-size above the 500-row ceiling, naming the flag [review round 1, database-reviewer finding: a 3000+ batch size would otherwise sail past parsing and only fail as an opaque Postgres "too many parameters" error]', () => {
+    expect(() =>
+      parseReplayArgs([
+        '--from',
+        '2026-01-01T00:00:00Z',
+        '--to',
+        '2026-01-02T00:00:00Z',
+        '--batch-size',
+        '501',
+      ]),
+    ).toThrow(/--batch-size/);
+
+    expect(() =>
+      parseReplayArgs([
+        '--from',
+        '2026-01-01T00:00:00Z',
+        '--to',
+        '2026-01-02T00:00:00Z',
+        '--batch-size',
+        '3000',
+      ]),
+    ).toThrow(/--batch-size/);
+  });
+
+  it('accepts --batch-size exactly at the 500-row ceiling (the boundary itself is valid, not just anything below it)', () => {
+    const options = parseReplayArgs([
+      '--from',
+      '2026-01-01T00:00:00Z',
+      '--to',
+      '2026-01-02T00:00:00Z',
+      '--batch-size',
+      '500',
+    ]);
+    expect(options.batchSize).toBe(500);
+  });
+
   it('parses a minimal valid invocation, omitting tenantId/batchSize when not given', () => {
     const options = parseReplayArgs(['--from', '2026-01-01T00:00:00Z', '--to', '2026-01-02T00:00:00Z']);
     expect(options).toEqual({
@@ -340,6 +376,17 @@ describe('runReplayCli (T3.6.4) — bad arguments exit non-zero and never procee
     expect(result.exitCode).toBe(1);
     expect(deps.stderrLines.join('\n')).toMatch(/--to/);
   });
+
+  it('exits 1 and names --batch-size when it exceeds the 500-row ceiling, never proceeding to touch db/r2Client', async () => {
+    const deps = fakeDeps();
+    const result = await runReplayCli(
+      ['--from', '2026-01-01T00:00:00Z', '--to', '2026-01-02T00:00:00Z', '--batch-size', '501'],
+      deps,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(deps.stderrLines.join('\n')).toMatch(/--batch-size/);
+  });
 });
 
 // ---------------------------------------------------------------------
@@ -380,6 +427,7 @@ describe('runReplayCli (T3.6.4) — real replay against Postgres + MinIO [INV-6]
 
   let bogusTenantReplayResult: ReplayCliResult;
   let rowsForBogusTenant: PgTenantRow[];
+  let stderrLines: string[];
 
   beforeAll(async () => {
     pg = await startPgContainer();
@@ -437,12 +485,13 @@ describe('runReplayCli (T3.6.4) — real replay against Postgres + MinIO [INV-6]
     await pg.pool.query('TRUNCATE TABLE events');
     expect(await countAllEventRows(pg)).toBe(0); // sanity: truncation genuinely happened
 
+    stderrLines = [];
     const deps: ReplayCliDeps = {
       db: pg.db,
       r2Client,
       r2Bucket: REAL_R2_CONFIG.bucket,
       stdout: () => undefined,
-      stderr: () => undefined,
+      stderr: (line: string) => stderrLines.push(line),
     };
 
     // (d) --dry-run, no --tenant: counts everyone in range, inserts
@@ -538,6 +587,14 @@ describe('runReplayCli (T3.6.4) — real replay against Postgres + MinIO [INV-6]
     expect(bogusTenantReplayResult.summary?.recordsRead).toBeGreaterThanOrEqual(TOTAL_A + TOTAL_B);
     expect(bogusTenantReplayResult.summary?.batchesWritten).toBe(0);
     expect(rowsForBogusTenant).toHaveLength(0);
+  });
+
+  it('[review round 1, silent-failure-hunter finding] a --tenant matching nothing still exits 0 (not an error) but warns on stderr, naming the tenant id, so an operator can tell "empty" apart from "typo"', () => {
+    expect(bogusTenantReplayResult.exitCode).toBe(0);
+    const warning = stderrLines.find((line) => line.includes(bogusTenantId));
+    expect(warning).toBeDefined();
+    expect(warning).toMatch(/--tenant/);
+    expect(warning).toMatch(/matched 0/);
   });
 });
 
