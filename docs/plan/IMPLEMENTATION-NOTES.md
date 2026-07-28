@@ -637,3 +637,17 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Decision needed:** accept the implementer's AST-based "single real INSERT call site" test as the intended meaning and amend the plan's verify prose to describe it (mirrors T3.3.2/T3.6.2 exactly), and separately acknowledge the "calls flushBatch" body text needs a similar amendment to describe the toNewEventRow+insertEventsBatch reuse (with the destination-staleness reasoning) instead. Recommend accepting both — same reasoning pattern as the prior two amendments: the code is correct and the tests prove something real; the prose predates a design discovery.
 
 **Handed back to:** orchestrator escalating to user for decision on the plan-prose amendment; implementer (agent aa130e8957efd4a65) available to continue via SendMessage if further code changes are wanted instead.
+
+---
+
+## T3.5.2 · `e3c4827` · 2026-07-28T10:50:31-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test e2e-exactly-once.test.ts` — 3/3 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean; regression sweep `pnpm test pipeline-harness.test.ts reconciliation.test.ts throughput.bench.test.ts` — 23/23 pass.
+
+**Implementation:** uses `startPipelineHarness()` (T3.5.1) end to end — `push(10_000)` through the real BullMQ queue and real spawned worker process, `drain()`, then asserts `count(*) = count(distinct event_id) = 10000` in Postgres scoped to this run's own tenant, and bidirectional set equality between every event_id in Postgres and every event_id read back from this run's own R2 NDJSON objects (double-isolated: `eventPrefixes` day-window plus per-record tenant_id filtering, matching `reconciliation.test.ts`/`throughput.bench.test.ts`'s established convention). No R2 object-count assertion — at 500-event batches with an interval trigger also live, the exact object count isn't guaranteed to be exactly 20, and the plan's own verify only asks for event_id count/set equality, not object count.
+
+**RED-phase proof (independently plausible):** planted one genuine Postgres-only row (raw INSERT, no R2 counterpart) after drain, reran, got two real assertion failures — `expected 10001 to be 10000`, and `idDiff.onlyInFirst` held exactly the planted event_id while `onlyInSecond` stayed empty, proving the bidirectional check discriminates a Postgres-only row specifically, not just an aggregate count. Reverted, confirmed 3/3 green.
+
+**Findings surviving triage:** none.
+**Deviation from plan:** none — only file touched was the one the plan names; `pipeline-harness.ts` needed no changes.
+**Handed back to:** n/a.

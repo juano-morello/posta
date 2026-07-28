@@ -214,7 +214,7 @@ Pushes 10k events, drains, lists every NDJSON object in the covered hour prefixe
 A shared harness that boots Postgres via the testcontainers helper from T1.1.2 plus Redis and MinIO containers, starts the real worker process, and exposes `push(n)` (generating events from the T3.2.6 UA corpus through the real BullMQ producer), `drain()` (waits on `last_flush_age_ms` from the health endpoint) and `stop()`. Every test in this story reuses it rather than each booting its own stack.
 → **files** `apps/worker/src/test/pipeline-harness.ts` · `apps/worker/src/test/pipeline-harness.test.ts` · **verify** `pnpm test pipeline-harness.test.ts` pushes 10 events, drains, asserts 10 rows and one R2 object, and that `stop()` releases all three containers · **after** T3.4.7, T1.1.2
 
-#### T3.5.2 · `test: 10k events land exactly once in Postgres and once in R2` [INV-7][INV-8]
+#### T3.5.2 · `test: 10k events land exactly once in Postgres and once in R2` [INV-7][INV-8] ✅ done (`e3c4827`)
 The epic's "done when" condition, through the real queue rather than by calling `flushBatch` directly: 10k events pushed, drained, then asserted at exactly 10k distinct rows and a matching `event_id` set across every R2 object. T3.4.7 tested the flush path; this tests the whole pipe including the consumer and the queue.
 → **files** `apps/worker/src/test/e2e-exactly-once.test.ts` · **verify** `pnpm test e2e-exactly-once.test.ts` asserts `count(*) = count(distinct event_id) = 10000` and R2/Postgres set equality · **after** T3.5.1
 
