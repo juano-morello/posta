@@ -218,7 +218,7 @@ A shared harness that boots Postgres via the testcontainers helper from T1.1.2 p
 The epic's "done when" condition, through the real queue rather than by calling `flushBatch` directly: 10k events pushed, drained, then asserted at exactly 10k distinct rows and a matching `event_id` set across every R2 object. T3.4.7 tested the flush path; this tests the whole pipe including the consumer and the queue.
 → **files** `apps/worker/src/test/e2e-exactly-once.test.ts` · **verify** `pnpm test e2e-exactly-once.test.ts` asserts `count(*) = count(distinct event_id) = 10000` and R2/Postgres set equality · **after** T3.5.1
 
-#### T3.5.3 · `test: duplicate delivery produces no duplicate rows` [INV-8]
+#### T3.5.3 · `test: duplicate delivery produces no duplicate rows` [INV-8] ✅ done (`b4a2366`)
 Re-enqueues 500 of the 10k jobs with their original `event_id` values after the first drain, across a batch boundary so the duplicates land in different batches than the originals. BullMQ is at-least-once by design, so this is the normal steady state, not a fault injection.
 → **files** `apps/worker/src/test/e2e-duplicate-delivery.test.ts` · **verify** `pnpm test e2e-duplicate-delivery.test.ts` asserts the row count stays at 10000 after re-delivery and that no row's `occurred_at` was rewritten · **after** T3.5.2
 

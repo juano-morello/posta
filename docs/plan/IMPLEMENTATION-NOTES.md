@@ -651,3 +651,19 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none.
 **Deviation from plan:** none — only file touched was the one the plan names; `pipeline-harness.ts` needed no changes.
 **Handed back to:** n/a.
+
+---
+
+## T3.5.3 · `b4a2366` · 2026-07-28T11:17:59-03:00
+
+**Outcome:** done · verify passed (independently re-observed, in isolation): `pnpm test e2e-duplicate-delivery.test.ts` — 4/4 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Implementation:** extended `pipeline-harness.ts` with a new `redeliver(events)` method (pure extraction of the same `enqueue()` helper `push()` already used — zero behavior change for existing callers `e2e-exactly-once.test.ts`/`pipeline-harness.test.ts`), letting the test re-enqueue the EXACT same 500 CaptureEvents (identical event_id, identical occurred_at) a second time after the first drain. Because `drain()` only returns once the open batch is empty, redelivery necessarily lands in a fresh batch after a batch boundary, satisfying the story's "duplicate delivery across a batch" intent without extra timing engineering.
+
+**RED-phase proof (independently plausible, and notably surfaced a real, separate finding along the way):** first sabotage attempt (`onConflictDoUpdate` with `SET occurred_at = now()`) hit a genuine Postgres error, not a clean test failure — `invalid ON UPDATE specification: the result tuple would appear in a different partition than the original tuple` (SQLSTATE 0A000), because the fixture's 2080-era `occurred_at` and wall-clock `now()` land in different monthly partitions and Postgres refuses to move a row across partitions via ON CONFLICT DO UPDATE. Adjusted to `SET occurred_at = occurred_at + interval '1 second'` (same partition) and got a real, targeted failure: the occurred_at-fingerprint assertion failed exactly and only on the 500 redelivered event_ids, the other 9,500 untouched. Reverted, rebuilt @posta/core, reconfirmed green.
+
+**A real, separate reliability finding surfaced while running the regression sweep — see the follow-up general note:** `pipeline-harness-process.ts`'s `buildWorkerExclusively()` (T3.5.1) has a genuine race — `nest build`'s own `deleteOutDir: true` transiently removes `apps/worker/dist/` (the lock file's parent) while a sibling test file is acquiring the lock, producing an unhandled ENOENT instead of the tolerated EEXIST. Independently reproduced by the orchestrator (`pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts` crashes reliably). Fix dispatched separately, not part of this task's own file scope.
+
+**Findings surviving triage:** none blocking this task's own correctness.
+**Deviation from plan:** file list expanded to include `pipeline-harness.ts` (additive `redeliver()` method) — necessary, the harness's `push()` always minted fresh event_ids and had no way to re-enqueue identical events before this.
+**Handed back to:** n/a.
