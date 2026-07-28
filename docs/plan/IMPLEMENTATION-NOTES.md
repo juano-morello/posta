@@ -469,3 +469,14 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Judgment calls (reviewed, accepted):** scenario (b) "event_id split across two batches" modeled as BullMQ redelivering the same event into two separately-flushed accumulator windows, varying only visitor_hash as a fixture-only marker (documented in the test file as not a realism claim). Scenario (c) concurrent-flush test deliberately does not assert which of two racing transactions wins — only that the surviving row is one whole uncorrupted candidate, since real Promise.all concurrency doesn't let the test control commit order.
 **Deviation from plan:** none.
 **Handed back to:** n/a.
+
+---
+
+## T3.4.5 · `f3bd70a` · 2026-07-27T21:30:35-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test r2-retry.test.ts` — 31/31 pass; `pnpm typecheck:tests` — clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm test flush.test.ts split-retry.test.ts dlq.service.test.ts r2-put.test.ts poison-dlq.test.ts` — 45/45 pass, zero regression.
+**RED phase (self-reported, plausible):** deliberately-wrong stub r2-retry.ts produced 22/31 real assertion failures (not import errors) before real implementation, including a real-MinIO 403 case.
+**Design decisions (within task scope, reviewed via diff):** `classifyR2Error` is an allowlist (5xx, 429/throttling, transport timeout/reset) not a blocklist, verified against installed @smithy source. `DlqReason` extended with a fourth variant `'r2-put-failed'` (not reusing `'attempts-exhausted'` — different retry domain — or `'flush-poison'` — wrong shape, single-event/SQLSTATE vs whole-batch/no-SQLSTATE) — reasoning documented inline in dlq.service.ts, matches this epic's established DlqReason precedent (T3.3.4 added 'flush-poison' the same way). Did NOT wire the new module into flush.ts — T3.4.6 is deliberately where that coupling happens.
+**Findings surviving triage:** none on review of the diff — DlqReason payload for 'r2-put-failed' stores CaptureEvent[] (no raw IP, same as existing accepted DLQ payload shapes) so invariant 6 is unaffected.
+**Deviation from plan:** none.
+**Handed back to:** n/a.

@@ -182,7 +182,7 @@ A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACC
 `flushBatch` serializes the batch and issues a single `PutObject`. One PUT per batch, never per event — R2 bills per PUT, and one object per click is real money at any volume, quite apart from turning a 10k-event burst into 10k round trips.
 → **files** `apps/worker/src/batch/flush.ts` · `apps/worker/src/batch/r2-put.test.ts` · **verify** `pnpm test r2-put.test.ts` flushes batches of 1, 100 and 100 against MinIO and asserts the PUT count is 3 and not 201, and that each object's line count matches its batch · **after** T3.4.3, T3.3.2
 
-#### T3.4.5 · `feat: retry the R2 PUT and DLQ the batch on exhaustion`
+#### T3.4.5 · `feat: retry the R2 PUT and DLQ the batch on exhaustion` ✅ done (`f3bd70a`)
 Exponential backoff over 5 attempts on retryable S3 errors (5xx, timeouts, throttling); non-retryable errors (403, 404 on the bucket) fail immediately since retrying a misconfiguration only delays the alert. On exhaustion the whole batch goes to the DLQ with its payload intact.
 → **files** `apps/worker/src/batch/r2-retry.ts` · `apps/worker/src/batch/r2-retry.test.ts` · **verify** `pnpm test r2-retry.test.ts` asserts a PUT failing twice then succeeding lands the object, that 5 failures produce one DLQ entry holding all 100 events, and that a 403 fails after a single attempt · **after** T3.4.4, T3.1.5
 
