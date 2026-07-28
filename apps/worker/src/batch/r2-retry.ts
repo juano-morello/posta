@@ -222,12 +222,12 @@ export async function retryR2Put(put: R2Put, options: R2RetryOptions): Promise<R
       return { succeeded: true, attempts: attempt };
     } catch (error) {
       lastError = error;
-      const classification = classifyR2Error(error);
+      const retryDecision = classifyR2Error(error);
 
-      if (classification === 'non-retryable') {
+      if (retryDecision === 'non-retryable') {
         logger.error(
           `retryR2Put: non-retryable error on attempt ${attempt}, giving up without retrying: ${errorMessage(error)}`,
-          { attempt, classification },
+          { attempt, retryDecision },
         );
         return { succeeded: false, error: toError(error), attempts: attempt };
       }
