@@ -684,3 +684,28 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 
 **Commit:** `c79d74b` — fix: tolerate a transient ENOENT in the pipeline harness's build lock.
 **Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.5.4 · `8eb3224` · 2026-07-28T11:30:35-03:00
+
+**Outcome:** NOT done, no commit — a real architectural gap, not a stale-prose mismatch. Stopped and escalating per the "task is wrong rather than hard" rule, not the "redefine the verify" rule (T3.3.2/T3.6.2/T3.6.3's category) — this is one level more serious.
+
+**The dispatched agent found, and the orchestrator independently confirmed by reading the code directly:** `AccumulatingEventSink.handle(event)` (apps/worker/src/consumer/events.consumer.ts) is `this.accumulator.add(event)` — and `BatchAccumulator.add()` (apps/worker/src/batch/accumulator.ts) is fully synchronous and never awaits any flush it may trigger (`void this.triggerFlush().catch(...)`, fire-and-forget, by its own documented design — its own docstring: "never awaits the flush callback... a flush... must never make add() itself slow"). So `EventsConsumer.process()`'s `await this.sink.handle(event)` resolves, and BullMQ marks the job **`completed`**, the INSTANT an event is handed to the in-memory accumulator — before that batch's R2 PUT + Postgres INSERT ever runs, regardless of whether they ever will. This is deliberate, not a bug: `AccumulatingEventSink`'s own doc comment says so explicitly ("reach BullMQ's 'completed' state, which is exactly what lets shutdown.test.ts wait on job.getState() === 'completed' as its signal that an event has genuinely been accumulated").
+
+**Consequence:** an event sitting in the accumulator's open, unflushed batch is not "active with an expiring lock" (which BullMQ's stalled-job mechanism could later rescue) — it's "completed, forever," in Redis's own bookkeeping. A SIGKILL wipes the process's memory unconditionally. There is nothing left in Redis for a second worker to redeliver. BullMQ's stalled-job redelivery — the mechanism T3.5.4's acceptance criterion implicitly requires for "nothing is lost" to be true after a hard kill — does not fire for this case, ever.
+
+**Empirically proven, not just derived (spike built and then deleted, never committed):** pushed 30 events with both batch triggers parked so the batch definitely never auto-flushes; confirmed all 30 reached BullMQ `completed` while `count(*) FROM events` was still 0; sent a real SIGKILL; booted a second worker against the same Redis/Postgres and waited 70s (past BullMQ's default 30000ms `lockDuration`/`stalledInterval`, confirmed against the installed `bullmq@5.80.10` source); final result: `count(*)` still 0, job counts unchanged (`completed: 30, active: 0`) — all 30 events permanently, silently lost.
+
+**This is independently corroborated by this very plan, elsewhere:** `docs/plan/10-deploy-operate.md`'s T10.5.5 already documents this EXACT failure mode as a known, accepted risk: "if Kubernetes SIGKILLs before that [SIGTERM flush] completes, every rolling deploy silently eats up to a full batch of buffered events and nothing reports it — the pod exits, the rollout goes green, the events are simply gone." T10.5.5's whole mitigation is `terminationGracePeriodSeconds` comfortably exceeding `SHUTDOWN_TIMEOUT_MS` so SIGTERM's graceful flush (T3.1.8, already proven) always wins the race in practice — there is no BullMQ-level safety net underneath that. S3.5's own acceptance criterion ("Worker killed mid-batch: after restart, nothing is lost") directly contradicts T10.5.5's own documented reality.
+
+**Why no fix was attempted:** the only way to make a job's BullMQ ack wait for its batch's actual flush would be having `process()` await that flush before returning — which would cap a batch at `WORKER_CONCURRENCY` (default 8) events, since BullMQ won't dequeue job 9 until one of the first 8 `process()` calls returns. That silently breaks the entire T3.3-T3.4 batching design (up to 500 events/flush) this epic already built, reviewed, and shipped. A disproportionate, cross-cutting redesign for a test-writing task — correctly not attempted.
+
+**Decision needed — three options the implementer identified, none of which are the orchestrator's or implementer's to pick unilaterally:**
+1. Redefine T3.5.4's scope to the property that IS true today (events still in BullMQ `wait`/genuinely-`active`, not yet handed to the accumulator, survive a worker SIGKILL) — real and testable, but materially weaker than "nothing is lost," and would need the acceptance criterion in docs/plan/03-event-pipeline.md amended with the gap recorded explicitly (mirroring T10.5.5's own framing).
+2. Build a real fix — a write-ahead durability layer (e.g. append accumulated-but-unflushed events to Redis, keyed by batch_id, replayed on worker boot) — a genuine new feature needing its own design/plan task, not something to improvise inside a test-writing task.
+3. Accept the documented risk as-is (T10.5.5's own framing) and close T3.5.4 as "not achievable as specified, superseded by T10.5.5's own documented limitation" — no test written for a property that isn't true.
+
+Recommend option 1 (redefine + record the gap explicitly) as the least-surprising path, consistent with this epic's existing "amend the prose when the code/architecture is right and the text is wrong" precedent — but this decision affects a genuine data-loss window's user-facing guarantee, not just test wording, so it should go to the user rather than be assumed.
+
+**Handed back to:** orchestrator escalating to user. No implementer thread to resume — nothing was built, nothing to hand back to; a fresh dispatch can implement whichever option is chosen once decided.
