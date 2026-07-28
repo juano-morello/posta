@@ -222,7 +222,7 @@ The epic's "done when" condition, through the real queue rather than by calling 
 Re-enqueues 500 of the 10k jobs with their original `event_id` values after the first drain, across a batch boundary so the duplicates land in different batches than the originals. BullMQ is at-least-once by design, so this is the normal steady state, not a fault injection.
 → **files** `apps/worker/src/test/e2e-duplicate-delivery.test.ts` · **verify** `pnpm test e2e-duplicate-delivery.test.ts` asserts the row count stays at 10000 after re-delivery and that no row's `occurred_at` was rewritten · **after** T3.5.2
 
-#### T3.5.4 · `test: worker killed mid-batch loses nothing and doubles nothing`
+#### T3.5.4 · `test: worker killed mid-batch loses nothing and doubles nothing` ✅ done (`8896f9a`)
 SIGKILL — not SIGTERM, which T3.1.8 already covers — while a partial batch is buffered, then restart and drain. Asserts BullMQ redelivers the un-acked jobs and the final row count equals the distinct `event_id` count. This is the case where idempotency stops being theoretical: the buffered events *will* arrive twice.
 → **files** `apps/worker/src/test/e2e-kill-recovery.test.ts` · **verify** `pnpm test e2e-kill-recovery.test.ts` asserts no loss and no duplication after SIGKILL at three different points in the batch window · **after** T3.5.3
 
