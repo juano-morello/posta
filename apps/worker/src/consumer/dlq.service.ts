@@ -44,6 +44,37 @@ import { redactCredentialsFromMessage } from '@posta/contracts';
 // (this file has no `pg` dependency, and doesn't need one to read one
 // property off a duck-typed shape).
 //
+// [T3.4.5] A FOURTH reason, 'r2-put-failed' (see below), was added by
+// apps/worker/src/batch/r2-retry.ts's own
+// `sendR2PutFailureToDlq`, via the SAME `PoisonDlqSink`-shaped narrow
+// interface (`R2BatchDlqSink`) split-retry.ts's own header already
+// established the precedent for, so this file gained no new dependency
+// from it. THE JUDGMENT CALL this task's own brief asked to be recorded
+// here: neither existing reason fits. 'attempts-exhausted' names a
+// BullMQ job's own per-job `sink.handle()` retry budget running out
+// (events.consumer.ts's `onFailed()`) — a completely different retry
+// domain (per-job, BullMQ-driven) from r2-retry.ts's own per-batch,
+// custom-backoff R2 PUT retry, and conflating the two would make an
+// operator's runbook ambiguous ("is this a stuck sink or an R2 outage?")
+// for no benefit. 'flush-poison' names ONE event isolated by
+// split-retry.ts's binary search because a specific row, and only that
+// row, would not commit to Postgres — it always carries a real SQLSTATE
+// and always has exactly one event as `rawPayload`. An R2 PUT failure is
+// the opposite shape: the WHOLE batch's single object write failed
+// (nothing about WHICH event, if any, was at fault), there is no
+// SQLSTATE (`sqlstate` stays `null` for this reason, same as the first
+// two), and `rawPayload` holds the ENTIRE batch as an array, not one
+// event — "payload intact", per this task's own brief. A fourth,
+// distinct `DlqReason` keeps that shape difference visible to any reader
+// of a DLQ entry, rather than forcing them to infer it from `rawPayload`
+// being an array instead of an object. Named 'r2-put-failed', not
+// 'r2-put-exhausted': unlike 'attempts-exhausted' (which only ever fires
+// after the full BullMQ attempt budget is spent), an R2 PUT can ALSO
+// reach the DLQ after a SINGLE attempt — a non-retryable 403/404 never
+// spends any retry budget at all (r2-retry.ts's own
+// `classifyR2Error`) — so "exhausted" would misdescribe that case.
+// 'r2-put-failed' covers both terminal outcomes honestly.
+//
 // [security, invariant 6] `rawPayload` is stored EXACTLY as received,
 // unredacted, for BOTH reasons — this is T3.1.4's own established
 // decision (its own EventsDlqJobPayload doc comment, preserved here:
@@ -107,8 +138,17 @@ export function toDlqIssues(
  * Postgres-rejected sub-batch. `sendPoisonEventsToDlq`
  * (split-retry.ts) is the one caller that produces this reason, via the
  * `PoisonDlqSink` interface that file defines to avoid importing this
- * class directly — see that file's own header for why. */
-export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted' | 'flush-poison';
+ * class directly — see that file's own header for why.
+ *
+ * [T3.4.5] `'r2-put-failed'` is the FOURTH reason: `apps/worker/src/
+ * batch/r2-retry.ts`'s `putR2BatchWithRetry` routes an ENTIRE batch here
+ * (as one entry, `rawPayload` an ARRAY of events — not one entry per
+ * event, unlike 'flush-poison') once its R2 PUT either exhausts every
+ * retry attempt or hits a non-retryable error (403/404/...) on the very
+ * first one. See this file's own header, above, for why this needed a
+ * new reason rather than reusing 'attempts-exhausted' or 'flush-poison',
+ * and why it is named '...-failed' rather than '...-exhausted'. */
+export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted' | 'flush-poison' | 'r2-put-failed';
 
 /**
  * `EVENTS_DLQ_QUEUE`'s own job payload — the record `DlqService.send()`
@@ -118,7 +158,10 @@ export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted' | 'flu
  * decode as one; for 'attempts-exhausted' it IS decoded (a real
  * `CaptureEvent`, see events.consumer.ts's `onFailed()`) but is typed
  * `unknown` here anyway rather than narrowed per-reason, per this file's
- * own "flat shape" reasoning above.
+ * own "flat shape" reasoning above. [T3.4.5] For 'r2-put-failed' it is a
+ * `readonly CaptureEvent[]` — the WHOLE failed batch, not a single event
+ * — see this file's own header for why that reason's payload shape is
+ * deliberately different from every other reason's.
  */
 export interface EventsDlqJobPayload {
   readonly reason: DlqReason;
@@ -137,7 +180,9 @@ export interface EventsDlqJobPayload {
    * (`pg`'s own `DatabaseError` shape), `null` otherwise. Always `null`
    * for 'schema-validation-failed' and 'attempts-exhausted' today (see
    * this file's own "flat shape" reasoning, above) — only 'flush-poison'
-   * entries populate this from a real Postgres rejection. */
+   * entries populate this from a real Postgres rejection. [T3.4.5] Also
+   * always `null` for 'r2-put-failed': an R2/S3 rejection is never a
+   * Postgres error and carries no SQLSTATE. */
   readonly sqlstate: string | null;
   /** Non-empty only for 'schema-validation-failed' — `[]` otherwise. See
    * this file's own "flat shape" reasoning for why this field exists
@@ -147,7 +192,11 @@ export interface EventsDlqJobPayload {
    * written — 1 for 'schema-validation-failed' (that path never retries,
    * see events.consumer.ts's `routeToDlq()`), and
    * `EVENTS_JOB_OPTIONS.attempts` (5) for a normally-exhausted
-   * 'attempts-exhausted' entry. */
+   * 'attempts-exhausted' entry. [T3.4.5] For 'r2-put-failed' this is NOT
+   * a BullMQ counter at all — it is `r2-retry.ts`'s own
+   * `R2PutOutcome.attempts`: 1 for a non-retryable error that never
+   * retried, or `options.maxAttempts` for a genuinely exhausted
+   * retryable one. */
   readonly attemptsMade: number;
   readonly originalJobId: string;
   /** ISO 8601, `new Date().toISOString()` — same wire format
