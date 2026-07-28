@@ -1,5 +1,11 @@
 import type { S3Client } from '@aws-sdk/client-s3';
-import { insertEventsBatch, streamEventLog, type DbClient, type NewEvent } from '@posta/core';
+import {
+  insertEventsBatch,
+  streamEventLog,
+  type DbClient,
+  type LoggedEvent,
+  type NewEvent,
+} from '@posta/core';
 import { toNewEventRow } from '../batch/flush';
 
 // T3.6.3 (E3, S3.6) [INV-7][INV-8] — "replay feeds records through the
@@ -86,6 +92,20 @@ export interface ReplayDriverOptions {
   /** Defaults to {@link DEFAULT_REPLAY_BATCH_SIZE} — see this file's own
    * header for why 500 specifically. */
   readonly batchSize?: number;
+  /** [T3.6.4] Optional predicate applied to every streamed record BEFORE
+   * it is buffered/inserted — `false` means "read, but never written".
+   * This driver stays deliberately generic about WHY a caller filters
+   * (it has no `tenantId` concept of its own): T3.6.4's CLI is the one
+   * real caller, and passes `(record) => record.tenant_id === tenantId`
+   * for its own `--tenant` flag. Rejected records still count toward
+   * `recordsRead` below — this driver's own `ReplaySummary` header
+   * already documents `recordsRead` as "every record streamEventLog
+   * yielded... NOT scoped to any one tenant", and adding an optional
+   * filter does not change that meaning, only which records make it past
+   * the point `recordsRead` is incremented at. Omitted (the common case:
+   * no CLI `--tenant` flag) means every streamed record is buffered,
+   * identical to this driver's pre-T3.6.4 behavior. */
+  readonly filter?: (record: LoggedEvent) => boolean;
 }
 
 /** What this driver itself observed for one run — `recordsRead` counts
@@ -115,7 +135,7 @@ export interface ReplaySummary {
  * discipline.
  */
 export async function replayEventLog(options: ReplayDriverOptions): Promise<ReplaySummary> {
-  const { db, r2Client, r2Bucket, prefixes, batchSize = DEFAULT_REPLAY_BATCH_SIZE } = options;
+  const { db, r2Client, r2Bucket, prefixes, batchSize = DEFAULT_REPLAY_BATCH_SIZE, filter } = options;
 
   let recordsRead = 0;
   let batchesWritten = 0;
@@ -130,6 +150,7 @@ export async function replayEventLog(options: ReplayDriverOptions): Promise<Repl
 
   for await (const logged of streamEventLog(r2Client, r2Bucket, prefixes)) {
     recordsRead += 1;
+    if (filter && !filter(logged)) continue;
     buffer.push(toNewEventRow(logged));
 
     if (buffer.length >= batchSize) {
