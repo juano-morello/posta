@@ -177,8 +177,25 @@ export interface AppModuleConfig {
  * throws (loudly, at construction time, not silently) rather than
  * building a client against an empty endpoint/bucket when the `r2*`
  * fields are missing.
+ *
+ * [T3.4.6] `dlqService` is threaded straight through as `createFlushBatch`'s
+ * own `dlqSink` — a real `DlqService` instance satisfies flush.ts's
+ * `R2BatchDlqSink` structurally, zero adapter code needed (r2-retry.ts's
+ * own header explains why: same method name, same parameter shapes,
+ * `DlqReason` is a strict superset of the one literal `R2BatchDlqSink`
+ * ever passes). Without this, production would fall back to flush.ts's
+ * own `rejectingDlqSink` default — exactly the pre-T3.4.6 "an R2 failure
+ * rejects the whole flush" behavior, which is correct for the TEST call
+ * sites that default still exists for for, but wrong here: a worker that
+ * can never route a terminal R2 failure to a real DLQ would have no
+ * recoverable path at all, only ever-repeating BatchAccumulator retries
+ * against the same dead endpoint.
  */
-function buildProductionFlush(config: AppModuleConfig, dbClient: DbClient): BatchFlushCallback<CaptureEvent> {
+function buildProductionFlush(
+  config: AppModuleConfig,
+  dbClient: DbClient,
+  dlqService: DlqService,
+): BatchFlushCallback<CaptureEvent> {
   const { r2Endpoint, r2AccessKeyId, r2SecretAccessKey, r2Bucket } = config;
 
   if (r2AccessKeyId === undefined || r2SecretAccessKey === undefined || r2Bucket === undefined) {
@@ -204,6 +221,8 @@ function buildProductionFlush(config: AppModuleConfig, dbClient: DbClient): Batc
       bucket: r2Bucket,
     }),
     r2Bucket,
+    // [T3.4.6] See this function's own doc comment above.
+    dlqSink: dlqService,
   });
 }
 
@@ -315,27 +334,29 @@ export class AppModule {
         // sharing is load-bearing, not incidental. `config.flush`
         // overrides the callback entirely (shutdown.test.ts's wedged-flush
         // scenario); production falls back to the real
-        // `createFlushBatch({ db, r2Client, r2Bucket })` (T3.4.4) against
-        // the DbClient above and a fresh `createR2Client()` built from
-        // this config's own `r2*` fields — both constructed here, not
-        // hoisted to their own DI tokens the way `DB_CLIENT` is, since
-        // nothing else in this module needs to inject the R2 client on
-        // its own. Throwing when `flush` is absent AND the `r2*` fields
-        // are missing (rather than silently building a client against
-        // an empty endpoint/bucket) is deliberate — see `r2Endpoint`'s
-        // own doc comment above for why this branch is reachable at all
-        // even in a test that never really flushes.
+        // `createFlushBatch({ db, r2Client, r2Bucket, dlqSink })` (T3.4.4,
+        // T3.4.6) against the DbClient above, a fresh `createR2Client()`
+        // built from this config's own `r2*` fields, and the module's own
+        // `DlqService` provider (injected below, T3.4.6) — none of the
+        // three hoisted to their own DI tokens the way `DB_CLIENT` is,
+        // since nothing else in this module needs to inject the R2 client
+        // on its own, and `DlqService` already has a normal class-provider
+        // token (itself) to inject by. Throwing when `flush` is absent AND
+        // the `r2*` fields are missing (rather than silently building a
+        // client against an empty endpoint/bucket) is deliberate — see
+        // `r2Endpoint`'s own doc comment above for why this branch is
+        // reachable at all even in a test that never really flushes.
         {
           provide: BATCH_ACCUMULATOR,
-          useFactory: (dbClient: DbClient): BatchAccumulator<CaptureEvent> => {
-            const flush = config.flush ?? buildProductionFlush(config, dbClient);
+          useFactory: (dbClient: DbClient, dlqService: DlqService): BatchAccumulator<CaptureEvent> => {
+            const flush = config.flush ?? buildProductionFlush(config, dbClient, dlqService);
             return new BatchAccumulator<CaptureEvent>({
               batchSize: config.batchSize,
               batchIntervalMs: config.batchIntervalMs,
               flush,
             });
           },
-          inject: [DB_CLIENT],
+          inject: [DB_CLIENT, DlqService],
         },
         {
           provide: EVENT_SINK,

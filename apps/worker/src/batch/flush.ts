@@ -12,6 +12,7 @@ import {
   type LinkDestinationLookup,
   type NewEvent,
 } from '@posta/core';
+import { putR2BatchWithRetry, type R2BatchDlqSink, type R2Put } from './r2-retry';
 
 // T3.3.2 [E3, S3.3][INV-8] — flushBatch is the worker's actual write to
 // Postgres: T3.2.5's enrich() composes the seven enrichment columns per
@@ -117,14 +118,59 @@ import {
 // objects holding identical data, not data loss, and not this task's to
 // fix.
 //
-// Order between the R2 PUT and the Postgres INSERT is NOT coupled here —
-// they run concurrently (`Promise.all`) and either can settle first.
-// Coupling them (no Postgres commit if the R2 PUT failed) is T3.4.6's job
-// by name, not this one's; a real PUT failure still rejects the whole
-// `flushBatch` call (propagating to BatchAccumulator's own
-// already-established failure/retry path) rather than being swallowed
-// into a silent no-op — R2 does not become optional just because nothing
-// yet couples it to the Postgres commit (invariant 7).
+// T3.4.6 [E3, S3.4][INV-7] — THE TWO WRITES ARE NOW COUPLED. Flush order is
+// R2 PUT (via T3.4.5's `putR2BatchWithRetry`, retried with backoff) FIRST,
+// awaited to completion, and the Postgres `INSERT` (still `insertEventsBatch`,
+// T3.3.2) only ever runs once that PUT has actually succeeded. The
+// `Promise.all` this replaced ran both concurrently with no ordering
+// guarantee — exactly the shape that lets Postgres hold a row the R2 log
+// never saw, which is the one way invariant 7's "the R2 NDJSON log is the
+// source of truth... Postgres is a rebuildable projection" quietly stops
+// being true: a projection that ends up BIGGER than the log it was
+// rebuilt from is not a projection of that log at all.
+//
+// ON EXHAUSTION, THE TRANSACTION IS NEVER OPENED — the batch goes to the
+// DLQ WHOLE instead. `putR2BatchWithRetry` (r2-retry.ts, T3.4.5) already
+// owns both halves of that: it retries the PUT with exponential backoff,
+// classifying each rejection as retryable or not (`classifyR2Error`), and
+// on a terminal failure (retries exhausted, or a non-retryable error on
+// the very first attempt) routes the WHOLE `events` array to `dlqSink` as
+// ONE entry via `sendR2PutFailureToDlq`, before ever resolving. This
+// function's own job is narrow: call it, and branch on its returned
+// `R2PutOutcome` — `insertEventsBatch` is reached ONLY on `succeeded:
+// true`.
+//
+// A DLQ-ROUTED FAILURE RESOLVES `flushBatch`, IT DOES NOT REJECT IT — the
+// SAME "never throws for a handled outcome" design `retryWithSplit`
+// (split-retry.ts) and `putR2BatchWithRetry` itself already establish for
+// a classified failure that has somewhere safe to land. The batch is not
+// lost — its full payload is sitting in `EVENTS_DLQ_QUEUE`, inspectable
+// and (once T3.6.3's replay tooling exists) replayable — so treating this
+// the same as an unhandled exception would be strictly less honest than
+// what actually happened. This is also why `BatchAccumulator.
+// lastFlushAgeMs()` (T3.1.7, accumulator.ts) intentionally does NOT
+// distinguish "committed to Postgres" from "DLQ'd" — both are a flush
+// LOOP that is genuinely still turning, not stuck; a sustained R2 outage
+// is instead surfaced through `dlq_depth` growing (HealthController,
+// T3.1.7), a SEPARATE signal for a separate failure mode.
+//
+// A `dlqSink.send()` rejection is the one case that still propagates as a
+// genuine `flushBatch` rejection — `putR2BatchWithRetry`'s own contract
+// (r2-retry.ts) never swallows that, and neither does this function: a
+// batch that fails BOTH to PUT and to reach the DLQ has nowhere safe left
+// to land, and invariant 7 is better served by a loud failure (retried by
+// whatever called `flushBatch`) than by discarding it.
+//
+// `dlqSink` DEFAULTS TO {@link rejectingDlqSink}, NOT A REAL DLQ — see
+// that value's own doc comment for why: every existing call site that
+// predates this task (flush.test.ts, r2-put.test.ts, idempotency.test.ts,
+// poison-dlq.test.ts — none of them this task's own files) never
+// constructs a real `DlqService`, and r2-put.test.ts's own pre-existing
+// [INV-7] assertion ("a real R2 PUT failure rejects the whole flush")
+// must keep holding for them. Production (app.module.ts's
+// `buildProductionFlush`) supplies the real thing — a `DlqService`
+// instance satisfies `R2BatchDlqSink` structurally, zero adapter code
+// needed (r2-retry.ts's own header explains why).
 
 /** Minimal logger shape this file needs — the SAME `{ error(message,
  * meta?): void }` shape apps/worker/src/consumer/events.consumer.ts's
@@ -300,9 +346,80 @@ export interface CreateFlushBatchOptions {
   readonly r2Bucket: string;
   /** Defaults to {@link consoleErrorLogger} when omitted — same
    * optional-with-a-console-default shape `BatchAccumulatorOptions`
-   * (accumulator.ts) already uses for its own `logger` field. */
+   * (accumulator.ts) already uses for its own `logger` field. Also
+   * threaded through as `putR2BatchWithRetry`'s own `logger` (T3.4.6) —
+   * `FlushBatchLogger` and r2-retry.ts's `R2RetryLogger` are the SAME
+   * `{ error(message, meta?): void }` shape, so one injected logger
+   * covers both the unresolved-destination summary AND the R2 retry/DLQ
+   * log lines, rather than this file exposing a second logger field for
+   * what is structurally identical. */
   readonly logger?: FlushBatchLogger;
+  /** [T3.4.6][INV-7] Where the WHOLE batch is routed once the R2 PUT
+   * below (`putR2BatchWithRetry`, r2-retry.ts, T3.4.5) exhausts every
+   * retry or hits a non-retryable error on its first attempt — see this
+   * file's own header for the full coupling design this field exists
+   * for. Defaults to {@link rejectingDlqSink} when omitted; production
+   * (app.module.ts's `buildProductionFlush`) always supplies a real
+   * `DlqService` instance instead, which satisfies `R2BatchDlqSink`
+   * structurally with zero adapter code (r2-retry.ts's own header
+   * explains why). */
+  readonly dlqSink?: R2BatchDlqSink;
+  /** [T3.4.6] Tunes `putR2BatchWithRetry`'s own backoff for THIS flush
+   * closure. `maxAttempts` defaults to {@link DEFAULT_R2_MAX_ATTEMPTS} (5
+   * — r2-retry.ts's own header: "the plan's own brief names 5 for
+   * production"); `initialDelayMs` defaults to
+   * {@link DEFAULT_R2_INITIAL_DELAY_MS} (200). Exposed as a caller
+   * override (rather than hardcoded) so a test proving this coupling
+   * against a genuinely stopped MinIO container isn't stuck waiting out
+   * production's own backoff schedule — see coupled-writes.test.ts. */
+  readonly r2RetryOptions?: {
+    readonly maxAttempts?: number;
+    readonly initialDelayMs?: number;
+  };
 }
+
+/** [T3.4.6] Production's own retry budget for the R2 PUT — r2-retry.ts's
+ * own header: "the plan's own brief names 5 for production". Not
+ * exported: a caller tunes this via `CreateFlushBatchOptions.
+ * r2RetryOptions`, never by importing this constant directly. */
+const DEFAULT_R2_MAX_ATTEMPTS = 5;
+
+/** [T3.4.6] Base delay (ms) before the SECOND R2 PUT attempt; each
+ * further retry of the SAME batch doubles it (r2-retry.ts's own
+ * `R2RetryOptions.initialDelayMs`). 200ms keeps a genuinely exhausted
+ * sequence (5 attempts: waits of 200/400/800/1600ms between them, ~3s
+ * total) comfortably inside `SHUTDOWN_TIMEOUT_MS`'s own production
+ * default (30s, env.ts) even stacked on top of a real Postgres round
+ * trip. */
+const DEFAULT_R2_INITIAL_DELAY_MS = 200;
+
+/** [T3.4.6] The default `dlqSink` when a caller omits
+ * `CreateFlushBatchOptions.dlqSink` — deliberately NOT a silent no-op:
+ * this ALWAYS rejects. Every call site that predates this task
+ * (flush.test.ts, r2-put.test.ts, idempotency.test.ts, poison-dlq.test.ts
+ * — none of them this task's own files to touch) constructs
+ * `createFlushBatch` with no real DLQ wired through, and r2-put.test.ts's
+ * own pre-existing [INV-7] assertion ("a real R2 PUT failure rejects the
+ * whole flush — R2 never silently becomes optional") must keep holding
+ * for every one of them unchanged. A default that silently swallowed the
+ * failure instead would make R2 optional in exactly the way that
+ * assertion — and invariant 7 itself — forbids. Production
+ * (app.module.ts's `buildProductionFlush`) always supplies a real
+ * `DlqService` instance instead, which absorbs the failure into a real,
+ * inspectable DLQ entry and lets `flushBatch` resolve normally (see this
+ * file's own header). `putR2BatchWithRetry`'s own contract (r2-retry.ts)
+ * never swallows a `dlqSink.send()` rejection either way, so this sink's
+ * rejection propagates all the way out of `flushBatch` exactly like the
+ * pre-T3.4.6 code's own unconditional PUT rejection did. */
+export const rejectingDlqSink: R2BatchDlqSink = {
+  async send(): Promise<void> {
+    throw new Error(
+      'createFlushBatch: the R2 PUT failed and no real dlqSink was configured ' +
+        '(CreateFlushBatchOptions.dlqSink) — the batch cannot be safely discarded, so this flush ' +
+        'fails loudly instead of silently dropping it.',
+    );
+  },
+};
 
 /**
  * Writes one batch's NDJSON body to R2 as a single `PutObjectCommand` —
@@ -339,8 +456,11 @@ async function putEventBatch(
 /**
  * Builds a `flushBatch(events, batchId?)` closure bound to `db`, `r2Client`
  * and `r2Bucket` (and, optionally, a `logger` for the unresolved-destination
- * summary — see this file's own header). `db` is typed as `DbClient['db']`
- * (an indexed-access type off `@posta/core`'s own `DbClient` interface), not
+ * summary/R2 retry logging, a `dlqSink` for a terminal R2 PUT failure, and
+ * `r2RetryOptions` tuning the retry backoff — see this file's own header,
+ * T3.4.6, for the full coupling design those three exist for). `db` is
+ * typed as `DbClient['db']` (an indexed-access type off `@posta/core`'s own
+ * `DbClient` interface), not
  * `NodePgDatabase` written out directly — apps/worker never imports
  * drizzle-orm itself, matching apps/api/src/redirect/resolve-link.ts's
  * identical precedent (it only ever imports `DbClient`'s TYPE plus this
@@ -354,7 +474,16 @@ async function putEventBatch(
  * off that path, downstream of the BullMQ queue.
  */
 export function createFlushBatch(options: CreateFlushBatchOptions): FlushBatch {
-  const { db, r2Client, r2Bucket, logger = consoleErrorLogger } = options;
+  const {
+    db,
+    r2Client,
+    r2Bucket,
+    logger = consoleErrorLogger,
+    dlqSink = rejectingDlqSink,
+    r2RetryOptions,
+  } = options;
+  const r2MaxAttempts = r2RetryOptions?.maxAttempts ?? DEFAULT_R2_MAX_ATTEMPTS;
+  const r2InitialDelayMs = r2RetryOptions?.initialDelayMs ?? DEFAULT_R2_INITIAL_DELAY_MS;
 
   return async function flushBatch(
     events: readonly CaptureEvent[],
@@ -374,15 +503,29 @@ export function createFlushBatch(options: CreateFlushBatchOptions): FlushBatch {
     );
     const rows: NewEvent[] = loggedEvents.map(toNewEventRow);
 
-    // [T3.4.4] The Postgres INSERT and the R2 PUT run concurrently — see
-    // this file's own header for why their relative order is deliberately
-    // NOT coupled yet (that coupling is T3.4.6's job). A rejection from
-    // either propagates as `Promise.all`'s own rejection, failing the
-    // WHOLE flush loudly rather than silently treating R2 as optional
-    // (invariant 7).
-    await Promise.all([
-      insertEventsBatch(db, rows),
-      putEventBatch(r2Client, r2Bucket, batchId, firstEvent.occurred_at, loggedEvents),
-    ]);
+    // [T3.4.6][INV-7] R2 PUT FIRST, awaited to completion — see this
+    // file's own header for the full coupling rationale. `put` closes
+    // over everything `putEventBatch` needs so it stays the bare
+    // zero-argument `R2Put` thunk `putR2BatchWithRetry` expects (r2-retry.ts's
+    // own header explains why that function never imports the AWS SDK
+    // itself).
+    const put: R2Put = () => putEventBatch(r2Client, r2Bucket, batchId, firstEvent.occurred_at, loggedEvents);
+    const outcome = await putR2BatchWithRetry(put, events, batchId, dlqSink, {
+      maxAttempts: r2MaxAttempts,
+      initialDelayMs: r2InitialDelayMs,
+      logger,
+    });
+
+    if (!outcome.succeeded) {
+      // Terminal, HANDLED failure: putR2BatchWithRetry has already routed
+      // the whole batch to dlqSink before resolving (its own contract,
+      // r2-retry.ts) — the Postgres transaction below is never opened.
+      // This resolves `flushBatch`, it does not reject it; see this
+      // file's own header for why that is the correct outcome for a
+      // batch that has somewhere safe to land.
+      return;
+    }
+
+    await insertEventsBatch(db, rows);
   };
 }
