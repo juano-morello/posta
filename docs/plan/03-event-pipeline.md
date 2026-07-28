@@ -186,7 +186,7 @@ A single `S3Client` built from `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACC
 Exponential backoff over 5 attempts on retryable S3 errors (5xx, timeouts, throttling); non-retryable errors (403, 404 on the bucket) fail immediately since retrying a misconfiguration only delays the alert. On exhaustion the whole batch goes to the DLQ with its payload intact.
 → **files** `apps/worker/src/batch/r2-retry.ts` · `apps/worker/src/batch/r2-retry.test.ts` · **verify** `pnpm test r2-retry.test.ts` asserts a PUT failing twice then succeeding lands the object, that 5 failures produce one DLQ entry holding all 100 events, and that a 403 fails after a single attempt · **after** T3.4.4, T3.1.5
 
-#### T3.4.6 · `feat: couple the two writes — no Postgres commit if R2 failed` [INV-7]
+#### T3.4.6 · `feat: couple the two writes — no Postgres commit if R2 failed` [INV-7] ✅ done (`2f8ea40`)
 Flush order becomes R2 PUT **then** the Postgres insert. If the PUT exhausts its retries, the transaction is never opened and the batch goes to the DLQ whole. The reverse order is the one that quietly kills invariant 7: Postgres would hold rows the log has never seen, and the "rebuildable projection" would rebuild into something smaller than what it replaced. The surviving asymmetry — R2 ahead of Postgres — is the recoverable one, because replay closes it.
 → **files** `apps/worker/src/batch/flush.ts` · `apps/worker/src/batch/coupled-writes.test.ts` · **verify** `pnpm test coupled-writes.test.ts` stops the MinIO container mid-run and asserts zero new rows in `events`, one DLQ entry, and that after MinIO returns the DLQ entry replays into both stores · **after** T3.4.5
 
