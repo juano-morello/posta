@@ -168,6 +168,15 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     const queue = new Queue(EVENTS_QUEUE, {
       connection: { url: redis.url, maxRetriesPerRequest: null },
     });
+    // [test isolation] This job fails eventJobSchema validation, so
+    // events.consumer.ts's routeToDlq() (T3.1.4) writes a real entry to
+    // EVENTS_DLQ_QUEUE even though this test never asserts on it directly.
+    // A never-cleaned-up entry here is exactly the leftover state
+    // documented in IMPLEMENTATION-NOTES.md's T3.1.5 note — obliterate it
+    // in this test's own cleanup too, not just EVENTS_QUEUE.
+    const dlqQueue = new Queue(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
 
     let app: INestApplicationContext | undefined;
     try {
@@ -193,6 +202,8 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     } finally {
       await queue.obliterate({ force: true });
       await queue.close();
+      await dlqQueue.obliterate({ force: true });
+      await dlqQueue.close();
       await app?.close();
     }
   });
@@ -214,6 +225,16 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     const logger: EventsConsumerLogger = { error: errorSpy };
 
     const queue = new Queue<CaptureEvent>(EVENTS_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    // [test isolation] A single-attempt job that fails is immediately
+    // "exhausted", so onFailed() (T3.1.5's DlqService.send() call) writes a
+    // real entry to EVENTS_DLQ_QUEUE here too, even though the assertions
+    // below only inspect errorSpy, not the DLQ queue directly. Same
+    // leftover-state risk documented in IMPLEMENTATION-NOTES.md's T3.1.5
+    // note — obliterate it in this test's own cleanup, not just
+    // EVENTS_QUEUE.
+    const dlqQueue = new Queue(EVENTS_DLQ_QUEUE, {
       connection: { url: redis.url, maxRetriesPerRequest: null },
     });
 
@@ -273,6 +294,8 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
     } finally {
       await queue.obliterate({ force: true });
       await queue.close();
+      await dlqQueue.obliterate({ force: true });
+      await dlqQueue.close();
       await app?.close();
     }
   });
@@ -312,16 +335,17 @@ describe('EventsConsumer — real BullMQ (testcontainers Redis)', () => {
 
     let app: INestApplicationContext | undefined;
     try {
-      // Earlier tests in this describe block share one Redis container
-      // and never obliterate EVENTS_DLQ_QUEUE themselves (a pre-existing
-      // gap, not something this test's own fix touches) — worse, several
-      // of them DO obliterate EVENTS_QUEUE in their own `finally`, which
-      // resets ITS auto-increment job-id counter, so a later test's
-      // auto-generated `job.id` can coincidentally collide with an
-      // `originalJobId` an earlier, never-cleaned-up DLQ entry already
-      // recorded. Filtering by id is therefore not reliable either —
-      // clearing this queue's own state up front is what actually
-      // guarantees the length assertion below means what it says.
+      // Earlier tests in this describe block share one Redis container.
+      // They now ALSO obliterate EVENTS_DLQ_QUEUE in their own `finally`
+      // (test-isolation fix — see IMPLEMENTATION-NOTES.md's T3.1.5 note),
+      // closing the gap where they used to reset only EVENTS_QUEUE's
+      // auto-increment job-id counter in their own cleanup and leave DLQ
+      // entries behind — a later test's freshly auto-generated `job.id`
+      // could otherwise coincidentally collide with an `originalJobId` an
+      // earlier, un-cleaned DLQ entry had already recorded. This call
+      // stays anyway as an explicit, ordering-independent guarantee: this
+      // test's own correctness should never depend on every other test in
+      // the file having remembered its own cleanup.
       await dlqQueue.obliterate({ force: true });
 
       app = await NestFactory.createApplicationContext(
