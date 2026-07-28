@@ -239,8 +239,20 @@ function sanitizeForPostgresText(value: string | null): string | null {
  * through `sanitizeForPostgresText` — see that function's own docstring
  * for why this cannot be narrowed to `userAgent` alone: the Postgres
  * constraint it works around applies uniformly to every `text` column,
- * not specifically to User-Agent. */
-function toNewEventRow(logged: LoggedEvent): NewEvent {
+ * not specifically to User-Agent.
+ *
+ * EXPORTED as of T3.6.3 — apps/worker/src/cli/replay-driver.ts is the
+ * second real caller. `LoggedEvent` is EXACTLY what `streamEventLog`
+ * (packages/core/src/r2/ndjson.ts, T3.6.2) yields back off an archived
+ * NDJSON line, so this same column mapping applies unchanged to a
+ * replayed record — no second, drifting copy of the 31-field mapping
+ * lives in the replay driver. The live path (`flushBatch` below) builds
+ * its own `LoggedEvent`s fresh via `toLoggedEvent` (which calls
+ * `enrich()`/`resolveDestinationsByLinkIds` first); replay never does —
+ * it hands this function a `LoggedEvent` it read verbatim off R2, dest_host
+ * and all, which is the whole point (see replay-driver.ts's own header on
+ * why re-deriving dest_host at replay time would silently rewrite history). */
+export function toNewEventRow(logged: LoggedEvent): NewEvent {
   return {
     eventId: logged.event_id,
     occurredAt: new Date(logged.occurred_at),
