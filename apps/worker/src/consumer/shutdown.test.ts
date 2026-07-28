@@ -13,6 +13,8 @@ import {
 import type { CaptureEvent } from '@posta/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../app.module';
+import { BATCH_ACCUMULATOR, EventsConsumer } from './events.consumer';
+import type { BatchAccumulator } from '../batch/accumulator';
 
 // T3.1.6 [E3, S3.1] — the plan's own literal verify command for this
 // task: "fills a partial batch of 30, triggers onModuleDestroy, and
@@ -43,13 +45,46 @@ import { AppModule } from '../app.module';
 // it to finish" with no separate synchronization needed; the row-count
 // assertion runs immediately afterward, on the same tick.
 //
-// "PARTIAL BATCH" MEANS ACCUMULATED, NOT MERELY ENQUEUED: waiting for all
-// 30 jobs to reach BullMQ's `'completed'` state before calling
-// `app.close()` is what proves the events are actually sitting inside the
-// accumulator (not just still waiting in Redis) at the moment shutdown is
-// triggered — `AccumulatingEventSink.handle()` (events.consumer.ts) can
-// never reject, so a job only reaches `'completed'` once
-// `accumulator.add()` has already run for it.
+// "PARTIAL BATCH" MEANS ACCUMULATED, NOT MERELY ENQUEUED [T3.5.4 —
+// REVISED FIXTURE MECHANISM, SAME CLAIM]: this test used to wait for all
+// 30 jobs to reach BullMQ's `'completed'` state as its proof the
+// accumulator was genuinely holding a partial, unflushed batch —
+// `AccumulatingEventSink.handle()` used to be unable to reject, so
+// `'completed'` could only mean `accumulator.add()` had already run.
+// [T3.5.4] made that signal a CONTRADICTION with what this test is
+// proving: `add()` now returns a `Promise<void>` that settles only once
+// its batch flushes, so `handle()` — and therefore the job's own
+// `process()` call — cannot resolve, and the job cannot reach
+// `'completed'`, until AFTER a flush. Waiting for `completed === 30`
+// would just time out waiting for a flush this test explicitly configures
+// to never happen automatically (`BATCH_SIZE_NEVER_HIT`/
+// `BATCH_INTERVAL_MS_NEVER_HIT` below). This is fixing the test's
+// FIXTURE-SETUP MECHANISM to match an intentionally-changed contract, not
+// weakening what it proves — the claim ("30 buffered-but-unflushed events
+// survive a graceful shutdown, exactly once, no loss") is unchanged; only
+// HOW the test detects "buffered" changes.
+//
+// The new signal: `BatchAccumulator.size()` (BATCH_ACCUMULATOR, the same
+// DI token production wires `AccumulatingEventSink`/`ShutdownService`
+// through) reaching exactly 30 — this is the accumulator's own open-batch
+// item count, so it can ONLY be 30 once all 30 `add()` calls have pushed
+// their event into it, independent of whether any of those calls has
+// settled yet. Reading it requires no test double and no change to
+// production wiring, just `app.get(BATCH_ACCUMULATOR)` against the SAME
+// `INestApplicationContext` this test already boots.
+//
+// GETTING 30 SIMULTANEOUSLY IN-FLIGHT: with 30 events all blocking inside
+// `add()` until a flush unblocks them, `EventsConsumer`'s own BullMQ
+// `Worker` needs `concurrency >= 30` for all 30 to be dispatched to
+// `process()` at once — `@Processor(EVENTS_QUEUE, { concurrency:
+// readWorkerConcurrency() })`'s default (8) is fixed at MODULE-LOAD time
+// (the decorator evaluates once, at import), not reconfigurable through
+// `AppModuleConfig` here. `Worker` exposes a public `concurrency` setter
+// (verified against the installed bullmq@5.80.10 types/source) that takes
+// effect immediately post-construction — `app.get(EventsConsumer).worker
+// .concurrency = PARTIAL_BATCH_SIZE` below sidesteps the module-load-time
+// env-var timing problem entirely, with no process env var and no rebuild
+// needed for this in-process test.
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 120_000 });
 
@@ -134,6 +169,7 @@ describe('ShutdownService — graceful shutdown flushes the in-memory batch (T3.
   let pg: PgContainerHandle;
   let app: INestApplicationContext;
   let queue: Queue<CaptureEvent>;
+  let accumulator: BatchAccumulator<CaptureEvent>;
   let pushedEvents: CaptureEvent[];
   let rowCountBeforeShutdown: number;
   let rowCountAfterShutdown: number;
@@ -162,20 +198,24 @@ describe('ShutdownService — graceful shutdown flushes the in-memory batch (T3.
       connection: { url: redis.url, maxRetriesPerRequest: null },
     });
 
+    // [T3.5.4] See this file's own header, "GETTING 30 SIMULTANEOUSLY
+    // IN-FLIGHT" — the default WORKER_CONCURRENCY (8) cannot hold all 30
+    // pushed events blocked in add() at once.
+    accumulator = app.get<BatchAccumulator<CaptureEvent>>(BATCH_ACCUMULATOR);
+    app.get(EventsConsumer).worker.concurrency = PARTIAL_BATCH_SIZE;
+
     pushedEvents = Array.from({ length: PARTIAL_BATCH_SIZE }, (_unused, index) =>
       buildCaptureEvent({ slug: `promo-${index}` }),
     );
     await Promise.all(pushedEvents.map((event) => queue.add('capture', event)));
 
-    // Waits for every pushed job to reach 'completed' — the signal that
-    // AccumulatingEventSink.handle() (and therefore accumulator.add())
-    // has already run for all 30, so the accumulator is genuinely holding
-    // a partial, unflushed batch at this point (see this file's own
-    // header).
+    // [T3.5.4] Waits for the accumulator's own open-batch size to reach
+    // 30 — see this file's own header, "PARTIAL BATCH MEANS ACCUMULATED,
+    // NOT MERELY ENQUEUED", for why this replaced waiting on BullMQ's
+    // `'completed'` job state.
     await vi.waitFor(
-      async () => {
-        const counts = await queue.getJobCounts('completed');
-        expect(counts.completed).toBe(PARTIAL_BATCH_SIZE);
+      () => {
+        expect(accumulator.size()).toBe(PARTIAL_BATCH_SIZE);
       },
       { timeout: 30_000, interval: 100 },
     );

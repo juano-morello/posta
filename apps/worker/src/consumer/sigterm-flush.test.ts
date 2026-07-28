@@ -1,6 +1,6 @@
 import path from 'node:path';
 import net from 'node:net';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { Queue } from 'bullmq';
 import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, newId, runSqlMigrations } from '@posta/core';
 import {
@@ -11,6 +11,8 @@ import {
 } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { WorkerHealthStatus } from '../health.controller';
+import { buildWorkerExclusively, spawnWorkerExclusively } from '../test/pipeline-harness-process';
 
 // T3.1.8 [E3, S3.1] — T3.1.6's shutdown.test.ts already proves the LOGIC
 // (ShutdownService.onModuleDestroy() pauses the BullMQ worker and calls
@@ -19,8 +21,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 // torn down by calling `app.close()` directly — never a real OS signal,
 // never a real process boundary. This file proves the other half: that a
 // REAL, COMPILED worker process, run exactly the way Kubernetes runs it
-// (`node apps/worker/dist/main.js`, this file's own `MAIN_JS_PATH`/
-// `REPO_ROOT` below reconstructing the Dockerfile's own `WORKDIR /app` +
+// (`node apps/worker/dist/main.js`, via `spawnWorkerExclusively()` —
+// pipeline-harness-process.ts's own `MAIN_JS_PATH`/`REPO_ROOT`
+// reconstruct the Dockerfile's own `WORKDIR /app` +
 // `CMD ["node", "apps/worker/dist/main.js"]`), receiving a REAL `SIGTERM`
 // from `child_process.kill()`, actually reaches the same `process.exit(0)`
 // `main.ts`'s `app.enableShutdownHooks(['SIGTERM'], { useProcessExit: true
@@ -39,6 +42,26 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 // image-smoke.test.ts's own "must be runnable on its own, not conditional
 // on a prior build having already happened by hand" discipline) rather
 // than assuming a fresh `dist/` is already sitting there.
+//
+// [T3.5.4 fix-forward] THIS FILE USED TO BUILD WITHOUT THE SHARED LOCK —
+// found running this file's own regression sweep ALONGSIDE
+// apps/worker/src/test/**'s own harness-based files (T3.5.1's
+// `startPipelineHarness()`, whose `buildWorkerExclusively()` guards every
+// concurrent build of this SAME `apps/worker/dist/` output with a
+// cross-process `fs.mkdirSync` lock — pipeline-harness-process.ts's own
+// header explains why: `nest build`'s `deleteOutDir: true` wipes and
+// recreates the whole directory on every run). This file predates that
+// harness (T3.1.8 vs. T3.5.1) and had its own independent, UNLOCKED
+// `buildWorker()` — invisible as a problem in isolation, but running
+// `pnpm test sigterm-flush.test.ts e2e-*.test.ts pipeline-harness.test.ts
+// ...` together (vitest's own default file-level parallelism) let this
+// file's unlocked rebuild wipe `dist/` out from under an already-spawned
+// sibling worker process, which then failed to boot with `Cannot find
+// module '.../apps/worker/dist/main.js'` — a real, reproducible failure,
+// not a flake in the assertions themselves. Fixed by using the SAME
+// `buildWorkerExclusively()` every other apps/worker/src/test/** file
+// already shares, rather than this file's own parallel, unlocked
+// reimplementation.
 //
 // R2 MUST BE REAL TOO [T3.4.6]: flush.ts now PUTs to R2 BEFORE the
 // Postgres INSERT, awaited to completion — a flush this test's SIGTERM
@@ -118,8 +141,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 240_000 });
 
-const REPO_ROOT = process.cwd();
-const MAIN_JS_PATH = path.join('apps', 'worker', 'dist', 'main.js');
 const MIGRATIONS_DIR = path.join(
   path.dirname(require.resolve('@posta/core/package.json')),
   'migrations',
@@ -148,11 +169,9 @@ const BATCH_SIZE_NEVER_HIT = 500;
 const BATCH_INTERVAL_MS_NEVER_HIT = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-const BUILD_TIMEOUT_MS = 120_000;
 const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
 const JOBS_COMPLETED_TIMEOUT_MS = 30_000;
-const JOBS_COMPLETED_POLL_INTERVAL_MS = 100;
 // Comfortably above SHUTDOWN_TIMEOUT_MS — real OS process-exit/scheduling
 // overhead on top of the bounded shutdown sequence itself.
 const EXIT_WAIT_TIMEOUT_MS = 30_000;
@@ -212,31 +231,6 @@ async function countEventsRows(pg: PgContainerHandle): Promise<number> {
   return Number(result.rows[0]?.count ?? '0');
 }
 
-/** Builds and rebuilds `apps/worker/dist/` from current source — the SAME
- * `nest build` the Dockerfile's own build stage runs, so this test never
- * relies on a `dist/` some prior, unrelated command happened to leave
- * behind. Mirrors tests/containers/image-smoke.test.ts's own
- * `runDocker`/apps/worker/src/batch/coupled-writes.test.ts's own
- * `runDocker`: throws with full stdout+stderr context on any non-zero
- * exit, a timeout kill, or a spawn failure. */
-function buildWorker(): void {
-  const result = spawnSync('pnpm', ['--filter', '@posta/worker', 'run', 'build'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    timeout: BUILD_TIMEOUT_MS,
-  });
-
-  if (result.error) {
-    throw new Error(`Failed to spawn "pnpm --filter @posta/worker run build": ${result.error.message}`);
-  }
-  if (result.status !== 0 || result.signal) {
-    throw new Error(
-      `"pnpm --filter @posta/worker run build" exited status=${result.status} signal=${result.signal}:\n` +
-        `${result.stdout}\n${result.stderr}`,
-    );
-  }
-}
-
 /** Grabs an ephemeral, currently-free TCP port on the IPv4 loopback by
  * binding a throwaway server to port 0 and reading back what the OS
  * assigned, then releasing it — the same small, bounded TOCTOU tradeoff
@@ -264,32 +258,6 @@ async function getFreePort(): Promise<number> {
       });
     });
   });
-}
-
-/** Spawns the real, compiled worker entrypoint exactly as the Dockerfile's
- * own `CMD ["node", "apps/worker/dist/main.js"]` does — `cwd: REPO_ROOT`
- * plus a repo-relative path, mirroring that `WORKDIR /app` + relative-CMD
- * pairing, not `apps/worker` as cwd. `stdio: ['ignore', 'pipe', 'pipe']`:
- * this test never writes to the child's stdin, and buffering stdout/stderr
- * (rather than inheriting them straight to the test runner's own output)
- * keeps a passing run's console clean while still preserving everything
- * needed for a failing run's own error messages below. */
-function spawnWorker(env: NodeJS.ProcessEnv): { child: ChildProcess; getOutput: () => string } {
-  const child = spawn('node', [MAIN_JS_PATH], {
-    cwd: REPO_ROOT,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  let output = '';
-  child.stdout?.on('data', (chunk: Buffer) => {
-    output += chunk.toString('utf8');
-  });
-  child.stderr?.on('data', (chunk: Buffer) => {
-    output += chunk.toString('utf8');
-  });
-
-  return { child, getOutput: () => output };
 }
 
 /** Polls `GET /health` until it answers (200 or 503 — see this file's own
@@ -330,6 +298,40 @@ async function waitForHealth(
 
   throw new Error(
     `worker /health did not answer within ${timeoutMs}ms — last error: ${lastError}\noutput:\n${getOutput()}`,
+  );
+}
+
+/** [T3.5.4] Polls `GET /health` until its `batch_size` field reaches
+ * `target` — the child-process analog of shutdown.test.ts's own
+ * `accumulator.size()` poll (that file's `app.get(BATCH_ACCUMULATOR)` has
+ * no equivalent here: this test's worker is a REAL, separate OS process,
+ * not something this file holds a direct handle into). `batch_size` is
+ * `HealthController`'s own `this.accumulator.size()`
+ * (health.controller.ts) exposed over the wire — the exact same
+ * open-batch item count, remotely readable. Replaces this file's former
+ * wait on BullMQ's `'completed'` job state, which — under [T3.5.4]'s
+ * `accumulator.add()` returning a `Promise<void>` that only settles once
+ * its batch flushes — can no longer reach `'completed'` while genuinely
+ * unflushed, the exact contradiction shutdown.test.ts's own header
+ * documents in full. This is fixing the fixture-setup MECHANISM to match
+ * the intentionally-changed contract, not weakening the claim: "N buffered
+ * events survive a graceful SIGTERM shutdown, exactly once, no loss" is
+ * unchanged; only how this test detects "buffered" changes. */
+async function waitForBatchSize(port: number, target: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastBody: WorkerHealthStatus | undefined;
+
+  while (Date.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    lastBody = (await response.json()) as WorkerHealthStatus;
+    if (lastBody.batch_size === target) return;
+
+    await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_INTERVAL_MS));
+  }
+
+  throw new Error(
+    `worker /health's batch_size did not reach ${target} within ${timeoutMs}ms — last observed: ` +
+      `${JSON.stringify(lastBody)}`,
   );
 }
 
@@ -377,7 +379,10 @@ describe('worker survives SIGTERM mid-batch — real child process, real Redis +
   let eventsQueueFailedAfterExit: number;
 
   beforeAll(async () => {
-    buildWorker();
+    // [T3.5.4 fix-forward] See this file's own header — was a local,
+    // unlocked `buildWorker()`; now the same cross-process-locked helper
+    // every apps/worker/src/test/** harness file already shares.
+    await buildWorkerExclusively();
 
     [redis, pg] = await Promise.all([startRedisContainer(), startPgContainer()]);
     await runSqlMigrations(pg.pool, { migrationsDir: MIGRATIONS_DIR });
@@ -394,7 +399,11 @@ describe('worker survives SIGTERM mid-batch — real child process, real Redis +
     await dlqQueue.obliterate({ force: true });
 
     const port = await getFreePort();
-    const spawned = spawnWorker({
+    // [T3.5.4 fix-forward] spawnWorkerExclusively(), not a bare
+    // spawnWorker() — see that function's own header (pipeline-harness
+    // -process.ts) for the real, reproduced "Cannot find module main.js"
+    // race it closes.
+    const spawned = await spawnWorkerExclusively({
       ...process.env,
       DATABASE_URL_WORKER: pg.url,
       DB_POOL_MAX: String(TEST_DB_POOL_MAX),
@@ -410,6 +419,13 @@ describe('worker survives SIGTERM mid-batch — real child process, real Redis +
       EVENT_BATCH_SIZE: String(BATCH_SIZE_NEVER_HIT),
       EVENT_BATCH_INTERVAL_MS: String(BATCH_INTERVAL_MS_NEVER_HIT),
       SHUTDOWN_TIMEOUT_MS: String(SHUTDOWN_TIMEOUT_MS),
+      // [T3.5.4] See this file's own `waitForBatchSize()` doc comment —
+      // the default WORKER_CONCURRENCY (8) cannot hold all 250 pushed
+      // events blocked in add() at once; this is evaluated at CHILD
+      // PROCESS module-load time, so — unlike shutdown.test.ts's own
+      // in-process `worker.concurrency =` setter — it must be set via the
+      // env object the child process actually boots with.
+      WORKER_CONCURRENCY: String(EVENT_COUNT),
     });
     child = spawned.child;
     getChildOutput = spawned.getOutput;
@@ -421,18 +437,10 @@ describe('worker survives SIGTERM mid-batch — real child process, real Redis +
     );
     await Promise.all(pushedEvents.map((event) => eventsQueue.add('capture', event)));
 
-    // Waits for every pushed job to reach 'completed' — the signal that
-    // AccumulatingEventSink.handle() (and therefore accumulator.add(), in
-    // the CHILD process) has already run for all 250, so the accumulator
-    // is genuinely holding a partial, unflushed batch by the time SIGTERM
-    // is sent — see this file's own header.
-    await vi.waitFor(
-      async () => {
-        const counts = await eventsQueue.getJobCounts('completed');
-        expect(counts.completed).toBe(EVENT_COUNT);
-      },
-      { timeout: JOBS_COMPLETED_TIMEOUT_MS, interval: JOBS_COMPLETED_POLL_INTERVAL_MS },
-    );
+    // [T3.5.4] Waits for the worker's own reported batch_size to reach
+    // 250 — see this file's own `waitForBatchSize()` doc comment for why
+    // this replaced waiting on BullMQ's `'completed'` job state.
+    await waitForBatchSize(port, EVENT_COUNT, JOBS_COMPLETED_TIMEOUT_MS);
 
     rowCountBeforeSigterm = await countEventsRows(pg);
 

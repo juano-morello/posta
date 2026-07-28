@@ -21,6 +21,7 @@ import {
 import { startPgContainer, startRedisContainer, type PgContainerHandle, type RedisContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { AppModule } from '../app.module';
+import { EventsConsumer } from '../consumer/events.consumer';
 import type { BatchFlushCallback } from './accumulator';
 import { createFlushBatch, type FlushBatch } from './flush';
 
@@ -93,6 +94,19 @@ import { createFlushBatch, type FlushBatch } from './flush';
 // Redis testcontainers (see this task's own commit message / PR
 // description for the measured events/sec and p95 this file's own
 // beforeAll produced), with generous headroom on top, not a blind guess.
+//
+// [T3.5.4] BATCH_SIZE (100) MUST NOT EXCEED THE WORKER'S OWN CONCURRENCY:
+// `accumulator.add()` now blocks its caller until its batch flushes
+// (accumulator.ts's own T3.5.4 header), so at most `concurrency` events
+// can ever be simultaneously "added but not yet flushed" — each one
+// occupying a `process()` call that hasn't returned. With the default
+// `WORKER_CONCURRENCY` (8), the count trigger configured for 100 could
+// never fire; only the (here deliberately 10-minutes-away) interval
+// trigger would, stalling this benchmark past its own timeout. `beforeAll`
+// below bumps `app.get(EventsConsumer).worker.concurrency` to `BATCH_SIZE`
+// right after booting — the same public setter (verified against the
+// installed bullmq@5.80.10 types) shutdown.test.ts's own T3.5.4 fixture
+// update uses, for the identical reason.
 const BATCH_SIZE = 100;
 const TOTAL_EVENTS = 10_000;
 const NUM_BATCHES = TOTAL_EVENTS / BATCH_SIZE;
@@ -358,6 +372,8 @@ describe('flushBatch through the real BullMQ pipeline — 10k event throughput (
         flush: timedFlush,
       }),
     );
+    // [T3.5.4] See BATCH_SIZE's own comment above.
+    app.get(EventsConsumer).worker.concurrency = BATCH_SIZE;
 
     const events: CaptureEvent[] = Array.from({ length: TOTAL_EVENTS }, (_unused, index) =>
       buildCaptureEvent({ tenant_id: tenantId, link_id: linkId, slug: 'promo', http_method: index % 2 === 0 ? 'GET' : 'HEAD' }),

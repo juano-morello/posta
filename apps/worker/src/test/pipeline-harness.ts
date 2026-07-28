@@ -19,7 +19,7 @@ import {
   seedTenant,
 } from './pipeline-harness-fixtures';
 import { cleanupAll, getFreePort, sleep } from './pipeline-harness-cleanup';
-import { buildWorkerExclusively, fetchHealth, spawnWorker, stopWorkerProcess, waitForHealth } from './pipeline-harness-process';
+import { buildWorkerExclusively, fetchHealth, spawnWorkerExclusively, stopWorkerProcess, waitForHealth } from './pipeline-harness-process';
 
 // T3.5.1 [E3, S3.5] — the shared harness this whole story's own dispatch
 // brief names directly: "every test in this story reuses it rather than
@@ -97,6 +97,21 @@ import { buildWorkerExclusively, fetchHealth, spawnWorker, stopWorkerProcess, wa
 // will trip the count trigger repeatedly instead, producing MANY objects
 // under the same prefix — expected and fine; nothing about this harness
 // assumes "always exactly one".)
+//
+// [T3.5.4] THIS CLAIM DEPENDS ON WORKER_CONCURRENCY >= batchSize, NOW SET
+// EXPLICITLY BELOW: `BatchAccumulator.add()` blocks its caller until its
+// own batch flushes, so at most WORKER_CONCURRENCY events can ever be
+// simultaneously "added but not yet flushed" at once — with the OLD
+// default (8), a 10-event push would silently split into an 8-event batch
+// (flushed once the interval trigger fires) and a 2-event batch
+// (dispatched only once the first 8's `process()` calls return, opening
+// and later flushing a SECOND batch of its own) — two objects, not one,
+// and not because of anything wrong with `drain()`'s own three-signal
+// wait (it still correctly waits out both flushes before returning).
+// Setting `WORKER_CONCURRENCY` to match `batchSize` below is what
+// restores "every pushed event can be simultaneously in-flight, so only
+// the trigger this file's own comments describe ever fires" for any
+// push() up to `batchSize` events.
 //
 // The `occurredAt` itself is a RANDOMIZED day inside a fixed 8-year
 // window (2080-2087) that this task deliberately claims for itself,
@@ -278,22 +293,13 @@ export async function startPipelineHarness(options: PipelineHarnessOptions = {})
   const [redis, pg] = await Promise.all([startRedisContainer(), startPgContainer()]);
   await runSqlMigrations(pg.pool, { migrationsDir: MIGRATIONS_DIR });
 
-  const tenantId = await seedTenant(pg);
-  const linkId = await seedLink(pg, tenantId, HARNESS_SLUG, HARNESS_DESTINATION);
-  const occurredAt = pickHarnessOccurredAt();
-
-  const queue = new Queue<CaptureEvent>(EVENTS_QUEUE, {
-    connection: { url: redis.url, maxRetriesPerRequest: null },
-  });
-  // [test-isolation discipline] Belt-and-suspenders even against this
-  // harness's own FRESH testcontainers Redis — same reasoning
-  // sigterm-flush.test.ts's own header gives for the identical call.
-  await queue.obliterate({ force: true });
-
-  const r2Client = createR2Client(REAL_R2_CONFIG);
-
   const port = await getFreePort();
-  const spawned = spawnWorker({
+  // [T3.5.4 fix-forward] spawnWorkerExclusively(), not a bare
+  // spawnWorker() — see that function's own header for the real,
+  // reproduced "Cannot find module main.js" race it closes (a concurrent
+  // sibling test file's own build landing between this call and the
+  // moment this process actually resolves `dist/main.js`).
+  const spawned = await spawnWorkerExclusively({
     ...process.env,
     DATABASE_URL_WORKER: pg.url,
     DB_POOL_MAX: String(TEST_DB_POOL_MAX),
@@ -309,9 +315,33 @@ export async function startPipelineHarness(options: PipelineHarnessOptions = {})
     EVENT_BATCH_SIZE: String(batchSize),
     EVENT_BATCH_INTERVAL_MS: String(batchIntervalMs),
     SHUTDOWN_TIMEOUT_MS: String(shutdownTimeoutMs),
+    // [T3.5.4] `BatchAccumulator.add()` now blocks its caller until its
+    // batch flushes, so at most WORKER_CONCURRENCY events can ever be
+    // simultaneously "added but not yet flushed" — see events.consumer.ts's
+    // own T3.5.4 header. Matching it to `batchSize` (not leaving it at the
+    // default, 8) is what keeps this file's own "ONE BATCH, ONE OBJECT"
+    // and "the count trigger fires 20 times for 10k events" claims true:
+    // with the default concurrency, a push() larger than 8 would silently
+    // split across several small, interval-triggered batches instead of
+    // the documented count-triggered ones.
+    WORKER_CONCURRENCY: String(batchSize),
   });
 
   await waitForHealth(spawned.child, port, spawned.getOutput);
+
+  const tenantId = await seedTenant(pg);
+  const linkId = await seedLink(pg, tenantId, HARNESS_SLUG, HARNESS_DESTINATION);
+  const occurredAt = pickHarnessOccurredAt();
+
+  const queue = new Queue<CaptureEvent>(EVENTS_QUEUE, {
+    connection: { url: redis.url, maxRetriesPerRequest: null },
+  });
+  // [test-isolation discipline] Belt-and-suspenders even against this
+  // harness's own FRESH testcontainers Redis — same reasoning
+  // sigterm-flush.test.ts's own header gives for the identical call.
+  await queue.obliterate({ force: true });
+
+  const r2Client = createR2Client(REAL_R2_CONFIG);
 
   // Set on every push() below — drain() reads it to know which flush(es)
   // could possibly contain the events THIS push produced. Initialized to

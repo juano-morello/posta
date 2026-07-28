@@ -256,7 +256,12 @@ describe('BatchAccumulator — flushNow()', () => {
       logger,
     });
 
-    accumulator.add('a');
+    // [T3.5.4] add() now returns Promise<void>, settling with the SAME
+    // batch outcome flushNow() itself resolves/rejects with below — caught
+    // here (this test's own concern is flushNow()'s contract, already
+    // asserted via the `rejects.toBe` below) purely to keep this call from
+    // becoming an unhandled rejection once its batch's flush fails.
+    accumulator.add('a').catch(() => {});
 
     await expect(accumulator.flushNow()).rejects.toBe(flushError);
     expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -302,7 +307,11 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
       logger,
     });
 
-    expect(() => accumulator.add('a')).not.toThrow();
+    // [T3.5.4] add() now returns Promise<void> — wrapped with its own
+    // no-op .catch() so this batch's (expected) flush failure settles
+    // quietly instead of becoming an unhandled rejection; `.not.toThrow()`
+    // still asserts add()'s own SYNCHRONOUS body never throws, unchanged.
+    expect(() => accumulator.add('a').catch(() => {})).not.toThrow();
 
     await vi.advanceTimersByTimeAsync(0);
 
@@ -328,7 +337,8 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
       logger,
     });
 
-    accumulator.add('a');
+    // [T3.5.4] See the previous test's own comment — same reasoning.
+    accumulator.add('a').catch(() => {});
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -352,7 +362,8 @@ describe('BatchAccumulator — flush failure logging on the two automatic trigge
         flush,
       });
 
-      accumulator.add('a');
+      // [T3.5.4] See the earlier tests in this describe block for why.
+      accumulator.add('a').catch(() => {});
       await vi.advanceTimersByTimeAsync(0);
 
       expect(consoleSpy).toHaveBeenCalledTimes(1);
@@ -383,7 +394,11 @@ describe('BatchAccumulator — a throwing logger never masks the original flush 
       logger,
     });
 
-    accumulator.add('a');
+    // [T3.5.4] Caught for the same reason as every other "flushNow()
+    // asserts the rejection" test above — add()'s OWN returned promise
+    // settles with the same batch outcome, and is left otherwise unhandled
+    // here since this test's assertion is on flushNow()'s own promise.
+    accumulator.add('a').catch(() => {});
 
     // The caller must see flushError (the real cause), never loggerError
     // (a side effect of trying to report it).
@@ -411,14 +426,18 @@ describe('BatchAccumulator — a throwing logger never masks the original flush 
     });
 
     // add() itself must not throw — even though BOTH the flush callback
-    // AND the logger it reports through reject/throw.
-    expect(() => accumulator.add('a')).not.toThrow();
+    // AND the logger it reports through reject/throw. [T3.5.4] add()'s own
+    // returned promise is caught here too, for the same "would otherwise
+    // be an unhandled rejection" reason as every sibling test above.
+    expect(() => accumulator.add('a').catch(() => {})).not.toThrow();
     await vi.advanceTimersByTimeAsync(0);
 
     // The accumulator must still be usable: a fresh batch opens and
     // flushes normally afterward, proving the compounding failure above
-    // left no internal state corrupted.
-    accumulator.add('b');
+    // left no internal state corrupted. [T3.5.4] Still batchSize: 1, so
+    // this ALSO immediately triggers (and rejects) a second flush —
+    // caught for the same reason.
+    accumulator.add('b').catch(() => {});
     expect(flush).toHaveBeenCalledTimes(2);
     expect(flush.mock.calls[1]![0]).toEqual(['b']);
   });

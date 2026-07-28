@@ -15,6 +15,43 @@ import { newId } from '@posta/core';
 // deliberately NOT this file's job, so this class takes plain
 // already-validated numbers rather than reading `process.env` itself.
 //
+// [T3.5.4 — DURABILITY, THE CONTRACT INVERTS] `add()` used to be
+// genuinely fire-and-forget: it returned `void`, never awaited the flush
+// callback even when its own call was the one that tripped the count
+// trigger, and any rejection from a triggered flush was caught and
+// logged INSIDE this class, never surfaced to `add()`'s own caller. That
+// was deliberate at the time (S3.3's own framing: a flush the callback
+// itself makes slow — a real Postgres/R2 write — must never make `add()`
+// itself slow) but it had a consequence nobody traced through until
+// T3.5.4: `apps/worker/src/consumer/events.consumer.ts`'s
+// `AccumulatingEventSink.handle()` forwarded straight to `add()` and
+// therefore resolved the INSTANT an event was handed to this class — long
+// before that event's batch ever reached Postgres/R2. BullMQ's own
+// `EventsConsumer.process()` awaits `sink.handle()` and marks the job
+// `'completed'` the moment it resolves, so an event sitting in a partial,
+// still-open batch looked "done" to BullMQ's own bookkeeping — no
+// expiring lock, nothing left for a second worker to redeliver — while it
+// was, in fact, only sitting in this class's memory. A SIGKILL between
+// "accumulated" and "flushed" lost it permanently and silently; proven
+// empirically before this class changed (see shutdown.ts's own header
+// for the redesign this forced on the shutdown path too).
+//
+// `add()` now returns `Promise<void>` — resolving or rejecting once the
+// batch THIS SPECIFIC event landed in actually settles, one way or the
+// other (see the per-batch `waiters` list on `OpenBatch<T>` below).
+// `add()`'s own BODY is exactly as synchronous as it ever was — the event
+// is pushed, the batch is swapped, a promise is constructed and handed
+// back — none of that blocks on I/O, and a triggered flush is still
+// fire-and-forget from `add()`'s OWN perspective (`void
+// this.triggerFlush().catch(...)`, unchanged below). What changed is that
+// the RETURNED promise now carries the real outcome, so a caller who
+// needs durability (`AccumulatingEventSink.handle()`) can `await` it, and
+// BullMQ only acks the job once its event has genuinely reached the flush
+// callback's own stores. A caller with no durability need remains free to
+// call `void accumulator.add(x).catch(() => {})` — this class does not
+// enforce that every caller awaits, it only makes the information
+// available.
+//
 // GENERIC OVER T, NOT FIXED TO CaptureEvent: this class only ever counts
 // and holds opaque items — it inspects nothing about their shape — so
 // tying it to `@posta/contracts`'s `CaptureEvent` would be an import this
@@ -42,15 +79,17 @@ import { newId } from '@posta/core';
 //
 // SWAP-BEFORE-INVOKE, THE CORE SAFETY PROPERTY: whichever trigger fires
 // (count, interval, or a manual flushNow()), `triggerFlush()` detaches
-// the current batch (clears its timer, sets `this.currentBatch` to
-// `null`) SYNCHRONOUSLY, before ever calling the injected `flush`
-// callback — which may itself be slow (a future Postgres/R2 write) and
-// is never awaited by the trigger that caused it. Any event added while
-// that callback is still in flight therefore always finds
-// `this.currentBatch === null` (or a newer batch already open from a
-// later add()) and opens/joins a FRESH batch with its own new id and
-// timer — it can never be silently appended to (or race against) the
-// array already handed to the in-flight callback. accumulator.test.ts's
+// the current batch — its `events`, and now also its `waiters` (T3.5.4:
+// one per `add()` call still waiting on this batch's outcome) — clears
+// its timer, and sets `this.currentBatch` to `null`, SYNCHRONOUSLY,
+// before ever calling the injected `flush` callback — which may itself be
+// slow (a real Postgres/R2 write) and is never awaited by the trigger
+// that caused it. Any event added while that callback is still in flight
+// therefore always finds `this.currentBatch === null` (or a newer batch
+// already open from a later add()) and opens/joins a FRESH batch with its
+// own new id, its own new (empty) waiter list, and its own timer — it can
+// never be silently appended to (or race against) the array/waiters
+// already handed to the in-flight callback. accumulator.test.ts's
 // "in-flight flush" scenario exercises exactly this by holding a flush
 // callback's promise open with a manually-resolved deferred and adding
 // more events while it's pending.
@@ -93,14 +132,32 @@ export interface BatchAccumulatorOptions<T> {
   readonly logger?: BatchAccumulatorLogger;
 }
 
+/** [T3.5.4] One per `add()` call still waiting on ITS batch's outcome —
+ * `resolve`/`reject` are the executor callbacks off the `Promise<void>`
+ * that specific `add()` call returned. Never called directly by anything
+ * outside `runFlush()` (below), and never rejects/resolves more than once
+ * per batch (a batch settles exactly once, success or failure, per this
+ * class's own "swap before invoke" design). */
+interface Waiter {
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
+}
+
 /** A batch's own snapshot: minted once when it opens (see `startBatch()`)
  * and never mutated in place afterward — `add()` always replaces
- * `this.currentBatch` with a new object carrying a new `events` array,
- * per this codebase's own immutability convention (CLAUDE.md), rather
- * than pushing onto the existing array. */
+ * `this.currentBatch` with a new object carrying a new `events` array
+ * (and, per [T3.5.4], a new `waiters` array), per this codebase's own
+ * immutability convention (CLAUDE.md), rather than pushing onto the
+ * existing arrays. `waiters[i]` corresponds to `events[i]` by construction
+ * (both arrays only ever grow by exactly one element per `add()` call,
+ * together) — nothing here needs a shared index to be read back out,
+ * since every waiter in a batch settles identically, alongside every
+ * other waiter in that SAME batch, the instant that batch's own flush
+ * settles. */
 interface OpenBatch<T> {
   readonly batchId: string;
   readonly events: readonly T[];
+  readonly waiters: readonly Waiter[];
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
@@ -147,29 +204,51 @@ export class BatchAccumulator<T> {
   }
 
   /**
-   * Adds one item to the current batch, opening a new batch first if none
-   * is open. Synchronous: it never awaits the flush callback, even when
-   * this call is the one that trips the count trigger — a flush the
-   * callback itself makes take real time (a future Postgres/R2 write)
-   * must never make `add()` itself slow, since a later real `EventSink`
-   * wiring will call this once per decoded queue job. Any rejection from
-   * a flush this call triggers is caught and logged (see `runFlush()`) —
-   * never left to become an unhandled promise rejection, and never
-   * thrown out of `add()` itself.
+   * [T3.5.4] Adds one item to the current batch, opening a new batch
+   * first if none is open, and returns a `Promise<void>` that settles
+   * exactly when THIS item's batch settles — resolving on a successful
+   * flush, rejecting (with the SAME error `runFlush()` logs) on a failed
+   * one. This method's own BODY stays synchronous — the event is pushed,
+   * the batch swapped, the promise constructed and handed back, none of
+   * that awaits any I/O — so calling `add()` is still cheap and never
+   * itself the slow part; a triggered flush remains fire-and-forget from
+   * THIS call's own point of view (the `void this.triggerFlush().catch()`
+   * below is unchanged). What the RETURNED promise now carries is
+   * genuinely new: `AccumulatingEventSink.handle()`
+   * (events.consumer.ts) awaits it so BullMQ never acks a job before its
+   * event has actually reached the flush callback's own stores — see this
+   * file's own header for the durability gap this closes. A caller with
+   * no durability need is free to call
+   * `void accumulator.add(x).catch(() => {})` instead.
    */
-  add(event: T): void {
+  add(event: T): Promise<void> {
     const openBatch = this.currentBatch ?? this.startBatch();
     const events = [...openBatch.events, event];
-    this.currentBatch = { ...openBatch, events };
+
+    let resolveWaiter!: () => void;
+    let rejectWaiter!: (error: unknown) => void;
+    const settled = new Promise<void>((resolve, reject) => {
+      resolveWaiter = resolve;
+      rejectWaiter = reject;
+    });
+    const waiters = [...openBatch.waiters, { resolve: resolveWaiter, reject: rejectWaiter }];
+
+    this.currentBatch = { ...openBatch, events, waiters };
 
     if (events.length >= this.batchSize) {
       void this.triggerFlush().catch(() => {
-        // Already logged inside runFlush() — swallowed here only to keep
-        // this fire-and-forget trigger from becoming an unhandled
-        // rejection. There is no caller of add() waiting on this
-        // specific flush to report a failure back to.
+        // Already logged inside runFlush(), and every waiter for this
+        // batch (including the one `settled` above resolves to) is
+        // already rejected there too — swallowed here only to keep this
+        // fire-and-forget TRIGGER from becoming an unhandled rejection at
+        // the site that caused it. `settled` itself is a SEPARATE promise
+        // object from `triggerFlush()`'s own return value, so catching
+        // here has no effect on whether `settled` still rejects for this
+        // call's own caller.
       });
     }
+
+    return settled;
   }
 
   /**
@@ -228,7 +307,7 @@ export class BatchAccumulator<T> {
       });
     }, this.batchIntervalMs);
 
-    return { batchId, events: [], timer };
+    return { batchId, events: [], waiters: [], timer };
   }
 
   /**
@@ -253,7 +332,7 @@ export class BatchAccumulator<T> {
 
     clearTimeout(batch.timer);
     this.currentBatch = null;
-    return this.runFlush(batch.events, batch.batchId);
+    return this.runFlush(batch.events, batch.batchId, batch.waiters);
   }
 
   /**
@@ -268,6 +347,15 @@ export class BatchAccumulator<T> {
    * fire-and-forget catch vs. `flushNow()`'s bare `await`) additionally
    * propagates or swallows the rethrow.
    *
+   * [T3.5.4] Also settles every `waiters` entry for this batch — resolved
+   * on success, rejected (with the SAME `error` this method rethrows) on
+   * failure. This is the ONE place a batch's outcome is ever decided, so
+   * it is the one place every `add()` caller's own returned promise gets
+   * resolved/rejected from, regardless of which of the three triggers
+   * (count, interval, manual `flushNow()`) actually caused this flush.
+   * `Promise`'s own `resolve`/`reject` executor callbacks never throw, so
+   * no additional try/catch is needed around either loop below.
+   *
    * [fix-forward, silent-failure review] The logger call itself is
    * wrapped in its own try/catch: a THROWING logger (unusual for the
    * default console.error-based consoleErrorLogger, but not impossible
@@ -278,15 +366,19 @@ export class BatchAccumulator<T> {
    * (which assumes the failure was already logged by the time it gets
    * there), and the batch's events would be gone with zero log line and
    * zero trace of why. The ORIGINAL `error` is always rethrown below
-   * regardless of whether logging itself succeeded.
+   * regardless of whether logging itself succeeded, and every waiter is
+   * always rejected with that SAME original error, never the logger's.
    */
-  private async runFlush(events: readonly T[], batchId: string): Promise<void> {
+  private async runFlush(events: readonly T[], batchId: string, waiters: readonly Waiter[]): Promise<void> {
     try {
       await this.flush(events, batchId);
       // [T3.1.7] Only a SUCCESSFUL flush advances this — see
       // `lastFlushAgeMs()`'s own doc comment for why a rejecting flush
       // deliberately does NOT reach this line.
       this.lastFlushAt = Date.now();
+      for (const waiter of waiters) {
+        waiter.resolve();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
@@ -297,7 +389,10 @@ export class BatchAccumulator<T> {
       } catch {
         // The logger itself failed — nothing further to do about that
         // here, but the ORIGINAL flush error below must still propagate
-        // regardless (see this method's own header).
+        // (and every waiter must still reject with it) regardless.
+      }
+      for (const waiter of waiters) {
+        waiter.reject(error);
       }
       throw error;
     }

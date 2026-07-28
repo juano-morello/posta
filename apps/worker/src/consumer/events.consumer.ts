@@ -215,16 +215,24 @@ export const BATCH_ACCUMULATOR = Symbol('BATCH_ACCUMULATOR');
  * decoded `CaptureEvent` straight into the shared `BatchAccumulator`,
  * which itself flushes to Postgres (T3.3.2's `flushBatch`, via
  * `createFlushBatch`) on whichever of its own two triggers fires first,
- * or on a manual `flushNow()` at shutdown. `handle()` can never reject:
- * `BatchAccumulator.add()` is fully synchronous and, per that class's own
- * header, never throws and never propagates a flush failure back to its
- * caller — a triggered flush's own rejection is caught and logged
- * INSIDE the accumulator, never here. `EventsConsumer.process()`'s
- * try/catch around `sink.handle()` therefore exists for some OTHER
- * sink's future failure mode, not this one — this sink's own jobs always
- * reach BullMQ's 'completed' state, which is exactly what lets
- * shutdown.test.ts wait on `job.getState() === 'completed'` as its signal
- * that an event has genuinely been accumulated, not merely enqueued. */
+ * or on a manual `flushNow()` at shutdown.
+ *
+ * [T3.5.4 — REVISED] `handle()` used to claim it "can never reject",
+ * because `BatchAccumulator.add()` used to be `void`-returning and fully
+ * fire-and-forget. That was true, and it was also the exact hole that let
+ * a SIGKILL between "accumulated" and "flushed" lose events permanently —
+ * see accumulator.ts's own header for the full incident. `add()` now
+ * returns `Promise<void>`, settling only once the batch this event landed
+ * in has actually flushed, and `handle()` now `await`s it and lets a
+ * rejection propagate — `EventsConsumer.process()`'s existing try/catch
+ * around `sink.handle()` (T3.1.3) was ALREADY written expecting a sink
+ * could reject; it needed no change to correctly handle this sink finally
+ * doing so. Concretely: a job's BullMQ ack (`'completed'`) now waits for
+ * its own event to have genuinely reached the flush callback's own
+ * stores, not merely for it to have been handed to this class — so a
+ * partial, still-open batch stays represented by ACTIVE, un-acked BullMQ
+ * jobs with an expiring/renewing lock, exactly the state BullMQ's own
+ * stalled-job redelivery can rescue after a SIGKILL. */
 @Injectable()
 export class AccumulatingEventSink implements EventSink {
   constructor(
@@ -232,7 +240,7 @@ export class AccumulatingEventSink implements EventSink {
   ) {}
 
   async handle(event: CaptureEvent): Promise<void> {
-    this.accumulator.add(event);
+    await this.accumulator.add(event);
   }
 }
 
@@ -279,6 +287,21 @@ export function readWorkerConcurrency(env: NodeJS.ProcessEnv = process.env): num
 @Processor(EVENTS_QUEUE, { concurrency: readWorkerConcurrency() })
 @Injectable()
 export class EventsConsumer extends WorkerHost {
+  // [T3.5.4] Every currently-in-flight `process()` call, counted by hand
+  // rather than read off BullMQ's own Worker: `Worker.
+  // whenCurrentJobsFinished()` (the method that would otherwise answer
+  // "has every dispatched process() call returned yet") is declared
+  // `private` in bullmq@5.80.10's own shipped `.d.ts` (verified against
+  // the installed package, not assumed) — calling it from outside the
+  // class is not a type this codebase's own strict TypeScript config will
+  // pass, and reaching for it anyway (an `as unknown as {...}` cast around
+  // a method the library's own authors marked private) would be relying on
+  // an interface they have made no promise to keep stable. This counter is
+  // the same fact, tracked by code this file already owns:
+  // `ShutdownService.drain()` (shutdown.ts) polls `pendingJobCount` instead
+  // — see that file's own header for the full drain design this enables.
+  private inFlightJobCount = 0;
+
   constructor(
     @Inject(EVENT_SINK) private readonly sink: EventSink,
     @Inject(EVENTS_CONSUMER_LOGGER) private readonly logger: EventsConsumerLogger,
@@ -290,6 +313,13 @@ export class EventsConsumer extends WorkerHost {
     private readonly dlq: DlqService,
   ) {
     super();
+  }
+
+  /** [T3.5.4] Read by `ShutdownService.drain()` — see `inFlightJobCount`'s
+   * own field comment above and shutdown.ts's own header for why this
+   * class tracks the count itself rather than reading it off BullMQ. */
+  get pendingJobCount(): number {
+    return this.inFlightJobCount;
   }
 
   /**
@@ -329,26 +359,35 @@ export class EventsConsumer extends WorkerHost {
   }
 
   async process(job: Job<unknown>): Promise<void> {
-    const parsed = eventJobSchema.safeParse(job.data);
-    if (!parsed.success) {
-      await this.routeToDlq(job, parsed.error);
-      return;
-    }
-
-    const event = parsed.data;
+    // [T3.5.4] Counted for the FULL lifetime of this call, decode-failure
+    // branch included — `ShutdownService.drain()` only needs to know "is a
+    // process() call currently in flight", not what it's doing. See
+    // `inFlightJobCount`'s own field comment above.
+    this.inFlightJobCount += 1;
     try {
-      await this.sink.handle(event);
-    } catch (error) {
-      const causeMessage = error instanceof Error ? error.message : String(error);
-      this.safeLog(
-        redactCredentialsFromMessage(`Sink failed to handle event ${event.event_id}: ${causeMessage}`),
-        { eventId: event.event_id, linkId: event.link_id, tenantId: event.tenant_id },
-      );
-      // Re-throw the ORIGINAL error, unchanged — BullMQ's own
-      // retry/attempts machinery must see exactly what `sink.handle()`
-      // rejected with, not a wrapped/redacted copy. The redaction above
-      // only ever touches what THIS class writes to its own log line.
-      throw error;
+      const parsed = eventJobSchema.safeParse(job.data);
+      if (!parsed.success) {
+        await this.routeToDlq(job, parsed.error);
+        return;
+      }
+
+      const event = parsed.data;
+      try {
+        await this.sink.handle(event);
+      } catch (error) {
+        const causeMessage = error instanceof Error ? error.message : String(error);
+        this.safeLog(
+          redactCredentialsFromMessage(`Sink failed to handle event ${event.event_id}: ${causeMessage}`),
+          { eventId: event.event_id, linkId: event.link_id, tenantId: event.tenant_id },
+        );
+        // Re-throw the ORIGINAL error, unchanged — BullMQ's own
+        // retry/attempts machinery must see exactly what `sink.handle()`
+        // rejected with, not a wrapped/redacted copy. The redaction above
+        // only ever touches what THIS class writes to its own log line.
+        throw error;
+      }
+    } finally {
+      this.inFlightJobCount -= 1;
     }
   }
 
