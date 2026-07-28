@@ -569,3 +569,21 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Deviation from plan:** `apps/worker/tsconfig.json` added to this task's file list — necessary, the build-break fix above.
 
 **Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.6 · `842ccd0` · 2026-07-28T10:19:47-03:00
+
+**Outcome:** done · verify passed (independently re-observed by orchestrator): `pnpm test throughput.bench.test.ts` — 6/6 pass, real BullMQ queue -> real AppModule.forRoot() DI -> real Postgres/Redis/MinIO. `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean.
+
+**Recovery context:** this draft's prior agent completed the file successfully (no death message, no partial state) but never committed or had it reviewed. Treated as unverified until proven, per instruction. Assessed via a dispatched tdd-guide, not rubber-stamped.
+
+**RED-phase proof (independently confirmed real):** the dispatched agent temporarily broke `insertStatements()`'s matching regex to target a nonexistent table name, reran, and got a genuine assertion failure (`expected +0 to be 100`) on exactly the "100 INSERT statements" test while the other 5 tests (including throughput floor and p95) stayed green — not a hang, not an import error. Reverted, confirmed `git diff` empty, reconfirmed 6/6 green.
+
+**Claims cross-checked against real code, not assumed:** `spyOnPoolQueries`/`percentile()` byte-identical to `flush.test.ts`/`latency.test.ts`'s own; `AppModule.forRoot()`'s `config.flush` override genuinely bypasses `buildProductionFlush`/`DB_CLIENT`, so the placeholder `DATABASE_URL` is safe; `EVENT_BATCH_SIZE`'s production ceiling (500, `env.ts`) is confirmed unrelated to this file's own `BATCH_SIZE=100`, since the benchmark builds `AppModule.forRoot()` directly, bypassing `workerEnvSchema` entirely.
+
+**Measured numbers observed (real run):** 10,000 events / 2181.2ms = 4584.6 events/sec (floor: 2000) | p95 flush duration 40.5ms | exactly 100 INSERT statements across 100 batches.
+
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.

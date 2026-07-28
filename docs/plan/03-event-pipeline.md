@@ -146,7 +146,7 @@ The isolated event from T3.3.3 goes to `EVENTS_DLQ_QUEUE` via `DlqService` carry
 Beyond T3.3.2's same-batch-twice: partially overlapping batches, the same `event_id` split across two different batches, and concurrent flushes of overlapping sets. Asserts the final row count always equals the count of distinct `event_id` values. BullMQ is at-least-once, so overlap is the normal case, not the edge case.
 → **files** `apps/worker/src/batch/idempotency.test.ts` · **verify** `pnpm test idempotency.test.ts` asserts row count equals distinct `event_id` count across all three scenarios, and that the surviving row for a duplicated id is the first-written one · **after** T3.3.4
 
-#### T3.3.6 · `perf: throughput benchmark for 10k events through the batch path`
+#### T3.3.6 · `perf: throughput benchmark for 10k events through the batch path` ✅ done (`842ccd0`)
 Feeds 10k generated events through accumulator → enrichment → insert against a testcontainer, reporting events/sec, p95 flush duration and statement count. Fails below a floor (100 batches, ≥2000 events/sec locally) so a future per-event `INSERT` regression shows up as a red test rather than as a queue backlog in production.
 → **files** `apps/worker/src/batch/throughput.bench.test.ts` · **verify** `pnpm test throughput.bench.test.ts` asserts exactly 100 insert statements for 10k events and throughput above the floor · **after** T3.3.5
 
