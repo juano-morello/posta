@@ -776,3 +776,46 @@ This task's review fan-out (code-reviewer, silent-failure-hunter, typescript-rev
 
 **Deviation from plan:** none.
 **Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.6.4 · `aeeac0d` · 2026-07-28T16:02:03-03:00
+
+**Outcome:** done · verify passed: `pnpm test replay.test.ts replay-driver.test.ts` (41/41, re-run independently by the orchestrator) · `pnpm typecheck:tests` (exit 0, re-run independently).
+
+**Commit chain (three commits close this task, not one):**
+- `069432d` feat: posta replay CLI with range and tenant filters — original implementation, inherited already-committed from a previous orchestrator session.
+- `99ecbfd` fix: cap replay --batch-size and warn when --tenant matches nothing — round-1 review fixes (database-reviewer: unbounded --batch-size; silent-failure-hunter: silent --tenant-matched-zero). This diff was sitting **uncommitted** in the worktree when this session started — produced by a tdd-guide child a previous orchestrator dispatched and then lost track of before it could commit. Verified independently (one transient flaky failure on first run, clean on three subsequent runs — genuine transient contention, not a code defect) and committed by this session.
+- `aeeac0d` fix: close both replay CLI resources independently and cover main() — round-2 review fixes, dispatched fresh (the round-1 implementer was unreachable — no agent id/name, only a relayed notification).
+
+**Staleness constraint (S3.6 anti-goal) — explicitly re-confirmed:** read replay-driver.ts directly; `replayEventLog` only calls `toNewEventRow` + `insertEventsBatch`, reusing the already-logged `dest_host`/enrichment off `LoggedEvent` verbatim. No call to `enrich()`, `resolveDestinationsByLinkIds`, or `flushBatch` anywhere in the replay path. Invariant 7 intact.
+
+**Review fan-out (4-way, run fresh by this session against the complete 069432d+99ecbfd state):**
+- code-reviewer: APPROVE, zero findings.
+- silent-failure-hunter: 1 HIGH (verified) — `main()`'s single try/catch coupled `r2Client.destroy()`/`dbClient.closeDb()` cleanup, contradicting the file's own docstring claim to follow `migrate.ts`'s separate-try/catch discipline (verified true by reading migrate.ts directly — it does NOT match). 2 MEDIUM dropped as cosmetic (dead-code fallback, defensive try/catch around a documented-never-throws call).
+- typescript-reviewer: APPROVE + 1 cheap MEDIUM (line 443 `console.error` bypassing the file's `String(error)` narrowing pattern).
+- database-reviewer: confirmed MAX_BATCH_SIZE=500 arithmetic against the real 31-column schema (hand-counted), confirmed DATABASE_URL_WORKER is the correct writer-role var. 1 MEDIUM (verified) — main()'s docstring claimed migrate.test.ts-equivalent coverage that didn't exist (71.95%/66.15%, main() body uncovered). 1 LOW (verified) — `--batch-size 500abc` silently truncated to 500 via parseInt's stop-at-first-non-digit behavior.
+
+All four verified findings fixed in `aeeac0d`, independently re-verified by this orchestrator (diff read line-by-line, tests + typecheck re-run). `aeeac0d`'s new main() test suite proves the resource-cleanup fix directly via `vi.spyOn(S3Client.prototype, 'destroy')`/`vi.spyOn(Pool.prototype, 'end')`, including the double-failure combine path — coverage now 100% lines / 87.5% branches on replay.ts (scoped run, per the implementer's report).
+
+**Deviation from plan:** stamped against `aeeac0d` (the final commit completing this task's file set) rather than `069432d` (the heading-verbatim commit) — chosen over the T3.6.3 precedent (stamp against original, note follow-ups) because here the follow-up commits are direct fixes to T3.6.4's own files for T3.6.4's own review findings, not an unrelated fix-forward. Recording the full chain here so the reasoning survives.
+
+**Handed back to:** n/a — both fix rounds landed and were independently re-verified; no outstanding findings.
+
+---
+
+## T3.5.6 · `76d76d5` · 2026-07-28T16:52:51-03:00
+
+**Outcome:** done · verify passed: `pnpm test e2e-pg-outage.test.ts` (8/8, re-run independently by the orchestrator, 29.94s) · `pnpm typecheck:tests` (exit 0, re-run independently).
+
+Real Postgres testcontainer paused mid-drain via `docker pause`/`unpause` (spawnSync CLI, container id resolved by hand — testcontainers@12.0.4's StartedTestContainer has no pause()/unpause() in its public API, verified against the shipped .d.ts before assuming otherwise), held past `FLUSH_STALE_MULTIPLIER` flush intervals, then unpaused. Asserts no loss, no duplication, zero DLQ, Postgres/R2 event_id-set equality after recovery. A deterministic "probe" reimplements flushBatch's own steps directly (resolveDestinationsByLinkIds, enrich, toNewEventRow) rather than racing on timing, after an abandoned snapshot-diff design was shown by RED-phase sabotage to produce false-positive divergence readings (docker pause's own CLI latency exceeded one batch's real round trip).
+
+**Real methodological finding recorded in the file's own header, worth carrying forward:** a query against a `docker pause`d Postgres does not reject — it hangs until unpause. No BullMQ-level retry/redelivery is involved (nothing ever fails), unlike the SIGKILL path in e2e-kill-recovery.test.ts (T3.5.4). Durability here is closer to "silently absorbed by an indefinitely-hanging connection" than "detected and retried."
+
+**Review fan-out (code-reviewer, silent-failure-hunter, database-reviewer — typescript-reviewer skipped as low-value for a test-only file with no new production types):**
+- code-reviewer: APPROVE, zero findings. Explicitly signed off on file size (759/800 lines, ~35% load-bearing design-rationale comments, justified) and cleanup-on-failure guarantees.
+- silent-failure-hunter: 3 MEDIUM. Two (R2 DeleteObjectsCommand / queue.obliterate() swallowed in afterAll teardown) match a pattern already reviewed and explicitly left alone twice in this epic (T3.5.4's and T3.5.5's own stamp notes, citing the same byte-identical pattern across e2e-duplicate-delivery.test.ts, e2e-exactly-once.test.ts, pipeline-harness.test.ts) — not re-litigated. The third (probeInsertPromise created without an immediate .catch, only awaited ~900ms later) was checked against the actual pause mechanics: the insert is issued AFTER pauseContainer(), and per the finding above, a query against a paused Postgres hangs rather than rejects, so the promise cannot settle (let alone reject) during that window — the "unhandled rejection" premise doesn't hold given how docker pause actually behaves here. code-reviewer independently reviewed this exact code region with zero findings. Not acted on.
+- database-reviewer: zero CRITICAL/HIGH. Confirmed all 4 raw queries fully parameterized. Went further than the T3.5.5 occurred_at/partition-pruning precedent by reading the actual partition DDL — this test's far-future fixture years (2130+) land entirely in the default catch-all partition regardless of any occurred_at bound, so the question is more decisively moot here than in the T3.5.5 case. Confirmed the polling helpers never touch pg.pool during the outage window itself (only the single tracked probe insert does), and that the pool's unset connectionTimeoutMillis is exactly why the held connection recovers cleanly post-unpause rather than needing special handling.
+
+**Deviation from plan:** none — file list, verify text, and task heading all match as specified.
+**Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.

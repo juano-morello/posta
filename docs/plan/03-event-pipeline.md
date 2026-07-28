@@ -230,7 +230,7 @@ SIGKILL — not SIGTERM, which T3.1.8 already covers — while a partial batch i
 Pushes the whole T3.2.6 corpus through the live pipeline and asserts each row's enrichment columns match the fixture's expected values, and that the NDJSON line for the same event agrees. The unit test proves the function; this proves nothing between the consumer and the two writers drops or reorders a field.
 → **files** `apps/worker/src/test/e2e-enrichment.test.ts` · **verify** `pnpm test e2e-enrichment.test.ts` asserts every fixture's expected enrichment in both stores, and that no row carries a non-null value in a column the fixture expects null · **after** T3.5.4
 
-#### T3.5.6 · `test: Postgres outage retries and eventually lands with no loss`
+#### T3.5.6 · `test: Postgres outage retries and eventually lands with no loss` ✅ done (`76d76d5`)
 Pauses the Postgres container mid-drain, holds it down past several flush intervals, restores it, and asserts every event eventually lands exactly once. Also asserts the R2 objects written during the outage are the ones the recovered rows correspond to — the outage window is precisely where the two stores are allowed to diverge temporarily, and it must close.
 → **files** `apps/worker/src/test/e2e-pg-outage.test.ts` · **verify** `pnpm test e2e-pg-outage.test.ts` asserts final row count equals events pushed, zero DLQ entries, and store equality after recovery · **after** T3.5.5
 
@@ -268,7 +268,7 @@ An async generator that paginates `ListObjectsV2` (1000 keys per page) across th
 The replay driver batches streamed records and reuses `toNewEventRow`/`insertEventsBatch` directly — never `flushBatch`, which also calls `enrich()`/`resolveDestinationsByLinkIds` to resolve each event's destination as it stands right now, correct for live traffic (invariant 3) and wrong for replay, where "right now" could be months after the event was captured. Replay instead replays the `dest_host` (and the rest of the enrichment) already logged in the NDJSON record, so `ON CONFLICT` semantics and column mapping are identical to live by construction without re-resolving anything. A parallel "restore" implementation of that column mapping drifts from the real one and you find out on the day you need it.
 → **files** `apps/worker/src/cli/replay-driver.ts` · `apps/worker/src/cli/replay-driver.test.ts` · **verify** `pnpm test replay-driver.test.ts` asserts replayed rows are byte-identical to live-written rows for the same input, and that replay reuses the logged `dest_host` and never calls `enrich()`/`flushBatch`, so replaying old events cannot re-resolve destinations at replay time · **after** T3.6.2, T3.3.2
 
-#### T3.6.4 · `feat: posta replay CLI with range and tenant filters`
+#### T3.6.4 · `feat: posta replay CLI with range and tenant filters` ✅ done (`aeeac0d`)
 `posta replay --from <date> --to <date> [--tenant <id>] [--dry-run]`. Dates are parsed as UTC and rejected loudly if inverted or unparseable rather than silently replaying nothing. `--tenant` filters records after parse. `--dry-run` counts without inserting, so an operator can size the job before running it under pressure.
 → **files** `apps/worker/src/cli/replay.ts` · `apps/worker/src/cli/replay.test.ts` · **verify** `pnpm test replay.test.ts` asserts `--from` after `--to` exits non-zero naming the flag, `--tenant` restricts inserted rows to that tenant, and `--dry-run` inserts nothing while reporting a non-zero count · **after** T3.6.3
 
