@@ -458,3 +458,14 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none.
 
 **Handed back to:** n/a. Note for whoever picks up the eventual accumulator-flush wiring task: `sendPoisonEventsToDlq` and `PoisonDlqSink` are ready to compose in, unused until then.
+
+---
+
+## T3.3.5 · `6b1134a` · 2026-07-27T21:29:09-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test idempotency.test.ts` — 4/4 pass. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean, `pnpm test flush.test.ts split-retry.test.ts` — 32/32 pass, zero regression.
+**RED phase (self-reported, plausible):** two temporary edits to packages/core/src/db/events.ts (drop onConflictDoNothing; swap to onConflictDoUpdate) each produced a real assertion-level failure, then fully reverted — git diff on that file confirmed empty before commit.
+**Findings surviving triage:** none — clean implementation.
+**Judgment calls (reviewed, accepted):** scenario (b) "event_id split across two batches" modeled as BullMQ redelivering the same event into two separately-flushed accumulator windows, varying only visitor_hash as a fixture-only marker (documented in the test file as not a realism claim). Scenario (c) concurrent-flush test deliberately does not assert which of two racing transactions wins — only that the surviving row is one whole uncorrupted candidate, since real Promise.all concurrency doesn't let the test control commit order.
+**Deviation from plan:** none.
+**Handed back to:** n/a.

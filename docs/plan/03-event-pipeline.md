@@ -142,7 +142,7 @@ On insert failure the batch is retried whole with exponential backoff; on repeat
 The isolated event from T3.3.3 goes to `EVENTS_DLQ_QUEUE` via `DlqService` carrying its full payload and the SQLSTATE, and the flush then reports success for the rest of the batch. Never a silent drop: a poison row that vanishes is an event Postgres and R2 will disagree about forever, with nothing to point at.
 → **files** `apps/worker/src/batch/split-retry.ts` · `apps/worker/src/batch/poison-dlq.test.ts` · **verify** `pnpm test poison-dlq.test.ts` asserts one DLQ entry containing the full event payload and a SQLSTATE, that the entry can be re-submitted through `flushBatch` after the underlying fault is removed, and that no event is dropped without a DLQ record · **after** T3.3.3, T3.1.5
 
-#### T3.3.5 · `test: idempotency under overlapping and interleaved batches` [INV-8]
+#### T3.3.5 · `test: idempotency under overlapping and interleaved batches` [INV-8] ✅ done (`6b1134a`)
 Beyond T3.3.2's same-batch-twice: partially overlapping batches, the same `event_id` split across two different batches, and concurrent flushes of overlapping sets. Asserts the final row count always equals the count of distinct `event_id` values. BullMQ is at-least-once, so overlap is the normal case, not the edge case.
 → **files** `apps/worker/src/batch/idempotency.test.ts` · **verify** `pnpm test idempotency.test.ts` asserts row count equals distinct `event_id` count across all three scenarios, and that the surviving row for a duplicated id is the first-written one · **after** T3.3.4
 
