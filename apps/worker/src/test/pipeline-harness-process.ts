@@ -21,10 +21,24 @@ const BUILD_LOCK_POLL_MS = 250;
 // Generous: covers BUILD_TIMEOUT_MS's own ceiling plus room for whichever
 // concurrent caller currently holds the lock to finish its own build.
 const BUILD_LOCK_TIMEOUT_MS = BUILD_TIMEOUT_MS + 60_000;
-// Lives INSIDE apps/worker/dist/, which the repo's own .gitignore already
-// ignores wholesale (`dist/`) — a lock left behind by an abnormal
-// termination therefore never needs its own gitignore entry.
-const BUILD_LOCK_PATH = path.join(REPO_ROOT, 'apps', 'worker', 'dist', '.pipeline-harness-build.lock');
+// Deliberately OUTSIDE apps/worker/dist/ (a fix-forward past this
+// constant's original location, discovered after T3.5.1 landed — see
+// buildWorkerExclusively's own header for the full race this avoids):
+// `nest build`'s `deleteOutDir: true` (nest-cli.json) wipes and recreates
+// that ENTIRE directory on every build. A lock nested inside dist/ would
+// vanish, mid-build, the instant the CURRENT holder's own build starts
+// wiping it — and nothing but a competing process's own mkdirSync ever
+// recreates that specific entry, so a second, still-waiting process
+// racing to reacquire during exactly that window would succeed
+// immediately and start a SECOND concurrent build believing it holds the
+// lock: a silent, worse cousin of the crash this fix exists to remove.
+// apps/worker/ itself is a source directory `nest build` never deletes,
+// so the lock's own existence is now unaffected by what the build it
+// guards does to dist/. Cost: no longer covered by .gitignore's blanket
+// `dist/` ignore, so .gitignore now names this path directly — a lock
+// left behind by an abnormal termination would otherwise show up as an
+// untracked file in `git status`.
+const BUILD_LOCK_PATH = path.join(REPO_ROOT, 'apps', 'worker', '.pipeline-harness-build.lock');
 
 const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
@@ -69,27 +83,48 @@ function runBuildCommand(): void {
  * parallelism spawns. Bounded by BUILD_LOCK_TIMEOUT_MS: a lock that is
  * never released (a crashed holder) fails loudly with the lock path
  * named, rather than hanging every future run of this suite forever.
+ *
+ * Extracted from buildWorkerExclusively as its own exported function
+ * purely so a unit test can drive it with a mocked `fs.mkdirSync` and
+ * short timeouts, without also needing to mock a real `nest build` —
+ * `lockPath`/`timeoutMs`/`pollMs` are parameters rather than reading the
+ * module's own constants for exactly that reason.
  */
-export async function buildWorkerExclusively(): Promise<void> {
-  fs.mkdirSync(path.dirname(BUILD_LOCK_PATH), { recursive: true });
+export async function acquireBuildLock(lockPath: string, timeoutMs: number, pollMs: number): Promise<void> {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
-  const deadline = Date.now() + BUILD_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      fs.mkdirSync(BUILD_LOCK_PATH);
-      break;
+      fs.mkdirSync(lockPath);
+      return;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // EEXIST: another process holds the lock right now — the expected,
+      // common case. ENOENT: tolerated as defense-in-depth, not because
+      // BUILD_LOCK_PATH's own parent (apps/worker/) is expected to ever
+      // go missing anymore (see that constant's own comment for why it
+      // no longer lives inside the directory `nest build` wipes) — but a
+      // waiter here must never crash merely because its target
+      // directory was transiently absent for some OTHER reason. Either
+      // way, recreating the parent (idempotent, safe to repeat) and
+      // retrying is the correct response, never rethrowing.
+      if (code !== 'EEXIST' && code !== 'ENOENT') throw error;
       if (Date.now() > deadline) {
         throw new Error(
-          `pipeline-harness: timed out after ${BUILD_LOCK_TIMEOUT_MS}ms waiting for the worker build ` +
-            `lock at "${BUILD_LOCK_PATH}" — a concurrent build may be stuck; remove that directory by ` +
-            `hand if no build is genuinely in progress`,
+          `pipeline-harness: timed out after ${timeoutMs}ms waiting for the worker build lock at ` +
+            `"${lockPath}" — a concurrent build may be stuck; remove that directory by hand if no ` +
+            `build is genuinely in progress`,
         );
       }
-      await sleep(BUILD_LOCK_POLL_MS);
+      if (code === 'ENOENT') fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      await sleep(pollMs);
     }
   }
+}
+
+export async function buildWorkerExclusively(): Promise<void> {
+  await acquireBuildLock(BUILD_LOCK_PATH, BUILD_LOCK_TIMEOUT_MS, BUILD_LOCK_POLL_MS);
 
   try {
     runBuildCommand();
