@@ -549,3 +549,23 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Deviation from plan:** the plan's own verify text, amended by explicit user decision as described above — not a unilateral redefinition.
 
 **Handed back to:** n/a — resolved.
+
+---
+
+## T3.5.1 · `3a767dc` · 2026-07-28T10:13:03-03:00
+
+**Outcome:** done · verify passed (independently re-observed by orchestrator): `pnpm test pipeline-harness.test.ts` — 3/3 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Recovery context:** this task's prior agent died mid-response ("Now the main harness file, tying the modules together:"), leaving three uncommitted, unverified support modules (`pipeline-harness-fixtures.ts`, `pipeline-harness-cleanup.ts`, `pipeline-harness-process.ts`) but neither file the plan names (`pipeline-harness.ts`, `pipeline-harness.test.ts`). Assessed before trusting: all three drafts checked out sound against their own claimed precedents (`sigterm-flush.test.ts`, `container-cleanup.ts`'s `closeBoth`) and were kept verbatim, no edits needed.
+
+**A genuine, currently-live build break was found and fixed as part of this task** (not present before this draft existed): `pnpm --filter @posta/worker run build` failed with TS2307 on `pipeline-harness-fixtures.ts`'s import of `@posta/core/testing` — apps/worker's own tsconfig (`moduleResolution: "node10"`, `include: ["src"]`, previously excluding only `src/**/*.test.ts`) swept this non-`.test.ts` file into the real production build, and node10 resolution cannot see `@posta/core`'s subpath-only `"./testing"` export map (only `bundler`/`node16`/`nodenext` can). Confirmed independently: moving `apps/worker/src/test/` out of the tree made the build pass; moving it back reproduced the failure. Root cause: every prior consumer of `@posta/core/testing` in this repo was itself a `.test.ts` file (already excluded from each package's own `tsc -b`); this is the first shared, non-`.test.ts` test-support code under an app's `src/`. Fixed by widening `apps/worker/tsconfig.json`'s `exclude` to `["src/**/*.test.ts", "src/test/**"]` — the whole directory is test-support code that must never ship in the production image, and `tsconfig.test.json`'s separate pass (bundler resolution) still fully type-checks it transitively once `pipeline-harness.test.ts` imports it.
+
+**RED-phase proof (self-reported, plausible):** temporarily made `push()` enqueue `n - 1` events; re-ran `pipeline-harness.test.ts` and got a real assertion failure (`expected [...] to have a length of 10 but got 9`), not a timeout or import error. Reverted, confirmed green across 3 consecutive runs.
+
+**Judgment call (reviewed, accepted):** the plan text says `stop()` "releases all three containers," but MinIO is treated as the persistent docker-compose service everywhere else in this epic (client.test.ts, r2-put.test.ts, coupled-writes.test.ts, reconciliation.test.ts all connect to the already-running compose MinIO, never testcontainers-managed) — and this environment explicitly forbids touching the compose stack. `stop()` releases the worker child process and the Postgres/Redis testcontainers; MinIO is left exactly as every other file in this epic already treats it. Documented in the harness file's own header. Accepted as consistent with established epic-wide precedent, not a scope-narrowing shortcut.
+
+**Findings surviving triage:** none — clean recovery. `drain()` polls `/health` until `last_flush_age_ms` shows a flush completed at or after the most recent `push()` AND queue_depth/batch_size both read zero (not a fixed sleep), avoiding a race where `last_flush_age_ms` alone can't distinguish "our events flushed" from "a stale prior flush."
+
+**Deviation from plan:** `apps/worker/tsconfig.json` added to this task's file list — necessary, the build-break fix above.
+
+**Handed back to:** n/a — no unresolved findings.

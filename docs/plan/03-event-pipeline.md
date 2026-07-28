@@ -210,7 +210,7 @@ Pushes 10k events, drains, lists every NDJSON object in the covered hour prefixe
 
 **Tasks:**
 
-#### T3.5.1 · `test: end-to-end pipeline harness over real Redis, Postgres and MinIO`
+#### T3.5.1 · `test: end-to-end pipeline harness over real Redis, Postgres and MinIO` ✅ done (`3a767dc`)
 A shared harness that boots Postgres via the testcontainers helper from T1.1.2 plus Redis and MinIO containers, starts the real worker process, and exposes `push(n)` (generating events from the T3.2.6 UA corpus through the real BullMQ producer), `drain()` (waits on `last_flush_age_ms` from the health endpoint) and `stop()`. Every test in this story reuses it rather than each booting its own stack.
 → **files** `apps/worker/src/test/pipeline-harness.ts` · `apps/worker/src/test/pipeline-harness.test.ts` · **verify** `pnpm test pipeline-harness.test.ts` pushes 10 events, drains, asserts 10 rows and one R2 object, and that `stop()` releases all three containers · **after** T3.4.7, T1.1.2
 
