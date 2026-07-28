@@ -51,7 +51,7 @@ A payload that fails `eventJobSchema` will never parse on a retry. Retrying it f
 `GET /health` on the worker returns `{ status, queue_depth, dlq_depth, last_flush_age_ms, batch_size }` and answers 503 when `last_flush_age_ms` exceeds three flush intervals. Queue depth alone looks healthy while the worker is wedged; the flush age is the signal that actually distinguishes idle from stuck.
 → **files** `apps/worker/src/health.controller.ts` · `apps/worker/src/health.controller.test.ts` · **verify** `pnpm test health.controller.test.ts` asserts 200 with a fresh flush, 503 after advancing fake timers past the threshold, and that `dlq_depth` reflects a planted DLQ entry · **after** T3.1.6
 
-#### T3.1.8 · `test: SIGTERM mid-batch loses nothing`
+#### T3.1.8 · `test: SIGTERM mid-batch loses nothing` ✅ done (`7d3a7bf`)
 Boots the real worker as a child process against testcontainer Redis + Postgres, pushes 250 events, sends SIGTERM while a partial batch is buffered, waits for exit, and asserts Postgres holds all 250 with no duplicates and the queue is empty. The unit test in T3.1.6 proves the hook is called; this proves a real process actually survives it.
 → **files** `apps/worker/src/consumer/sigterm-flush.test.ts` · **verify** `pnpm test sigterm-flush.test.ts` — asserts 250 rows, exit code 0, and zero DLQ entries · **after** T3.1.7, T3.3.2
 

@@ -512,3 +512,14 @@ Commit: (uncommitted — left in the working tree per this task's own instructio
 **Findings surviving triage:** none.
 **Deviation from plan:** none.
 **Handed back to:** n/a.
+
+---
+
+## T3.1.8 · `7d3a7bf` · 2026-07-27T23:14:47-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test sigterm-flush.test.ts` — 5/5 pass; `pnpm typecheck:tests` clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm test shutdown.test.ts` — 3/3 pass, zero regression, eslint clean.
+**Real child process:** boots the actual compiled `node apps/worker/dist/main.js` (its own `beforeAll` runs the real build first), mirroring the Dockerfile's exact entrypoint rather than a TS-executed stand-in. 250 real jobs pushed to a real Queue against EVENTS_QUEUE, waits for BullMQ 'completed' state on all 250, asserts Postgres holds 0 rows immediately before SIGTERM (proving it lands mid-batch, not after a coincidental auto-flush), sends SIGTERM, asserts exit 0 + 250 rows + 0 DLQ entries after.
+**RED phase (genuinely performed):** temporarily commented out `app.enableShutdownHooks` in main.ts, rebuilt, ran — got real assertion failures (`exitResult.code: null`, `rowCountAfterExit: 0`), not a hang or import error. Reverted, confirmed zero diff, rebuilt clean.
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
