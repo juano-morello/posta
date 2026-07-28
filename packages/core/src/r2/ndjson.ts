@@ -1,4 +1,7 @@
 import type { CaptureEvent } from '@posta/contracts';
+import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import type { EnrichmentResult } from '../enrichment';
 
 // T3.4.2 (E3, S3.4) [INV-4][INV-6] — the R2 NDJSON writer for invariant 7
@@ -182,4 +185,204 @@ function serializeEvent(event: LoggedEvent): string {
  */
 export function serializeBatch(events: readonly LoggedEvent[]): string {
   return events.map((event) => `${serializeEvent(event)}\n`).join('');
+}
+
+// T3.6.2 (E3, S3.6) [INV-7] — the streaming reader half of this file's R2
+// NDJSON log: streamEventLog() is the exact inverse of serializeBatch()
+// above, generalized from one batch's body to an entire `[from, to]` range
+// (eventPrefixes()'s own output, T3.6.1). It exists for replay — rebuilding
+// Postgres from the R2 log (invariant 7: "R2 is the source of truth;
+// Postgres is a rebuildable projection") — which means it has to work the
+// day the range is a year wide: MILLIONS of objects, potentially GIGABYTES
+// of NDJSON. Every choice below exists to keep this function's own memory
+// use O(1) in the range size, not O(range):
+//
+//   - ListObjectsV2 is paginated with ContinuationToken, LIST_PAGE_SIZE
+//     (1000, S3/R2's own max) keys materialized at a time — never the
+//     whole prefix's key list.
+//   - Each object's body is read with `node:readline` over the SDK's own
+//     Readable, which buffers only up to the next '\n' — never
+//     `.transformToString()`/`.transformToByteArray()`, both of which
+//     would pull the entire object into memory before yielding a single
+//     line.
+//   - Objects are drained ONE AT A TIME (`yield*` delegating into a nested
+//     generator, inside a plain `for await`) — deliberately NOT
+//     `Promise.all` across objects, which would hold multiple response
+//     bodies open (and their internal buffers filling) concurrently,
+//     working against the exact memory goal this function exists for, even
+//     though each individual GetObjectCommand stream is itself lazy.
+//
+// Consequently this function is intentionally SLOW relative to a
+// concurrent/buffered reader — replay is a disaster-recovery/backfill path
+// (T3.6.3+), not a request-latency-sensitive one; bounded memory over a
+// year-wide range is the actual requirement, not throughput.
+//
+// --- Why this yields the bare LoggedEvent, unmodified ----------------
+//
+// Every line this function reads was already written by serializeBatch()
+// above (toLogLine()'s allowlist), so JSON.parse()-ing it back is a true
+// structural inverse: the same 31 keys, same values, same types — nothing
+// to re-derive. `dest_host` (and every other enrichment column) is read
+// verbatim off the line, never recomputed: a future replay consumer
+// (T3.6.3) re-deriving `dest_host` from the link's CURRENT Postgres
+// destination instead of reusing what this function read off the archived
+// line would silently rewrite history on every replay — the value at
+// capture/flush time is what R2 durably recorded, and invariant 7 makes
+// that record authoritative. This function has no enrichment/re-derivation
+// logic anywhere in it, on purpose; it is a pure reader.
+const LIST_PAGE_SIZE = 1000;
+
+/** True only for the shape `readline.createInterface({ input })` and
+ * `Readable#destroy()` both need. The AWS SDK's own declared `Body` type is
+ * a Node/browser union (`SdkStream<IncomingMessage | Readable> |
+ * SdkStream<ReadableStreamOptionalType | BlobOptionalType>`) because the
+ * SAME package type-checks for both runtimes; this codebase only ever runs
+ * under Node (api, worker — see client.ts's own header), where `Body` is
+ * always the Node branch at runtime, but nothing in the TYPE proves that at
+ * the call site. Checked at runtime, once, right where the value enters
+ * this function — the same "trust boundary crossed exactly once, checked
+ * there" discipline `newId()`'s own cast to `Ulid` (ulid.ts) uses. */
+function isNodeReadable(value: unknown): value is Readable {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { pipe?: unknown }).pipe === 'function'
+  );
+}
+
+/** Parses one NDJSON line back into a {@link LoggedEvent}. Throws loudly,
+ * naming the source key and line number, rather than silently skipping a
+ * corrupt line — a partial replay that quietly drops records is a worse
+ * failure mode than a loud one that stops and names exactly where the
+ * corruption is (same "fail whole and diagnosably" discipline
+ * serializeEvent's own docstring argues for on the write side). Does not
+ * re-validate the 31-key shape against a schema: this reader's whole
+ * contract is "hand back exactly what was archived", and a NDJSON file
+ * spanning years of history may have been written by an EARLIER version of
+ * toLogLine()'s own column set — schema-validating against today's shape
+ * here would reject perfectly valid old records, which is a worse outcome
+ * for a replay/rebuild tool than trusting a line this SAME codebase's own
+ * writer produced. */
+function parseLoggedEventLine(line: string, key: string, lineNumber: number): LoggedEvent {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(line);
+  } catch (cause) {
+    throw new Error(
+      `streamEventLog: line ${lineNumber} of key "${key}" is not valid JSON`,
+      { cause },
+    );
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `streamEventLog: line ${lineNumber} of key "${key}" parsed to a JSON ${Array.isArray(parsed) ? 'array' : typeof parsed}, not an object`,
+    );
+  }
+
+  return parsed as LoggedEvent;
+}
+
+/** Paginates `ListObjectsV2` under `prefix`, yielding one key at a time.
+ * S3/R2 returns keys within a single ListObjectsV2 response in
+ * lexicographic (UTF-8 binary) order, and `eventBatchKey`'s own batchId
+ * segment is a ULID (lexicographically = chronologically ordered), so
+ * `streamEventLog`'s overall output preserves the order objects were
+ * originally written in — see stream-read.test.ts's own ordering
+ * assertion, which depends on exactly this. */
+async function* listObjectKeys(
+  client: S3Client,
+  bucket: string,
+  prefix: string,
+): AsyncGenerator<string, void, void> {
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        MaxKeys: LIST_PAGE_SIZE,
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+      }),
+    );
+
+    for (const object of page.Contents ?? []) {
+      if (object.Key) yield object.Key;
+    }
+
+    if (!page.IsTruncated) {
+      continuationToken = undefined;
+      continue;
+    }
+
+    if (!page.NextContinuationToken) {
+      throw new Error(
+        `streamEventLog: ListObjectsV2 for prefix "${prefix}" reported IsTruncated=true with no NextContinuationToken`,
+      );
+    }
+    continuationToken = page.NextContinuationToken;
+  } while (continuationToken);
+}
+
+/** Streams a single object's body line by line via `node:readline`, which
+ * buffers only up to the next newline — never the whole body. Closes the
+ * readline interface and the underlying stream in `finally` so an early
+ * `.return()` on the OUTER generator (a caller `break`-ing out of a
+ * `for await` over `streamEventLog`) does not leak an open MinIO/R2
+ * connection. */
+async function* streamRecordsFromObject(
+  client: S3Client,
+  bucket: string,
+  key: string,
+): AsyncGenerator<LoggedEvent, void, void> {
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const body = response.Body;
+
+  if (!isNodeReadable(body)) {
+    throw new Error(`streamEventLog: GetObjectCommand for key "${key}" returned no readable body`);
+  }
+
+  const lines = createInterface({ input: body, crlfDelay: Infinity });
+
+  try {
+    let lineNumber = 0;
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (line.length === 0) continue;
+      yield parseLoggedEventLine(line, key, lineNumber);
+    }
+  } finally {
+    lines.close();
+    if (!body.destroyed) body.destroy();
+  }
+}
+
+/**
+ * Streams every event logged under any of `prefixes` (typically
+ * `eventPrefixes(from, to)`'s own output), in the order objects were
+ * originally written — see this section's own header comment above for
+ * the full memory-boundedness reasoning, and `listObjectKeys`'s for why
+ * that order matches `eventBatchKey`'s write order.
+ *
+ * Memory use is O(1) in the number of objects/records the range covers:
+ * at most one `ListObjectsV2` page (1000 keys) and one object body's
+ * current line are held at a time, regardless of whether `prefixes` spans
+ * an hour or a decade. Never call `Array.fromAsync`/spread this generator
+ * into an array for a wide range — that reintroduces exactly the
+ * unbounded buffering this function exists to avoid; a caller (T3.6.3's
+ * replay driver) must consume it with `for await` and act on each record
+ * as it arrives.
+ */
+export async function* streamEventLog(
+  client: S3Client,
+  bucket: string,
+  prefixes: readonly string[],
+): AsyncGenerator<LoggedEvent, void, void> {
+  for (const prefix of prefixes) {
+    for await (const key of listObjectKeys(client, bucket, prefix)) {
+      yield* streamRecordsFromObject(client, bucket, key);
+    }
+  }
 }
