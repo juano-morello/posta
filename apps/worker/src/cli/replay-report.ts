@@ -239,6 +239,49 @@ function formatFinalReportLines(report: ReplayReport): string[] {
   return lines;
 }
 
+/** Thrown by {@link replayWithReport} when `options.batchSize` exceeds
+ * {@link MAX_BATCH_SIZE} — always names the offending value and the
+ * limit, mirroring replay.ts's own `ReplayArgsError` message style for
+ * the identical class of guard, and thrown before ANY R2 read or
+ * Postgres write (see {@link MAX_BATCH_SIZE}'s own comment for why the
+ * ceiling itself is a local, deliberately-duplicated constant rather
+ * than an import from replay.ts). */
+export class ReplayReportBatchSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReplayReportBatchSizeError';
+  }
+}
+
+// [review round, database-reviewer finding] `batchSize` had NO runtime
+// upper bound here, even though `ReplayReportOptions.batchSize`'s own doc
+// comment (below) claimed it carried "the SAME 500-row ceiling" replay.ts's
+// own `--batch-size` flag enforces on `ReplayCliOptions.batchSize` — that
+// claim was true of the DEFAULT only, never of a caller-supplied value. A
+// caller passing e.g. `batchSize: 50000` flowed straight into
+// `insertEventsBatchWithCounts` (packages/core/src/db/events.ts) and
+// produced a single INSERT with `50000 × 31 ≈ 1.55M` bind parameters,
+// failing with an opaque Postgres "too many parameters" error instead of a
+// clear, named rejection — exactly the class of failure replay.ts's own
+// `MAX_BATCH_SIZE` (that file, ~line 107) already closed for its OWN
+// `--batch-size` flag, for the identical reason (an operator override
+// should never make a replay less safe, parameter-wise, than the live
+// flush path already is).
+//
+// This constant is a DELIBERATE, DOCUMENTED duplicate of replay.ts's own
+// `MAX_BATCH_SIZE`, not an import of it: this file's own header already
+// establishes that `replay.ts` is expected to eventually compose
+// `replayWithReport` IN ("posta replay (replay.ts) composing this module
+// in instead of replayEventLog is a later task's decision, not this
+// one's"), so the dependency direction runs replay.ts → replay-report.ts.
+// Importing replay.ts's `MAX_BATCH_SIZE` from here would point that arrow
+// the other way for one constant today, and risks a circular import the
+// moment that later task lands. Same narrow-duplication discipline this
+// file already applies to `countObjectsUnderPrefixes` above (see that
+// function's own comment) — two numbers that must never drift apart, kept
+// in sync by this comment rather than by a shared import.
+const MAX_BATCH_SIZE = 500;
+
 export interface ReplayReportOptions {
   readonly db: DbClient['db'];
   /** The already-constructed S3-compatible client (packages/core/src/r2/
@@ -252,9 +295,13 @@ export interface ReplayReportOptions {
    * own `ReplayDriverOptions.prefixes` already establishes. */
   readonly prefixes: readonly string[];
   /** Defaults to replay-driver.ts's own {@link DEFAULT_REPLAY_BATCH_SIZE}
-   * — the SAME 500-row ceiling, so this module never issues a larger
-   * single INSERT than either the live flush path or `replayEventLog`
-   * ever does. */
+   * (500). A value above this file's own {@link MAX_BATCH_SIZE} (also
+   * 500) is rejected by {@link replayWithReport} with a {@link
+   * ReplayReportBatchSizeError} BEFORE any R2 read or Postgres write —
+   * the same runtime ceiling replay.ts's own `--batch-size` flag enforces
+   * on `ReplayCliOptions.batchSize` — so this module never issues a
+   * larger single INSERT than either the live flush path or
+   * `replayEventLog` ever does, regardless of what a caller passes in. */
   readonly batchSize?: number;
   /** Emit one progress line to `stderr` after every this-many successfully
    * parsed records (not raw objects read — see this file's own header on
@@ -293,6 +340,18 @@ export async function replayWithReport(options: ReplayReportOptions): Promise<Re
     batchSize = DEFAULT_REPLAY_BATCH_SIZE,
     progressEveryRecords = DEFAULT_REPLAY_BATCH_SIZE,
   } = options;
+
+  // Guard FIRST, before anything below touches R2 or Postgres — see
+  // MAX_BATCH_SIZE's own comment above for why 500 is a local constant
+  // here rather than an import of replay.ts's identical one.
+  if (batchSize > MAX_BATCH_SIZE) {
+    throw new ReplayReportBatchSizeError(
+      `posta replay-report: batchSize ${batchSize} exceeds the maximum of ${MAX_BATCH_SIZE} ` +
+        "(matches replay.ts's own --batch-size ceiling — apps/worker/src/cli/replay.ts's " +
+        'MAX_BATCH_SIZE) — refusing to run before any R2 read or Postgres write',
+    );
+  }
+
   const stdout = options.stdout ?? ((line: string) => console.log(line));
   const stderr = options.stderr ?? ((line: string) => console.error(line));
 

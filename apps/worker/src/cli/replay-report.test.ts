@@ -1,4 +1,4 @@
-import { DeleteObjectsCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createR2Client,
@@ -9,6 +9,7 @@ import {
   newId,
   runSqlMigrations,
   user,
+  type DbClient,
   type NewEvent,
   type R2ClientConfig,
 } from '@posta/core';
@@ -20,6 +21,7 @@ import {
   replayWithReport,
   EXIT_OK,
   EXIT_RECONCILIATION_MISMATCH,
+  ReplayReportBatchSizeError,
   type ReplayCounts,
 } from './replay-report';
 import path from 'node:path';
@@ -246,6 +248,73 @@ describe('buildReplayReport (T3.6.5) — the reconciliation guard [plan: "insert
 
     expect(report.reconciled).toBe(false);
     expect(report.exitCode).toBe(EXIT_RECONCILIATION_MISMATCH);
+  });
+});
+
+// ---------------------------------------------------------------------
+// replayWithReport — batchSize upper bound [review round, database-
+// reviewer finding: `ReplayReportOptions.batchSize` had NO runtime
+// ceiling, even though its own doc comment claimed it carried "the SAME
+// 500-row ceiling" replay.ts's own `--batch-size` flag enforces]. No real
+// Postgres/R2 needed: an oversized batchSize must be rejected BEFORE
+// either is ever touched, so `db`/`r2Client` are Proxies that throw the
+// instant any property on them is read — if the guard did not run first,
+// `countObjectsUnderPrefixes`/`streamEventLog` would dereference one of
+// these Proxies before the guard's own error ever fires, and the
+// assertion below (which checks for `ReplayReportBatchSizeError`
+// specifically, not just "rejects") would catch that ordering violation
+// too. Same "cast-through-unknown fake stands in for both, never
+// dereferenced by this code path" precedent replay.test.ts's own
+// "runReplayCli — bad arguments" describe block already establishes for
+// the identical class of guard on replay.ts's own --batch-size flag.
+// ---------------------------------------------------------------------
+describe("replayWithReport (T3.6.5) — batchSize upper bound [review round, database-reviewer finding]", () => {
+  function untouchableR2Client(): S3Client {
+    return new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          throw new Error(
+            `replayWithReport must not touch r2Client.${String(prop)} before validating batchSize`,
+          );
+        },
+      },
+    ) as unknown as S3Client;
+  }
+
+  function untouchableDb(): DbClient['db'] {
+    return new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          throw new Error(`replayWithReport must not touch db.${String(prop)} before validating batchSize`);
+        },
+      },
+    ) as unknown as DbClient['db'];
+  }
+
+  it('rejects a batchSize over the 500-row ceiling with a named ReplayReportBatchSizeError, before touching R2 or Postgres', async () => {
+    await expect(
+      replayWithReport({
+        db: untouchableDb(),
+        r2Client: untouchableR2Client(),
+        r2Bucket: 'unused-bucket',
+        prefixes: ['unused-prefix/'],
+        batchSize: 501,
+      }),
+    ).rejects.toThrow(ReplayReportBatchSizeError);
+  });
+
+  it('names the offending value (501) and the 500-row limit in the error message', async () => {
+    await expect(
+      replayWithReport({
+        db: untouchableDb(),
+        r2Client: untouchableR2Client(),
+        r2Bucket: 'unused-bucket',
+        prefixes: ['unused-prefix/'],
+        batchSize: 501,
+      }),
+    ).rejects.toThrow(/batchSize 501 exceeds the maximum of 500/);
   });
 });
 
