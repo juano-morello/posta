@@ -819,3 +819,77 @@ Real Postgres testcontainer paused mid-drain via `docker pause`/`unpause` (spawn
 
 **Deviation from plan:** none — file list, verify text, and task heading all match as specified.
 **Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.5.7 · `a0dabf4` · 2026-07-29T13:49:56-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm typecheck:tests` exit 0; `pnpm test e2e-r2-outage.test.ts` 8/8 passed, 17.61s.
+**Fix-forward commit:** `a0dabf4` `fix: log MinIO-restart cleanup failures and scope R2-outage test DLQ queries by tenant` — landed by the review-fix agent the prior (eleventh) orchestrator dispatched before its own 600s watchdog stall; relayed to me on resumption, independently re-verified against real git history and a real test run rather than trusted. Four items in one file (apps/worker/src/test/e2e-r2-outage.test.ts): tenant-scoped `fetchEventIdsAmong` (adds `tenant_id` param + `AND tenant_id = $2`, all 3 call sites updated) matching the file's own ISOLATION header claim; `afterAll`'s MinIO-restart catch now logs instead of swallowing silently (shared compose service, no other trail); documented why the `job.data.rawPayload as CaptureEvent[]` cast is safe in this test's self-controlled context; removed the vacuous `expect(dlqEntriesReplayedCount).toBeGreaterThanOrEqual(0)` (array length can never be negative) and its now-write-only variable, replacing it with a comment explaining the real discriminating assertion is `finalDlqDepth === 0`.
+**Findings surviving triage:** none outstanding — this commit *is* the fix-forward for the review findings; nothing further raised against it.
+**Deviation from plan:** none.
+**Handed back to:** n/a — fix already landed and independently re-verified by me before stamping.
+
+---
+
+## T3.6.5 · `0382d70` · 2026-07-29T14:06:22-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test replay-report.test.ts` 17/17 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**Prior partial triage confirmed:** the eleventh orchestrator's session (stalled before recording it) had concluded silent-failure-hunter's own earlier pass on `replayWithReport` was over-reported since no try/catch exists there, so I/O errors propagate as a rejected promise (fail-loud by design). Independently re-verified myself: `grep -n "try\|catch" apps/worker/src/cli/replay-report.ts` returns zero real matches. Confirmed correct.
+
+**Review fan-out (4-way, run fresh — no prior record of a completed pass survived in git history or this file):**
+- code-reviewer: APPROVE, zero findings. Explicitly verified the INV-7 constraint (no `enrich()`/`resolveDestinationsByLinkIds`/`flushBatch` calls) and confirmed test assertions are behavioral, not vacuous (checked real Postgres row counts, not just report-object shape).
+- silent-failure-hunter: CLEAN, zero findings. Independently confirmed no swallowing anywhere; the buffer/flush loop can't drop a batch without incrementing rowsInserted/rowsSkipped/rejectionReasons.
+- typescript-reviewer: CLEAN. Ran typecheck/eslint/tests itself, all pass. Confirmed `insertEventsBatchWithCounts` is type-sound and doesn't widen `insertEventsBatch`'s existing signature.
+- database-reviewer: 1 MEDIUM (verified, actioned) — `ReplayReportOptions.batchSize` had no runtime upper bound despite its own doc comment claiming the same 500-row ceiling `replay.ts`'s `--batch-size` flag enforces via its own `MAX_BATCH_SIZE=500`; an oversized value would produce a single INSERT with ~500k+ bind params and an opaque Postgres error instead of a named rejection. Also confirmed the INSERT statement is byte-identical in conflict target to `insertEventsBatch` (idempotency/invariant 8 intact) and that `replay-driver.test.ts`'s repo-wide "no drifting INSERT implementation" scan still passes (both `.insert(events)` sites live in the same file, scan not loosened).
+
+**Fix-forward commit:** `0382d70` `fix: enforce a 500-row ceiling on replayWithReport's own batchSize` — dispatched to a fresh tdd-guide agent (original T3.6.5 implementer's session predates this orchestrator, no reachable agent id/name). Added `MAX_BATCH_SIZE=500` as a local, deliberately-duplicated constant (not imported from replay.ts — replay.ts is expected to eventually compose replayWithReport in per this file's own header, so importing the other direction now risks a future circular import) and a guard throwing `ReplayReportBatchSizeError` as the first statement in `replayWithReport`, before any R2 read or Postgres write. TDD genuinely followed: RED confirmed via a real failure (`Invalid client, expected instance of S3Client`) after adding only the error class with no guard yet, GREEN after the guard landed. New tests use Proxy-based "untouchable" db/r2Client fakes that throw on any property access, proving the rejection happens strictly before any I/O — not just "rejects eventually."
+
+**Findings surviving triage:** none outstanding — the one real finding is the fix-forward above.
+**Deviation from plan:** none.
+**Handed back to:** n/a — fix landed and independently re-verified by me before stamping.
+
+---
+
+## T3.6.6 · `9f00dd5` · 2026-07-29T14:18:21-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test truncate-and-restore.test.ts` 7/7 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**This epic's headline test.** New file only (apps/worker/src/cli/truncate-and-restore.test.ts, 506 lines) — no production code changes were needed, everything required already existed from T3.6.1-T3.6.4. Deliberately built to prove something replay-driver.test.ts (T3.6.3) structurally cannot: creates two REAL monthly partitions via `create_events_partition`, seeds both through the real live pipeline, TRUNCATEs ONLY the target partition by its real leaf-partition name (never `TRUNCATE TABLE events`), asserts the target is genuinely empty BEFORE replay runs, rebuilds via the REAL `posta replay` CLI entrypoint (`runReplayCli`, not the lower-level driver), then asserts (a) byte-identical rebuild of the target partition, (b) every rebuilt row's `tableoid` confirms physical placement in the target partition (never `events_default`), (c) the adjacent partition is completely byte-identical to its own pre-truncation snapshot, (d) exact row counts in both partitions post-rebuild — no extras.
+
+**Genuine sabotage-and-revert performed (not just reasoned about):** implementer temporarily pointed the TRUNCATE at the wrong (adjacent) partition and ran the suite for real against live Postgres/MinIO. Observed: the emptiness assertion failed correctly; but with that assertion additionally removed, the row-equality assertion for the target partition STILL PASSED — because the target was never truncated and `insertEventsBatch`'s own `ON CONFLICT DO NOTHING` (invariant 8) made the subsequent replay a silent no-op. This is a live, observed instance of exactly the "vacuous test" failure mode this epic's reviews have already caught three times, and is why the emptiness assertion is load-bearing, not decorative. All four independent reviewers below sanity-checked this reasoning against the actual code and confirmed it holds.
+
+**Review fan-out (4-way, [INV-7] and real partition DDL/DML — database-reviewer included per non-negotiable):**
+- code-reviewer: APPROVE, zero findings — independently confirmed the INV-7 constraint (no enrich()/resolveDestinationsByLinkIds/flushBatch during replay), confirmed all five key assertions are individually load-bearing (not just collectively), confirmed the file genuinely proves something replay-driver.test.ts does not.
+- silent-failure-hunter: 1 MEDIUM (afterAll's DeleteObjectsCommand has no `.catch(() => undefined)`, unlike some sibling e2e files) — REFUTED, not actioned: verified myself that the exact same afterAll shape (no `.catch()`) is used identically in replay-driver.test.ts, replay.test.ts (×2), and replay-report.test.ts (×2) — the whole `apps/worker/src/cli/*.test.ts` family shares this convention, and replay-report.test.ts just passed a fresh 4-way review (including silent-failure-hunter itself) on this exact pattern with zero findings hours earlier. Not a T3.6.6-specific gap; consistent with this epic's own precedent-checking discipline (T3.5.6's stamp note did the same for the analogous e2e-* family pattern).
+- typescript-reviewer: APPROVE, zero findings — ran typecheck/test/eslint itself, all clean.
+- database-reviewer: APPROVE, zero findings — ran the test itself against live infra, verified TRUNCATE-without-ONLY is correct for a childless leaf partition (no FKs/triggers on events), verified the raw partition-name SQL interpolation is safe (always internally-computed from Date.UTC-derived integers, never external input, matching every sibling file's identical technique), verified the two fixture months (2160-2168) cannot collide with the bootstrap migration's 2026 window and that create_events_partition is idempotent regardless, verified `FROM ONLY`/`tableoid::regclass::text` usage is correct in both directions.
+
+**Process note, not a code finding:** the database-reviewer agent ran `git stash`/`git stash pop` in this shared worktree while investigating an unrelated git-status discrepancy, in direct violation of the standing "never git stash" instruction (this repo's `.git` is shared across worktrees; a stash is repo-wide, not worktree-scoped). I independently verified immediately afterward: `git stash list` is empty, `git log` is intact, and `git diff` on both affected docs files (03-event-pipeline.md, IMPLEMENTATION-NOTES.md) shows exactly my own two `plan.js done`/`plan.js note` edits from earlier in this session — nothing lost or corrupted this time. No repeat instance needed going forward: all subsequent agent dispatches in this session (including review agents, not just implementers) now explicitly carry the no-stash prohibition.
+
+**Findings surviving triage:** none blocking.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix-forward needed.
+
+---
+
+## T3.6.7 · `1e6833e` · 2026-07-29T14:35:47-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test replay-idempotency.test.ts` 10/10 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**Targeted `replayWithReport` (T3.6.5's reconciliation-report module), not `runReplayCli`.** The plan's own "the report showing skipped equal to parsed" phrasing is `replayWithReport`'s literal vocabulary (`recordsParsed`/`rowsSkipped`/`reconciled`); the operator-facing CLI's result type has neither field. This also gives the task genuine non-duplicate scope: T3.6.3's own existing idempotency test only exercises `replayEventLog`/`insertEventsBatch` — `replayWithReport`/`insertEventsBatchWithCounts` (a structurally separate INSERT/RETURNING code path) had never had its own idempotency proven before this file.
+
+**Genuine sabotage-and-revert performed:** implementer temporarily made `insertEventsBatchWithCounts` corrupt a column's content on every insert (`UPDATE ... SET browser = 'SABOTAGED'`) while leaving `insertedEventIds`/counts untouched, rebuilt `@posta/core`, and ran the suite: 8 of 10 tests still passed (every arithmetic/reconciliation assertion was blind to the corruption), only the two byte-identical row-snapshot assertions failed, correctly showing the corrupted value. This is direct, empirical proof that the content-snapshot checks are load-bearing and the arithmetic checks alone are not sufficient — independently confirmed by database-reviewer's own analysis below (the reconciliation identity holds "by construction," so `reconciled === true` is tautological; what actually proves idempotency is `rowsInserted === 0` plus the independent row-snapshot queries).
+
+**T3.4.4 batch-id-gap dormancy — independently confirmed from a SECOND source (in addition to my own earlier grep):** implementer separately grepped `retryWithSplit(` usage and confirmed the only non-test call site is its own recursive self-call inside split-retry.ts — nothing in app.module.ts, flush.ts's production wiring, or the live accumulator→flush path this test's seeding step exercises ever calls it. The gap is real but dormant and cannot organically surface in this or any current test; not attempted to be manufactured, correctly out of this task's own scope.
+
+**Review fan-out (4-way, real SQL INSERT/RETURNING/ON CONFLICT under test — database-reviewer included):**
+- code-reviewer: APPROVE, zero findings — independently confirmed the invariant (no enrich/resolveDestinationsByLinkIds/flushBatch during either replay pass), confirmed assertions genuinely discriminate, confirmed non-duplicate coverage vs T3.6.3.
+- silent-failure-hunter: 1 MEDIUM (afterAll's DeleteObjectsCommand lacks `.catch()`) — REFUTED, not actioned, same reasoning as T3.6.6's stamp note: this reviewer's own comparison confirmed the identical afterAll shape is already used byte-for-byte in all four sibling `apps/worker/src/cli/*.test.ts` files (replay-driver.test.ts, replay.test.ts, replay-report.test.ts, truncate-and-restore.test.ts), none of which were asked to change it.
+- typescript-reviewer: APPROVE, zero findings — ran typecheck/test/eslint itself, all clean.
+- database-reviewer: APPROVE, zero findings — ran the suite against live infra itself, deep-verified the `RETURNING`-on-`ON CONFLICT DO NOTHING` semantics against the real `PRIMARY KEY (event_id, occurred_at)` constraint (no second unique constraint exists that could make Postgres error instead of no-op), confirmed the reconciliation arithmetic is tautological by construction and correctly identified `rowsInserted === 0` + the independent row-snapshot queries as the actual proof (matching the test's own design). One LOW/informational note: the file's own comment lists a couple of sibling fixture windows slightly imprecisely (documentation drift only — the chosen window itself does not collide with anything real in the repo). Not actioned, purely cosmetic.
+
+**Findings surviving triage:** none blocking.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix-forward needed.

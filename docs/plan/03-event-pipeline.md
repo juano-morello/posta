@@ -234,7 +234,7 @@ Pushes the whole T3.2.6 corpus through the live pipeline and asserts each row's 
 Pauses the Postgres container mid-drain, holds it down past several flush intervals, restores it, and asserts every event eventually lands exactly once. Also asserts the R2 objects written during the outage are the ones the recovered rows correspond to — the outage window is precisely where the two stores are allowed to diverge temporarily, and it must close.
 → **files** `apps/worker/src/test/e2e-pg-outage.test.ts` · **verify** `pnpm test e2e-pg-outage.test.ts` asserts final row count equals events pushed, zero DLQ entries, and store equality after recovery · **after** T3.5.5
 
-#### T3.5.7 · `test: R2 outage retries and eventually lands, and Postgres does not run ahead` [INV-7]
+#### T3.5.7 · `test: R2 outage retries and eventually lands, and Postgres does not run ahead` [INV-7] ✅ done (`3863b86`)
 Pauses MinIO mid-drain and asserts the flush path writes **nothing** to Postgres for the affected batches — the coupling from T3.4.6 observed through the real pipeline — then restores MinIO and asserts everything lands in both stores. The assertion that matters is the negative one taken during the outage.
 → **files** `apps/worker/src/test/e2e-r2-outage.test.ts` · **verify** `pnpm test e2e-r2-outage.test.ts` asserts the Postgres row count is frozen while MinIO is down, and full store equality after recovery · **after** T3.5.6
 
@@ -272,15 +272,15 @@ The replay driver batches streamed records and reuses `toNewEventRow`/`insertEve
 `posta replay --from <date> --to <date> [--tenant <id>] [--dry-run]`. Dates are parsed as UTC and rejected loudly if inverted or unparseable rather than silently replaying nothing. `--tenant` filters records after parse. `--dry-run` counts without inserting, so an operator can size the job before running it under pressure.
 → **files** `apps/worker/src/cli/replay.ts` · `apps/worker/src/cli/replay.test.ts` · **verify** `pnpm test replay.test.ts` asserts `--from` after `--to` exits non-zero naming the flag, `--tenant` restricts inserted rows to that tenant, and `--dry-run` inserts nothing while reporting a non-zero count · **after** T3.6.3
 
-#### T3.6.5 · `feat: replay progress and final reconciliation report`
+#### T3.6.5 · `feat: replay progress and final reconciliation report` ✅ done (`e2a578f`)
 Periodic progress to stderr (objects read, records parsed, elapsed) and a final report on stdout: objects read, records parsed, rows inserted, rows skipped as already-present, and rows rejected with reasons. `inserted + skipped = parsed` is asserted before exit — if it does not hold, replay exits non-zero, because a rebuild that quietly lost 40 rows is worse than one that failed.
 → **files** `apps/worker/src/cli/replay-report.ts` · `apps/worker/src/cli/replay-report.test.ts` · **verify** `pnpm test replay-report.test.ts` asserts the arithmetic holds on a clean range, that a half-populated range reports non-zero skipped, and that a forced mismatch exits non-zero · **after** T3.6.4
 
-#### T3.6.6 · `test: truncate an events partition and rebuild it from R2` [INV-7]
+#### T3.6.6 · `test: truncate an events partition and rebuild it from R2` [INV-7] ✅ done (`9f00dd5`)
 The headline test of this epic. Pushes a month of events through the live pipeline, snapshots the partition (all columns, ordered by `event_id`), `TRUNCATE`s that partition only, runs `posta replay` over its range, and asserts row-for-row equality with the snapshot — every column, same count, no extras in neighbouring partitions. Without this, invariant 7 is decoration.
 → **files** `apps/worker/src/cli/truncate-and-restore.test.ts` · **verify** `pnpm test truncate-and-restore.test.ts` asserts the post-replay partition is identical to the pre-truncation snapshot and that adjacent partitions are untouched · **after** T3.6.5, T3.5.7
 
-#### T3.6.7 · `test: replay over a fully-populated range changes nothing` [INV-8]
+#### T3.6.7 · `test: replay over a fully-populated range changes nothing` [INV-8] ✅ done (`1e6833e`)
 Runs replay twice over an intact range and asserts zero rows inserted on both passes, every row's contents unchanged, and the report showing skipped equal to parsed. This is what makes replay safe to run when you are not sure whether you need it — which is the only state anyone is ever in.
 → **files** `apps/worker/src/cli/replay-idempotency.test.ts` · **verify** `pnpm test replay-idempotency.test.ts` asserts 0 inserted / N skipped on both runs and an unchanged row-hash over the range · **after** T3.6.6
 
