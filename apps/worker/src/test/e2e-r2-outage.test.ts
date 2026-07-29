@@ -375,11 +375,17 @@ async function fetchEventIds(pg: PgContainerHandle, tenantId: string): Promise<S
 
 /** The subset of `eventIds` that already have a Postgres row — used by
  * the probe's own "zero rows while MinIO is down" checks, scoped to just
- * its own small batch rather than the whole tenant. */
-async function fetchEventIdsAmong(pg: PgContainerHandle, eventIds: readonly string[]): Promise<string[]> {
+ * its own small batch rather than the whole tenant. Scoped by `tenantId`
+ * too, matching this file's own header claim ("ISOLATION") that every
+ * Postgres query below scopes by tenantId. */
+async function fetchEventIdsAmong(
+  pg: PgContainerHandle,
+  eventIds: readonly string[],
+  tenantId: string,
+): Promise<string[]> {
   const result = await pg.pool.query<{ event_id: string }>(
-    'SELECT event_id FROM events WHERE event_id = ANY($1::text[])',
-    [eventIds],
+    'SELECT event_id FROM events WHERE event_id = ANY($1::text[]) AND tenant_id = $2',
+    [eventIds, tenantId],
   );
   return result.rows.map((row) => row.event_id).sort();
 }
@@ -539,7 +545,6 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
   let rowCountSamplesDuringOutage: number[];
 
   let jobCountsAfterRecovery: JobCounts;
-  let dlqEntriesReplayedCount: number;
   let finalDlqDepth: number;
   let finalRowCounts: RowCounts;
   let finalPgEventIds: Set<string>;
@@ -648,7 +653,7 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
 
     await sleep(PROBE_EARLY_CHECK_DELAY_MS);
     probeFlushStillPendingEarly = !probeFlushResolved;
-    probeRowsDuringEarlyCheck = await fetchEventIdsAmong(pg, probeEventIds);
+    probeRowsDuringEarlyCheck = await fetchEventIdsAmong(pg, probeEventIds, tenantId);
 
     // Continue holding for the rest of OUTAGE_HOLD_MS, polling the
     // whole-tenant row count throughout — see this file's own header,
@@ -663,7 +668,7 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
     }
 
     probeFlushStillPendingLate = !probeFlushResolved;
-    probeRowsRightBeforeRecovery = await fetchEventIdsAmong(pg, probeEventIds);
+    probeRowsRightBeforeRecovery = await fetchEventIdsAmong(pg, probeEventIds, tenantId);
 
     // ---- Recovery ----
     startMinio();
@@ -671,7 +676,7 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
 
     await withTimeout(probeFlushPromise, PROBE_FLUSH_TIMEOUT_MS, "probe's own flushBatch call");
     probeFlushResolvedAfterRecovery = probeFlushResolved;
-    probeRowsAfterRecovery = await fetchEventIdsAmong(pg, probeEventIds);
+    probeRowsAfterRecovery = await fetchEventIdsAmong(pg, probeEventIds, tenantId);
     probeR2BodyAfterRecovery = await getObjectText(r2Client, REAL_R2_CONFIG.bucket, probeKey);
 
     jobCountsAfterRecovery = await waitForCompletedCount(queue, TOTAL_EVENTS, DRAIN_TIMEOUT_MS);
@@ -680,10 +685,15 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
     // this file's own header, "THE FIX", for why this step exists at all
     // and why it does not compromise the property under test.
     const strandedDlqJobs = await dlqQueue.getJobs(['waiting', 'active', 'delayed', 'paused']);
-    dlqEntriesReplayedCount = strandedDlqJobs.length;
     if (strandedDlqJobs.length > 0) {
       const replayFlush = createFlushBatch({ db: pg.db, r2Client, r2Bucket: REAL_R2_CONFIG.bucket });
       for (const job of strandedDlqJobs) {
+        // Safe: `rawPayload` is `unknown` by deliberate design
+        // (dlq.service.ts's own EventsDlqJobPayload header), but THIS
+        // file's own outage path only ever DLQs the whole batch as
+        // CaptureEvent[] via sendR2PutFailureToDlq — see r2-retry.ts's own
+        // 'r2-put-failed' DLQ reason — so the cast is safe in this
+        // specific, self-controlled context.
         const payload = job.data.rawPayload as CaptureEvent[];
         await replayFlush(payload, job.data.originalJobId);
       }
@@ -709,9 +719,15 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
     try {
       startMinio();
       await waitForMinioHealthy();
-    } catch {
+    } catch (error: unknown) {
       // Best-effort only — every other cleanup step below still runs
-      // regardless.
+      // regardless. But this is the SHARED compose service, so a silent
+      // failure here leaves whoever's next test run inherits a dead MinIO
+      // with no trail — log it.
+      console.error(
+        '[e2e-r2-outage] afterAll MinIO restart failed — MinIO may still be down for other work:',
+        error,
+      );
     }
 
     if (spawned && spawned.child.exitCode === null && spawned.child.signalCode === null) {
@@ -772,8 +788,13 @@ describe('an R2/MinIO outage mid-drain retries and eventually lands, and Postgre
   });
 
   it('the DLQ ends up empty — either nothing exhausted, or this file replayed everything it found there', () => {
+    // How many entries were found and replayed above (setup's own
+    // `strandedDlqJobs.length`) is documented via the test name rather
+    // than asserted on directly — it can be 0 (MinIO restarted inside the
+    // real pipeline's own retry budget) or >0 (a batch genuinely exhausted
+    // and got replayed) and BOTH are correct outcomes; finalDlqDepth === 0
+    // is the assertion that actually discriminates pass from fail here.
     expect(finalDlqDepth).toBe(0);
-    expect(dlqEntriesReplayedCount).toBeGreaterThanOrEqual(0);
   });
 
   it(`[no loss, no duplication] lands exactly ${GRAND_TOTAL_EVENTS} rows — count(*) = count(distinct event_id) = ${GRAND_TOTAL_EVENTS}`, () => {
