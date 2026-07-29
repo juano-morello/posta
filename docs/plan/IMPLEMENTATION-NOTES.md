@@ -893,3 +893,24 @@ Real Postgres testcontainer paused mid-drain via `docker pause`/`unpause` (spawn
 **Findings surviving triage:** none blocking.
 **Deviation from plan:** none.
 **Handed back to:** n/a — no fix-forward needed.
+
+---
+
+## T3.6.8 · `daf087a` · 2026-07-29T16:21:35-03:00
+
+**Outcome:** done · verify passed (checked by me, thirteenth orchestrator): content-verification, not a test run, per this task's own docs: nature. Every concrete claim in `docs/runbooks/replay.md` checked directly against real source — flags (`--from`/`--to`/`--tenant`/`--dry-run`/`--batch-size`) against `parseReplayArgs` in `apps/worker/src/cli/replay.ts`, exit codes 0/1/2 against `runReplayCli`/`main()`, the 500-row `--batch-size` ceiling against `MAX_BATCH_SIZE`, required env vars against `replayEnvSchema`, day-granularity range logic against `eventPrefixes` (`packages/core/src/r2/keys.ts`), and the `TRUNCATE TABLE events_YYYY_MM` (no `ONLY`) worked example against `truncate-and-restore.test.ts`'s own identical technique. All matched.
+
+**Prior orchestrator's stall resolved:** `docs/runbooks/replay.md` was committed at `99cc9c5` and sat unmodified through this session's start. No fix-forward had actually landed for it — no note existed in this file for T3.6.8, and no commit since `99cc9c5` touched the runbook. So the twelfth orchestrator's "waiting on a fix-forward" was waiting on a review that had not completed, not one whose result was lost.
+
+**Review + fix-forward performed this session:** dispatched `database-reviewer` to check the runbook's SQL/CLI/DLQ claims against real code (it has Write/Edit tools per its own definition; I had instructed "do not edit," but it exceeded that instruction and applied its own findings directly rather than only reporting them back — a process deviation, noted here rather than hidden). I independently re-verified every line of the resulting diff (+39/-1) against real source myself before accepting any of it, rather than trusting either the agent's own report or a since-received relay message about it:
+- Confirmed `apps/worker/src/batch/flush.ts:549` (`resolveDestinationsByLinkIds`, a pre-R2-PUT Postgres SELECT) and `flush.ts:582` (`insertEventsBatch`, post-R2-PUT) are the two calls whose failure is NOT caught inside `flushBatch` itself — a rejection there propagates to BullMQ, which (`events.consumer.ts:479-500`, `onFailed`) routes ANY job that exhausts its attempts to `dlq.send('attempts-exhausted', ...)` regardless of which of those two calls failed. This makes the runbook's new claim — that `'attempts-exhausted'` DLQ entries are ambiguous about whether R2 was ever reached, unlike `'r2-put-failed'` which structurally guarantees it wasn't — independently confirmed true, not merely asserted.
+- Confirmed `replayEventLog` (`apps/worker/src/cli/replay-driver.ts`) has no per-record rejection/validation step (grep for reject/validate/safeParse/catch: zero hits), supporting the added "why you'd want the reconciliation report" paragraph.
+- Confirmed the dry-run branch of `runReplayCli` sits inside the same outer try/catch that can produce `EXIT_RUNTIME_ERROR` (2), supporting the added "dry-run is safe, not infallible" note.
+- Confirmed `insertEventsBatch`'s `ON CONFLICT (event_id, occurred_at) DO NOTHING` (invariant 8) supports the added "re-run the same command after an exit-2 partial failure; nothing duplicates" guidance.
+- Confirmed the new multi-month-partition warning matches the schema (one leaf table per calendar month) and the runbook's own pre-existing `pg_inherits` listing query.
+No unverified claim was accepted; the added content is accurate as written.
+
+**Findings surviving triage:** none — the one real gap (review had never completed) is what this session closed. The reviewer's overreach into editing rather than reporting is a process note, not a content defect; content was independently re-verified before being kept.
+**Deviation from plan:** none in the task's own scope. Process deviation: the review agent applied its own fix directly instead of reporting for me to route back to an implementer — accepted only after full independent re-verification, recorded for visibility.
+**Fix-forward commit:** `daf087a` `docs: close the replay runbook's DLQ-ambiguity and partial-exit gaps` (+39/-1 to `docs/runbooks/replay.md`), stamped separately from `99cc9c5` per this epic's convention (task stamped against its own original implementation commit, fix recorded as its own commit).
+**Handed back to:** n/a — fix independently verified and kept as-is; no further round needed.

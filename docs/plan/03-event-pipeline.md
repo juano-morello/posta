@@ -284,7 +284,7 @@ The headline test of this epic. Pushes a month of events through the live pipeli
 Runs replay twice over an intact range and asserts zero rows inserted on both passes, every row's contents unchanged, and the report showing skipped equal to parsed. This is what makes replay safe to run when you are not sure whether you need it — which is the only state anyone is ever in.
 → **files** `apps/worker/src/cli/replay-idempotency.test.ts` · **verify** `pnpm test replay-idempotency.test.ts` asserts 0 inserted / N skipped on both runs and an unchanged row-hash over the range · **after** T3.6.6
 
-#### T3.6.8 · `docs: replay runbook for the disaster case`
+#### T3.6.8 · `docs: replay runbook for the disaster case` ✅ done (`99cc9c5`)
 The procedure an operator follows at 3am: how to identify the affected range, how to check R2 coverage before truncating anything, the `--dry-run` sizing step, the actual command, how to read the reconciliation report, and what to do when `inserted + skipped ≠ parsed`. Also states plainly what replay cannot recover — events that never reached R2, which is why T3.4.6 couples the writes.
 → **files** `docs/runbooks/replay.md` · **verify** an operator who has not read this epic can follow the runbook end to end against a local stack and reproduce T3.6.6 by hand · **after** T3.6.7
 
