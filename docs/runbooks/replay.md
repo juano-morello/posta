@@ -81,6 +81,13 @@ of July 2026" use:
 
 (the day of `--to` is included in full, so you do not need to write `2026-08-01`).
 
+**A range spanning a month boundary touches multiple partitions** — each calendar month
+is its own `events_YYYY_MM` leaf table, and `posta replay` writes rows into whichever
+partition each row's `occurred_at` belongs to; it does not confine itself to one. If
+you're truncating before replaying, enumerate every affected partition first with this
+runbook's own `pg_inherits` listing query above and truncate each one the range touches
+— not just the one you had in mind first.
+
 ---
 
 ## 2. Check R2 coverage before touching Postgres — `--dry-run`
@@ -88,7 +95,9 @@ of July 2026" use:
 This is the safe sizing step. It counts matching records **without opening a write path
 to Postgres at all** — `runReplayCli`'s dry-run branch never even reads the `db` handle
 it's given (`apps/worker/src/cli/replay.ts`). Run this before any `TRUNCATE`,
-always:
+always (though "safe" means "writes nothing," not "cannot fail" — a dry-run still reads
+from R2, so it can exit `2` too, e.g. R2 unreachable or a corrupt NDJSON line hit
+mid-stream; see the exit-codes table below):
 
 ```bash
 ./node_modules/.bin/dotenv -e .env -- node apps/worker/dist/cli/replay.js \
@@ -128,6 +137,14 @@ error — the tenant may genuinely have nothing in that window) but a line goes 
 stderr: `posta replay: --tenant "..." matched 0 of N record(s) read in range — not an
 error, but double-check the tenant id if that is unexpected.` Read it as "should I
 double check I typed the tenant id right", not as a failure.
+
+**On exit `2`:** each batch's INSERT is atomic and the whole operation is idempotent
+(`ON CONFLICT DO NOTHING`) — if replay exits `2` partway through a range, some batches
+may already be committed to Postgres and others never attempted (not "no partial data
+was written"; that overstates it). That's safe either way: fix the underlying issue
+named in the stderr message (R2/Postgres reachability, or a corrupt NDJSON line and
+key) and re-run the exact same command. Already-inserted rows are matched by
+`ON CONFLICT` and skipped on the re-run; nothing gets duplicated.
 
 ### Decision point
 
@@ -232,6 +249,15 @@ docker compose exec postgres psql -U posta -d posta -c "SELECT count(*) FROM ONL
 
 ### The richer reconciliation report — a known, named gap
 
+Why you'd actually want this: it's the only thing in this codebase today that tells
+"rows skipped because they're safe, already-present duplicates" apart from "rows
+rejected because they fail record-shape validation." The live CLI's own driver
+(`replayEventLog`, `apps/worker/src/cli/replay-driver.ts`) has no rejection step at
+all — every streamed record is mapped and inserted unconditionally, so a genuinely
+malformed record isn't cleanly skipped-and-reported, it either gets inserted degraded
+or makes the whole run abort on a Postgres error. That distinction is exactly what
+matters when you're trying to confirm a recovery was clean, not just that it finished.
+
 A significantly more detailed reconciliation report **exists in this codebase and is
 fully implemented and tested**, but it is **not currently exposed through the `posta
 replay` CLI you actually run**. Specifically:
@@ -294,6 +320,18 @@ different, worse problem than the one this runbook solves — check the DLQ
 (`EVENTS_DLQ_QUEUE`) and worker logs around the incident window, not a wider replay
 range. A wider `--from`/`--to` only ever finds more of what's *already in R2*; it cannot
 manufacture records that were never written there.
+
+**Not every DLQ entry has the same R2 status, so check the reason before assuming
+either way.** `flush.ts` also runs a Postgres `SELECT` (resolving each event's
+destination) *before* the R2 PUT, and a real, non-duplicate Postgres error on either
+that `SELECT` or the later `INSERT` can independently exhaust a job's retries and land
+it in the DLQ under reason `'attempts-exhausted'` (`apps/worker/src/consumer/dlq.service.ts`'s
+`DlqReason` union) — same as `'r2-put-failed'`, from the outside. Only
+`'r2-put-failed'` structurally guarantees the batch never reached R2; an
+`'attempts-exhausted'` entry might have (if the failing call was the post-PUT `INSERT`)
+or might not have (if it was the pre-PUT `SELECT`) — the entry's own `errorMessage`
+usually names which, or check R2 coverage directly with `--dry-run` (section 2) for
+that batch's range rather than guessing from the reason alone.
 
 ---
 
