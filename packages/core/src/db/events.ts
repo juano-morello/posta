@@ -39,3 +39,48 @@ export async function insertEventsBatch(db: NodePgDatabase, rows: readonly NewEv
     .values([...rows])
     .onConflictDoNothing({ target: [events.eventId, events.occurredAt] });
 }
+
+// T3.6.5 [E3, S3.6][INV-7][INV-8] — insertEventsBatchWithCounts exists
+// SOLELY for replay's reconciliation report (apps/worker/src/cli/
+// replay-report.ts). `insertEventsBatch` above stays untouched — same
+// signature, same `Promise<void>` contract, same live flush-path call
+// site (apps/worker/src/batch/flush.ts's `flushBatch`) — because that
+// caller has never needed to distinguish "inserted" from "skipped by ON
+// CONFLICT": flushBatch's own idempotency proof (flush.test.ts's "same
+// batch twice" assertion) only cares that a re-flush inserts zero NEW
+// rows, never how many were skipped for reporting purposes. Widening
+// insertEventsBatch's own return type would force that call site (and
+// every future one) to start handling a value it has no use for, for a
+// need only replay/reporting tooling has — the same "add a new function
+// rather than widen an existing production call site's contract"
+// precedent T3.4.4 already set for `batchId` (optional-with-default,
+// not a forced signature change on every caller).
+//
+// The ONLY difference from insertEventsBatch is a `RETURNING event_id`
+// clause: Postgres's `ON CONFLICT ... DO NOTHING ... RETURNING` returns a
+// row for every INPUT row that was actually inserted, and returns NO row
+// for one that hit the conflict target and was skipped — so
+// `insertedEventIds.length` is the batch's real insert count, and a
+// caller can derive `skipped = rows.length - insertedEventIds.length`
+// without this function needing to know or care what "skipped" means to
+// its caller. Same ONE `.values([...])` call for the whole batch as
+// insertEventsBatch (never looped per row) and the SAME conflict target
+// — this is not a second, drifting INSERT implementation, it is the
+// identical statement with one clause added; replay-driver.test.ts's own
+// "no drifting INSERT implementation" scan (which this file is the one
+// permitted owner of) is unaffected by adding a second call site WITHIN
+// this same file — it only forbids a call site OUTSIDE it.
+export async function insertEventsBatchWithCounts(
+  db: NodePgDatabase,
+  rows: readonly NewEvent[],
+): Promise<{ readonly insertedEventIds: readonly string[] }> {
+  if (rows.length === 0) return { insertedEventIds: [] };
+
+  const inserted = await db
+    .insert(events)
+    .values([...rows])
+    .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
+    .returning({ eventId: events.eventId });
+
+  return { insertedEventIds: inserted.map((row) => row.eventId) };
+}
