@@ -78,7 +78,7 @@ Epics are refined to commit-level granularity **just in time**, not all at once 
 
 | Epics | State | Tasks |
 |---|---|---|
-| E0–E6, E10 | Refined to atomic tasks | **416** |
+| E0–E6, E10 | Refined to atomic tasks | **428** |
 | E7–E9 | Story-level. Refine as dependencies land. | — |
 
 E0–E5 are refined because the spec pins them tightly — the hot path, every capture signal, the eight classification rules in order, batching thresholds, the R2 layout. E6 is refined because it is the parallel track.
