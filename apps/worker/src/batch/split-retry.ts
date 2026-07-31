@@ -1,4 +1,5 @@
 import type { CaptureEvent } from '@posta/contracts';
+import { newId } from '@posta/core';
 import type { FlushBatch } from './flush';
 
 // T3.3.3 [E3, S3.3] — `retryWithSplit` is what makes flush.ts's own
@@ -106,6 +107,25 @@ export interface SplitRetryOptions {
   readonly sleep?: Sleep;
   /** Defaults to {@link consoleErrorLogger}. */
   readonly logger?: SplitRetryLogger;
+  /**
+   * [T3.7.1][INV-7][INV-8] The id this WHOLE call's top-level batch is
+   * keyed off — threaded down through every recursive `attemptBatch` call
+   * as the SECOND argument to `flushBatch(events, batchId)`, so
+   * `eventBatchKey` (flush.ts) resolves to the SAME R2 key across every
+   * retry of a given sub-batch (invariant 8's idempotent-write property,
+   * extended to R2). A split's two halves never inherit this whole id —
+   * each gets a SUFFIX of it (`${batchId}.0` / `${batchId}.1`), so the
+   * two halves' R2 objects never collide at the same key (see this
+   * file's own header on why an independent id per half would recreate
+   * invariant 7's forbidden asymmetry).
+   *
+   * Optional: defaults to a single `newId()` call, evaluated ONCE before
+   * recursion starts, when omitted — a caller with a real batch id
+   * (e.g. `BatchAccumulator`'s own per-flush id) supplies it explicitly;
+   * one that does not (every existing caller, as of this task) still
+   * gets a stable id for the lifetime of this one `retryWithSplit` call.
+   */
+  readonly batchId?: string;
 }
 
 /** A poisoned event, paired with the Error that caused its final,
@@ -165,7 +185,13 @@ function toError(error: unknown): Error {
 /** The single choke point every sub-batch (whole batch or a split half,
  * all the way down to size one) goes through — retries up to
  * `maxAttempts` times with exponential backoff between attempts, then
- * either splits (size > 1) or declares poison (size === 1). */
+ * either splits (size > 1) or declares poison (size === 1).
+ *
+ * `batchId` is this sub-batch's OWN stable id — the same value on every
+ * attempt in the loop below (so a retry overwrites its own R2 object,
+ * never mints a new key), and the base a split's two halves suffix
+ * (`.0`/`.1`) rather than replace outright — see `SplitRetryOptions.
+ * batchId`'s own doc comment for the full [T3.7.1] rationale. */
 async function attemptBatch(
   events: readonly CaptureEvent[],
   flushBatch: FlushBatch,
@@ -173,12 +199,13 @@ async function attemptBatch(
   initialDelayMs: number,
   sleep: Sleep,
   logger: SplitRetryLogger,
+  batchId: string,
 ): Promise<SplitRetryResult> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await flushBatch(events);
+      await flushBatch(events, batchId);
       return { committedEvents: events, poisonEvents: [] };
     } catch (error) {
       lastError = error;
@@ -211,8 +238,23 @@ async function attemptBatch(
   const left = events.slice(0, mid);
   const right = events.slice(mid);
 
-  const leftResult = await attemptBatch(left, flushBatch, maxAttempts, initialDelayMs, sleep, logger);
-  const rightResult = await attemptBatch(right, flushBatch, maxAttempts, initialDelayMs, sleep, logger);
+  // A SUFFIX of this sub-batch's own id, never a fresh independent one —
+  // see this function's own doc comment and `SplitRetryOptions.batchId`'s
+  // for why an independently minted id per half would let the second
+  // half's R2 PUT silently overwrite the first's at the SAME key.
+  const leftBatchId = `${batchId}.0`;
+  const rightBatchId = `${batchId}.1`;
+
+  const leftResult = await attemptBatch(left, flushBatch, maxAttempts, initialDelayMs, sleep, logger, leftBatchId);
+  const rightResult = await attemptBatch(
+    right,
+    flushBatch,
+    maxAttempts,
+    initialDelayMs,
+    sleep,
+    logger,
+    rightBatchId,
+  );
 
   return {
     committedEvents: [...leftResult.committedEvents, ...rightResult.committedEvents],
@@ -246,8 +288,20 @@ export async function retryWithSplit(
 
   const sleep = options.sleep ?? realSleep;
   const logger = options.logger ?? consoleErrorLogger;
+  // [T3.7.1] Minted ONCE, here, before recursion starts — never inside
+  // `attemptBatch` itself, which only ever suffixes this value. See
+  // `SplitRetryOptions.batchId`'s own doc comment for the full rationale.
+  const batchId = options.batchId ?? newId();
 
-  return attemptBatch(events, flushBatch, options.maxAttemptsPerBatch, options.initialDelayMs, sleep, logger);
+  return attemptBatch(
+    events,
+    flushBatch,
+    options.maxAttemptsPerBatch,
+    options.initialDelayMs,
+    sleep,
+    logger,
+    batchId,
+  );
 }
 
 // T3.3.4 [E3, S3.3] — everything below is the bridge from a

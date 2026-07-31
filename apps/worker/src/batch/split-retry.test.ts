@@ -155,6 +155,39 @@ function createFakeFlushBatch(
   };
 }
 
+/**
+ * [T3.7.1] A fake `flushBatch` built for one purpose: recording the exact
+ * `batchId` argument every call received, in call order, so a test can
+ * assert directly on id STABILITY (same sub-batch, retried) vs. id
+ * DISTINCTNESS (a split's two halves, or any two different sub-batches)
+ * without caring whether the call actually "commits" anything —
+ * `createFakeFlushBatch` above already proves the commit/poison
+ * bookkeeping; this one exists purely to observe the id-threading
+ * plumbing `attemptBatch`/`retryWithSplit` do around `flushBatch` itself.
+ * `fails` takes the WHOLE sub-batch (not one event, unlike `isPoison`
+ * above) so a caller can force "every attempt at every node, no matter
+ * its size, rejects" (e.g. `() => true`) to drive a full binary split all
+ * the way to singleton leaves.
+ */
+function createIdCapturingFlushBatch(
+  fails: (events: readonly CaptureEvent[]) => boolean,
+): { readonly flushBatch: FlushBatch; readonly capturedBatchIds: string[] } {
+  const capturedBatchIds: string[] = [];
+  const flushBatch: FlushBatch = async (events, batchId) => {
+    // `batchId` must always be defined here — `retryWithSplit` threads a
+    // real id into every single `flushBatch` call, whether the caller
+    // supplied one explicitly or it was minted once, at the top, via the
+    // default. A `String()` coercion of `undefined` would still push a
+    // capturable value, which would silently hide a regression where the
+    // id stops being threaded through at all.
+    capturedBatchIds.push(batchId as string);
+    if (fails(events)) {
+      throw new Error('simulated Postgres rejection: value too long for column "slug"');
+    }
+  };
+  return { flushBatch, capturedBatchIds };
+}
+
 const FAST_OPTIONS = (overrides: Partial<SplitRetryOptions> = {}): SplitRetryOptions => {
   const { sleep } = createRecordingSleep();
   return { maxAttemptsPerBatch: 3, initialDelayMs: 10, sleep, ...overrides };
@@ -340,4 +373,151 @@ describe('retryWithSplit — split halves are processed sequentially, never conc
     expect(result.committedEvents).toHaveLength(7);
     expect(result.poisonEvents).toHaveLength(1);
   }, 10_000);
+});
+
+// T3.7.1 [E3, S3.7][INV-7][INV-8] — `retryWithSplit` keys every sub-batch
+// off the BATCH's own `batchId`, not off a fresh id minted per attempt:
+// every RETRY of one sub-batch must reuse the byte-identical id (so a
+// retry overwrites its own R2 object rather than orphaning a new one —
+// invariant 8's idempotent-write property, extended to the R2 side flush.ts's
+// own `eventBatchKey` already keys off this same id), while a SPLIT's two
+// halves must get DIFFERENT ids, each a SUFFIX of the parent's
+// (`${parent}.0` / `${parent}.1`), never independently minted — an
+// independent id per half would let the second half's R2 PUT silently
+// overwrite the first's at the SAME key, which is invariant 7's forbidden
+// asymmetry (R2 ends up holding only half the batch while Postgres holds
+// all of it) introduced by the very retry mechanism meant to guard
+// against it.
+
+describe('retryWithSplit — batchId stability across retries of the SAME sub-batch', () => {
+  it('passes a byte-identical batchId to every attempt at one sub-batch', async () => {
+    const poisonEvent = buildCaptureEvent({ slug: OVERSIZED_SLUG });
+    const { flushBatch, capturedBatchIds } = createIdCapturingFlushBatch(() => true);
+    const { sleep } = createRecordingSleep();
+
+    await retryWithSplit([poisonEvent], flushBatch, {
+      maxAttemptsPerBatch: 3,
+      initialDelayMs: 0,
+      sleep,
+    });
+
+    // A batch of one never splits (attemptBatch only splits when
+    // events.length > 1), so all 3 calls are retries of the SAME
+    // sub-batch — exactly the "≥2 attempts at one sub-batch" this
+    // assertion needs to prove anything.
+    expect(capturedBatchIds).toHaveLength(3);
+    expect(capturedBatchIds[0]).toBeTruthy();
+    expect(new Set(capturedBatchIds).size).toBe(1);
+  });
+});
+
+describe("retryWithSplit — a split's two halves get DIFFERENT batchIds, each a suffix of the parent", () => {
+  it('assigns ${parent}.0 / ${parent}.1 to the two halves, both distinct from each other and the parent', async () => {
+    const events = buildBatch(2, 0); // event 0 is poison -> the 2-event root splits into two size-1 halves
+    const { flushBatch, capturedBatchIds } = createIdCapturingFlushBatch((batch) =>
+      batch.some((event) => event.slug === OVERSIZED_SLUG),
+    );
+    const { sleep } = createRecordingSleep();
+    const parentBatchId = 'parent-batch-id';
+
+    await retryWithSplit(events, flushBatch, {
+      maxAttemptsPerBatch: 1,
+      initialDelayMs: 0,
+      sleep,
+      batchId: parentBatchId,
+    });
+
+    // Root attempt first (fails, splits), then the left half, then the
+    // right half — attemptBatch's own recursion order.
+    expect(capturedBatchIds).toEqual([parentBatchId, `${parentBatchId}.0`, `${parentBatchId}.1`]);
+
+    const [rootId, leftId, rightId] = capturedBatchIds;
+    expect(leftId).not.toBe(rootId);
+    expect(rightId).not.toBe(rootId);
+    expect(leftId).not.toBe(rightId);
+  });
+});
+
+describe('retryWithSplit — splitting 64 events to singletons produces exactly one distinct batchId per sub-batch attempt', () => {
+  it('produces 127 distinct batchIds for 127 flushBatch calls, with zero collisions', async () => {
+    const events = buildBatch(64, null);
+    const { flushBatch, capturedBatchIds } = createIdCapturingFlushBatch(() => true);
+    const { sleep } = createRecordingSleep();
+
+    await retryWithSplit(events, flushBatch, {
+      maxAttemptsPerBatch: 1, // 1 attempt per node -> call count === sub-batch count
+      initialDelayMs: 0,
+      sleep,
+    });
+
+    // A full binary split of 64 leaves down to size 1 visits 2*64 - 1 =
+    // 127 nodes (63 internal splits + 64 leaves), each one exactly one
+    // flushBatch call under maxAttemptsPerBatch: 1.
+    expect(capturedBatchIds).toHaveLength(127);
+    // The property that actually matters: not one id could collide with
+    // another, which is exactly what would let one sibling's R2 PUT
+    // silently overwrite another's.
+    expect(new Set(capturedBatchIds).size).toBe(capturedBatchIds.length);
+  });
+});
+
+describe('retryWithSplit — batchId assignment is deterministic given the same top-level batchId', () => {
+  it('two independent runs over identical input, with the same explicit top-level batchId, produce identical id sets', async () => {
+    const events = buildBatch(16, null);
+
+    const run1 = createIdCapturingFlushBatch(() => true);
+    const run2 = createIdCapturingFlushBatch(() => true);
+    const { sleep: sleep1 } = createRecordingSleep();
+    const { sleep: sleep2 } = createRecordingSleep();
+    const parentBatchId = 'deterministic-parent-batch-id';
+
+    await retryWithSplit(events, run1.flushBatch, {
+      maxAttemptsPerBatch: 1,
+      initialDelayMs: 0,
+      sleep: sleep1,
+      batchId: parentBatchId,
+    });
+    await retryWithSplit(events, run2.flushBatch, {
+      maxAttemptsPerBatch: 1,
+      initialDelayMs: 0,
+      sleep: sleep2,
+      batchId: parentBatchId,
+    });
+
+    // Not just "same size" — the exact same set of ids, proving nothing
+    // inside the recursion mints an id non-deterministically (only the
+    // top-level default, via newId(), ever would — and it was bypassed
+    // here by supplying an explicit batchId).
+    expect(new Set(run1.capturedBatchIds)).toEqual(new Set(run2.capturedBatchIds));
+    // The recursion order is itself deterministic (left before right,
+    // always), so even the exact call sequence matches.
+    expect(run1.capturedBatchIds).toEqual(run2.capturedBatchIds);
+  });
+});
+
+describe('retryWithSplit — batchId option defaults to a freshly minted id when omitted', () => {
+  it('mints a batchId once at the top when options.batchId is omitted, and threads it into flushBatch', async () => {
+    const events = buildBatch(3, null);
+    const { flushBatch, capturedBatchIds } = createIdCapturingFlushBatch(() => false);
+    const { sleep } = createRecordingSleep();
+
+    await retryWithSplit(events, flushBatch, { maxAttemptsPerBatch: 1, initialDelayMs: 0, sleep });
+
+    expect(capturedBatchIds).toHaveLength(1);
+    expect(capturedBatchIds[0]).toBeTruthy();
+  });
+
+  it('two separate retryWithSplit calls with no explicit batchId mint two DIFFERENT ids', async () => {
+    const eventsA = buildBatch(1, null);
+    const eventsB = buildBatch(1, null);
+    const a = createIdCapturingFlushBatch(() => false);
+    const b = createIdCapturingFlushBatch(() => false);
+    const { sleep: sleepA } = createRecordingSleep();
+    const { sleep: sleepB } = createRecordingSleep();
+
+    await retryWithSplit(eventsA, a.flushBatch, { maxAttemptsPerBatch: 1, initialDelayMs: 0, sleep: sleepA });
+    await retryWithSplit(eventsB, b.flushBatch, { maxAttemptsPerBatch: 1, initialDelayMs: 0, sleep: sleepB });
+
+    expect(a.capturedBatchIds[0]).not.toBe(b.capturedBatchIds[0]);
+  });
 });
