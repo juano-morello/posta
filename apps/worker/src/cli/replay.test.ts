@@ -686,6 +686,7 @@ describe('replayEnvSchema (T3.7.6) — the R2_ENDPOINT / R2_ACCOUNT_ID at-least-
 
   it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are omitted entirely', () => {
     const { R2_ENDPOINT: _R2_ENDPOINT, ...rest } = VALID_REPLAY_ENV;
+    void _R2_ENDPOINT;
     const result = replayEnvSchema.safeParse(rest);
 
     expect(result.success).toBe(false);

@@ -406,7 +406,6 @@ describe('flushBatch through the real BullMQ pipeline — 10k event throughput (
     // console.log for a benchmark's own reported numbers matches
     // apps/api/src/redirect/test/latency.test.ts's own established
     // precedent (T2.6.9) for exactly this purpose, not a stray debug log.
-    // eslint-disable-next-line no-console
     console.log(
       `[T3.3.6 throughput] ${TOTAL_EVENTS} events / ${totalDurationMs.toFixed(1)}ms = ` +
         `${throughputEventsPerSec.toFixed(1)} events/sec | p95 flush duration ` +

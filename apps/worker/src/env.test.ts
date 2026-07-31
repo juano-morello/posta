@@ -93,6 +93,8 @@ describe('workerEnvSchema', () => {
 
     it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are omitted entirely', () => {
       const { R2_ENDPOINT: _R2_ENDPOINT, R2_ACCOUNT_ID: _R2_ACCOUNT_ID, ...rest } = VALID_WORKER_ENV;
+      void _R2_ENDPOINT;
+      void _R2_ACCOUNT_ID;
       const result = workerEnvSchema.safeParse(rest);
 
       expect(result.success).toBe(false);
@@ -120,6 +122,7 @@ describe('workerEnvSchema', () => {
 
     it('parses when R2_ACCOUNT_ID is omitted entirely and R2_ENDPOINT is set', () => {
       const { R2_ACCOUNT_ID: _R2_ACCOUNT_ID, ...rest } = VALID_WORKER_ENV;
+      void _R2_ACCOUNT_ID;
       const result = workerEnvSchema.safeParse(rest);
 
       expect(result.success).toBe(true);
