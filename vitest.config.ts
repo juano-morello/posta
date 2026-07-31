@@ -104,21 +104,24 @@ export default defineConfig({
           fileParallelism: false,
         },
       },
-      // 'e2e' project (T3.5, E3) — the SAME constraint that already keeps
-      // tests/containers/** out of 'default' two blocks up, applied to the
-      // one other suite that has it: these files need the docker-compose
-      // stack itself, which the main `ci` job does not and cannot provide.
-      // It gives Postgres and Redis as `services:` containers and never
-      // writes a `.env`, so `docker compose` there cannot even resolve
-      // docker-compose.yml's own `env_file: .env`/`${VAR}` interpolation —
-      // observed as `env file /home/runner/work/posta/posta/.env not found`
-      // followed by `"docker compose ps -a -q minio" exited status=1`.
+      // 'e2e' project (T3.5, E3) — split out of 'default' for the SAME
+      // reason 'containers' and 'redirect-hot-path' are (see their own
+      // comments): these seven files don't just read and write MinIO like
+      // the ~20 other R2-backed files under 'default' now can (the main
+      // `ci` job writes a `.env` and starts the compose MinIO as of
+      // 9402a36) — they OPERATE it mid-run. e2e-r2-outage.test.ts calls
+      // `docker compose stop/start minio` directly, and every other file
+      // here shares that same compose MinIO through startPipelineHarness()
+      // /REAL_R2_CONFIG, so one file taking it down is a hard dependency
+      // the read/write-only files don't have and can't be mixed with. See
+      // this block's own `fileParallelism` paragraph below for the fuller
+      // account (the measured collision, and why it's `false` here).
       // .github/workflows/ci.yml's `event-pipeline` job is what actually
-      // runs this project: it writes that .env, brings the stack up
-      // healthy, then invokes `pnpm test --project e2e`. As with
-      // 'redirect-hot-path' below, 'default' excludes these same two globs,
-      // so this project is the ONLY one that ever runs these files — if
-      // that job is ever removed, they silently stop running everywhere.
+      // runs this project, invoking `pnpm test --project e2e` against that
+      // same compose stack. As with 'redirect-hot-path' below, 'default'
+      // excludes these same two globs, so this project is the ONLY one
+      // that ever runs these files — if that job is ever removed, they
+      // silently stop running everywhere.
       //
       // The dependency is NOT uniform, so the include list is enumerated
       // rather than taking the whole apps/worker/src/test/ directory:
