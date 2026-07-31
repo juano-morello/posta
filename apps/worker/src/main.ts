@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { formatEnvFailures, loadEnv } from '@posta/contracts';
 import { AppModule } from './app.module';
-import { workerEnvSchema } from './env';
+import { warnIfConcurrencyCannotFillBatchSize, workerEnvSchema } from './env';
 
 // T0.3.8 — fail fast on invalid env (S0.3). Same contract as the API's
 // main.ts: validate process.env against workerEnvSchema before anything
@@ -15,6 +15,13 @@ if (!envResult.ok) {
   process.exit(1);
 }
 const env = envResult.data;
+
+// [T3.7.7] Immediately after loadEnv succeeds, and before AppModule.
+// forRoot() (below) does anything with env.EVENT_BATCH_SIZE — a loud,
+// NON-fatal warning when WORKER_CONCURRENCY cannot fill EVENT_BATCH_SIZE
+// (see env.ts's own doc comment on this function for the full mechanism
+// and why it must never fail boot).
+warnIfConcurrencyCannotFillBatchSize(env);
 
 async function bootstrap(): Promise<void> {
   // T3.1.2 [E3, S3.1] — AppModule.forRoot() wires the BullMQ root

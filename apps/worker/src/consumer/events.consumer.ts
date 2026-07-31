@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, eventJobSchema } from '@posta/core';
 import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
 import { BatchAccumulator } from '../batch/accumulator';
+import { DEFAULT_WORKER_CONCURRENCY } from '../env';
 import { DlqService, toDlqIssues } from './dlq.service';
 
 // T3.1.3 [E3, S3.1] — the BullMQ CONSUMER half of the redirect hot
@@ -244,11 +245,14 @@ export class AccumulatingEventSink implements EventSink {
   }
 }
 
-/** WORKER_CONCURRENCY's own default (the plan's own "default 8"). Not in
- * workerEnvSchema (env.ts, T0.3.6) yet — this task's own file list names
- * only this consumer, not env.ts, so the var is read and validated here
- * instead, at the one place it is actually consumed. */
-export const DEFAULT_WORKER_CONCURRENCY = 8;
+// [T3.7.7] DEFAULT_WORKER_CONCURRENCY used to be DEFINED here (the plan's
+// own "default 8") — workerEnvSchema (env.ts, T0.3.6) didn't yet carry
+// WORKER_CONCURRENCY, so this was the one place the var was read and
+// validated. It now lives in env.ts as the single source of truth (that
+// schema's own field default reads it too), and this file only imports
+// it — re-exported below so existing imports of DEFAULT_WORKER_CONCURRENCY
+// from this module keep working unchanged.
+export { DEFAULT_WORKER_CONCURRENCY };
 
 const workerConcurrencySchema = z.coerce.number().int().positive();
 
@@ -281,8 +285,19 @@ export function readWorkerConcurrency(env: NodeJS.ProcessEnv = process.env): num
  * Drains EVENTS_QUEUE. Concurrency comes from `readWorkerConcurrency()`
  * at CLASS-DECORATION time (module load / boot) — the same "read once"
  * discipline env.ts's own header documents for DATABASE_URL_WORKER etc,
- * just sourced from this file instead of a schema field (see this file's
- * own header for why).
+ * just read here directly from `process.env` rather than through
+ * `workerEnvSchema`. [T3.7.7] `workerEnvSchema` now ALSO carries a
+ * `WORKER_CONCURRENCY` field (env.ts), but this decorator argument is
+ * evaluated at MODULE LOAD time — main.ts statically imports `AppModule`
+ * (which transitively imports this class) before it ever calls
+ * `loadEnv()` — so the validated `WorkerEnv` object doesn't exist yet
+ * when this line runs; there is no validated value here to switch to.
+ * This is not a synchronization risk: both this read and the schema
+ * field read the exact same `process.env.WORKER_CONCURRENCY`, through
+ * the same `z.coerce.number().int().positive()` shape, so the two can
+ * never disagree — the schema field exists for main.ts's own
+ * post-`loadEnv` warning (`warnIfConcurrencyCannotFillBatchSize`), not to
+ * replace this read.
  */
 @Processor(EVENTS_QUEUE, { concurrency: readWorkerConcurrency() })
 @Injectable()

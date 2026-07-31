@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { workerEnvSchema } from './env';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_WORKER_CONCURRENCY, warnIfConcurrencyCannotFillBatchSize, workerEnvSchema } from './env';
 
 // T0.3.6 — the worker's Zod env schema (S0.3). The worker is a BullMQ
 // consumer that drains Redis, enriches, and writes events to Postgres
@@ -216,6 +216,141 @@ describe('workerEnvSchema', () => {
     },
   );
 
+  // [T3.7.7] WORKER_CONCURRENCY moves INTO this schema — see this file's
+  // own module header addendum below for why it wasn't here already
+  // (T3.5.4 originally left it in events.consumer.ts, the one place it
+  // was consumed) and why it's relocated now. It stays OPTIONAL, unlike
+  // every other numeric knob in this schema: an operator who never sets
+  // it gets the same DEFAULT_WORKER_CONCURRENCY (8) readWorkerConcurrency
+  // (events.consumer.ts) has always defaulted to — this schema field must
+  // not turn that long-standing "unset is fine" contract into a boot
+  // failure.
+  describe('WORKER_CONCURRENCY [T3.7.7]', () => {
+    it('defaults to DEFAULT_WORKER_CONCURRENCY (8) when unset', () => {
+      const result = workerEnvSchema.parse(VALID_WORKER_ENV);
+
+      expect(result.WORKER_CONCURRENCY).toBe(DEFAULT_WORKER_CONCURRENCY);
+      expect(DEFAULT_WORKER_CONCURRENCY).toBe(8);
+    });
+
+    it('coerces a numeric string to a number', () => {
+      const result = workerEnvSchema.parse({ ...VALID_WORKER_ENV, WORKER_CONCURRENCY: '16' });
+
+      expect(result.WORKER_CONCURRENCY).toBe(16);
+    });
+
+    it.each(['0', '-1', '3.5', 'banana', ''])(
+      'rejects a non-positive-integer value when explicitly present: %j',
+      (value) => {
+        const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, WORKER_CONCURRENCY: value });
+
+        expect(result.success).toBe(false);
+      },
+    );
+  });
+
+  // [T3.7.7] The bug: since T3.5.4, a BullMQ job stays "held open" until
+  // its own event's batch flushes, so at most WORKER_CONCURRENCY events
+  // can ever be in flight at once — if WORKER_CONCURRENCY is below
+  // EVENT_BATCH_SIZE, the accumulator's COUNT trigger can mathematically
+  // never fire, and every batch silently falls back to the
+  // EVENT_BATCH_INTERVAL_MS timer instead. That pairing is sometimes
+  // DELIBERATE (flush-on-interval-only, bounded-latency deployments —
+  // sigterm-flush.test.ts and e2e-kill-recovery.test.ts both rely on it
+  // on purpose), so this can never be a boot failure — only a loud,
+  // one-time warning. Deliberate-break-then-revert performed by hand for
+  // both "should be silent" cases below (equal, and above): flipping `<`
+  // to `<=` in the implementation made the "equal" case's
+  // `not.toHaveBeenCalled()` assertion fail as expected, and flipping `<`
+  // to a truthy no-op made both silent cases fail; reverted after
+  // confirming each — see this task's own report for the exact output.
+  describe('warnIfConcurrencyCannotFillBatchSize [T3.7.7]', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('warns exactly once, naming both variables and both values, when concurrency is below batch size', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '8',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0]?.join(' ') ?? '';
+      expect(message).toContain('WORKER_CONCURRENCY');
+      expect(message).toContain('8');
+      expect(message).toContain('EVENT_BATCH_SIZE');
+      expect(message).toContain('100');
+    });
+
+    it('does not throw, and env still parses, when concurrency is below batch size', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const parseResult = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '8',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      expect(parseResult.success).toBe(true);
+      if (!parseResult.success) return;
+      expect(() => warnIfConcurrencyCannotFillBatchSize(parseResult.data)).not.toThrow();
+    });
+
+    it('is silent when WORKER_CONCURRENCY equals EVENT_BATCH_SIZE', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '100',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('is silent when WORKER_CONCURRENCY is greater than EVENT_BATCH_SIZE', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '200',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // [T3.7.7] DEFAULT_WORKER_CONCURRENCY's own definition moved from
+  // events.consumer.ts to here — that file's readWorkerConcurrency() must
+  // now IMPORT it rather than define it locally, so the two "what does
+  // WORKER_CONCURRENCY default to" answers (this schema's own field
+  // default, and readWorkerConcurrency's fallback) can never drift apart
+  // again. Asserted here by reading events.consumer.ts's own source text,
+  // not just by comparing values — two independent `= 8` literals would
+  // make every VALUE assertion pass while leaving the exact drift risk
+  // this task exists to close.
+  describe('DEFAULT_WORKER_CONCURRENCY provenance [T3.7.7]', () => {
+    it('events.consumer.ts imports DEFAULT_WORKER_CONCURRENCY from env.ts rather than defining it locally', () => {
+      const consumerPath = path.join(
+        process.cwd(),
+        'apps/worker/src/consumer/events.consumer.ts',
+      );
+      const contents = readFileSync(consumerPath, 'utf8');
+
+      expect(contents).toMatch(
+        /import\s*\{[^}]*\bDEFAULT_WORKER_CONCURRENCY\b[^}]*\}\s*from\s*['"]\.\.\/env['"]/,
+      );
+      expect(contents).not.toMatch(/export\s+const\s+DEFAULT_WORKER_CONCURRENCY\s*=/);
+    });
+  });
+
   it('does not read DATABASE_URL — the worker uses the writer-role DATABASE_URL_WORKER', () => {
     expect(workerEnvSchema.shape).not.toHaveProperty('DATABASE_URL');
     expect(workerEnvSchema.shape).toHaveProperty('DATABASE_URL_WORKER');
@@ -291,5 +426,27 @@ describe('.env.example', () => {
       const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
       expect(failingPaths).toEqual([]);
     }
+  });
+
+  // [T3.7.7] .env.example used to ship EVENT_BATCH_SIZE=100 with
+  // WORKER_CONCURRENCY left UNSET (defaulting to 8) — exactly the broken
+  // pairing this task's warning exists to catch, shipped in the file
+  // meant to document a WORKING configuration. Reads the file from disk
+  // the same way the test above does (never a hand-typed copy) and runs
+  // it through the real warning check, so a future edit that
+  // reintroduces the mismatch fails this test instead of silently
+  // shipping again.
+  it('is a coherent WORKER_CONCURRENCY / EVENT_BATCH_SIZE pairing — the warning check stays silent', () => {
+    const envExamplePath = path.join(process.cwd(), '.env.example');
+    const contents = readFileSync(envExamplePath, 'utf8');
+    const parsed = parseDotEnvFile(contents);
+
+    const env = workerEnvSchema.parse(parsed);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warnIfConcurrencyCannotFillBatchSize(env);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

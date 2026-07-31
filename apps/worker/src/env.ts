@@ -15,6 +15,15 @@ import { zNonEmpty, zOptionalUrl, zPort, zUrl } from '@posta/contracts';
 // `events` (T4.2.4). Two roles means two URLs, wired from the start
 // even though the privilege separation itself lands later.
 
+// [T3.7.7] WORKER_CONCURRENCY's own default (the plan's own "default 8").
+// Originally defined in events.consumer.ts (T3.5.4) — the one place the
+// var was read, before this task added it to the schema below. Moved
+// here so it has exactly one definition: events.consumer.ts's own
+// readWorkerConcurrency() now IMPORTS this constant instead of declaring
+// a second, independent `= 8` that could silently drift from this
+// schema's own field default.
+export const DEFAULT_WORKER_CONCURRENCY = 8;
+
 const workerEnvSchemaObject = z.object({
   // Datastores — writer role (see file header). No domain/auth vars: the
   // worker builds no URLs and serves no auth-gated routes.
@@ -69,6 +78,26 @@ const workerEnvSchemaObject = z.object({
   // Postgres error the next time a batch actually fills.
   EVENT_BATCH_SIZE: z.coerce.number().int().positive().max(500),
   EVENT_BATCH_INTERVAL_MS: z.coerce.number().int().positive(),
+
+  // [T3.7.7] How many BullMQ jobs EventsConsumer processes concurrently
+  // (events.consumer.ts's own `@Processor(EVENTS_QUEUE, { concurrency:
+  // readWorkerConcurrency() })`). Moved into this schema from
+  // events.consumer.ts, where it used to be read and validated ad hoc —
+  // `workerConcurrencySchema` there stays as-is (same
+  // `z.coerce.number().int().positive()` shape, mirrored here) because
+  // the `@Processor` decorator argument is evaluated at MODULE LOAD time,
+  // before this schema's own `loadEnv()` call in main.ts ever runs (see
+  // that file's own comment on the ordering) — this field exists for
+  // validated, DOWNSTREAM consumption (warnIfConcurrencyCannotFillBatchSize
+  // below), not to replace that decorator-time read, which reads the
+  // exact same underlying env var and so can never disagree with it.
+  //
+  // OPTIONAL, defaulting to DEFAULT_WORKER_CONCURRENCY — unlike every
+  // other numeric knob above, an operator who never sets this is not
+  // misconfigured; readWorkerConcurrency() has always silently defaulted
+  // to 8, and this field must keep answering the same way rather than
+  // turning "unset" into a boot failure.
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(DEFAULT_WORKER_CONCURRENCY),
 
   // T3.1.6 [S3.1] — bounds ShutdownService's onModuleDestroy() (apps/
   // worker/src/consumer/shutdown.ts): on SIGTERM it pauses the BullMQ
@@ -139,3 +168,49 @@ function requireAtLeastOneR2AddressingVar(
 export const workerEnvSchema = workerEnvSchemaObject.superRefine(requireAtLeastOneR2AddressingVar);
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
+
+/**
+ * [T3.7.7] The bug: since T3.5.4, `AccumulatingEventSink.handle()` awaits
+ * `BatchAccumulator.add()` until the event's own batch has actually
+ * flushed, so a BullMQ job stays "held open" (its lock/attempt count not
+ * released) for that whole time. That caps how many events can ever be
+ * simultaneously represented in the accumulator at `WORKER_CONCURRENCY`
+ * — so when `WORKER_CONCURRENCY < EVENT_BATCH_SIZE`, the accumulator's
+ * COUNT trigger (fires once `batchSize` events have arrived) can
+ * mathematically never fire: concurrency itself caps "in flight" below
+ * the count threshold. Every batch ends up waiting out the full
+ * `EVENT_BATCH_INTERVAL_MS` interval trigger instead, flushing at
+ * roughly `WORKER_CONCURRENCY` events instead of the configured
+ * `EVENT_BATCH_SIZE`.
+ *
+ * DELIBERATELY NEVER FATAL. This pairing is often a deliberate choice —
+ * flush-on-interval-only, for a low-traffic deployment wanting bounded
+ * latency and smaller batches — so this cannot be a `.superRefine` on
+ * `workerEnvSchemaObject` the way `requireAtLeastOneR2AddressingVar` is:
+ * a `.superRefine` failure is a PARSE failure, and `loadEnv` (main.ts)
+ * treats every parse failure as fatal, exiting the process. Both
+ * `apps/worker/src/consumer/sigterm-flush.test.ts` and
+ * `apps/worker/src/test/e2e-kill-recovery.test.ts` deliberately run with
+ * `WORKER_CONCURRENCY < EVENT_BATCH_SIZE` on purpose — it is their own
+ * mechanism for keeping the count trigger from firing, so they can
+ * assert the SIGTERM/interval-based flush path specifically. Failing
+ * boot on this pairing would turn a performance note into an outage AND
+ * break both of those tests' own deliberate setup.
+ *
+ * Takes the ALREADY-VALIDATED, parsed `WorkerEnv` (never raw
+ * `process.env`) — call this from main.ts immediately after
+ * `loadEnv(workerEnvSchema, process.env)` succeeds. Emits at most one
+ * `console.warn`, naming both variable names and both actual values, and
+ * does nothing at all when concurrency can fill the batch.
+ */
+export function warnIfConcurrencyCannotFillBatchSize(env: WorkerEnv): void {
+  if (env.WORKER_CONCURRENCY >= env.EVENT_BATCH_SIZE) return;
+
+  console.warn(
+    `WORKER_CONCURRENCY (${env.WORKER_CONCURRENCY}) is less than EVENT_BATCH_SIZE ` +
+      `(${env.EVENT_BATCH_SIZE}) — since T3.5.4, at most WORKER_CONCURRENCY events can be ` +
+      'in flight at once, so the batch count trigger can never fire; every batch will flush ' +
+      'on the EVENT_BATCH_INTERVAL_MS timer instead, at up to WORKER_CONCURRENCY events per ' +
+      'flush.',
+  );
+}
