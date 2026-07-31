@@ -79,6 +79,21 @@ export interface R2ClientConfig {
    * of them at compile time before T3.7.5 ever lands. A missing key is
    * treated identically to an empty string by `createR2Client` — see its
    * own docstring — so omitting it and passing `''` mean the same thing.
+   *
+   * [security review round 2, MEDIUM] TRUSTED, operator-only config —
+   * same trust tier as `endpoint` above, not a new privilege boundary —
+   * but `resolveEndpoint` raw-interpolates a non-empty value into a URL
+   * (`https://<accountId>.r2.cloudflarestorage.com`), so unlike
+   * `endpoint` (already usable verbatim with zero validation, by design)
+   * this value's SHAPE is validated first: Cloudflare's own documented
+   * format is exactly 32 lowercase hex characters, and a value shaped
+   * like a path (containing `/`) would otherwise terminate the URL's
+   * authority early and silently redirect the connection — credentials
+   * included — to whatever host precedes the `/`. `R2_ACCOUNT_ID` is also
+   * in `SECRET_ENV_KEYS` (packages/contracts/src/env.ts) even though it
+   * is not itself a credential, purely so a malformed value never gets
+   * echoed back into a thrown error message either — see
+   * `resolveEndpoint`'s own doc comment.
    */
   readonly accountId?: string;
   readonly accessKeyId: string;
@@ -133,21 +148,24 @@ export interface R2ClientConfig {
  * ENDPOINT RESOLUTION (T3.7.4, closes this file's former "KNOWN GAP"):
  * when `config.endpoint` is non-empty, it is used VERBATIM — the local
  * MinIO path is completely unaffected by `accountId`. When `endpoint` is
- * empty and `accountId` is set to a non-empty string, this factory
+ * empty and `accountId` is set to a WELL-FORMED account id (32 lowercase
+ * hex characters — Cloudflare's own documented format), this factory
  * derives R2's own documented account-scoped endpoint,
  * `https://<accountId>.r2.cloudflarestorage.com`, and uses that. When
- * BOTH are empty OR `accountId` is omitted entirely, this factory throws
- * rather than construct a client that would fall through to the AWS
- * SDK's own default endpoint resolution — which cannot address a real R2
- * account — and fail later, on the first `.send()`, with a confusing
- * bucket-not-found-shaped error far from this misconfiguration's actual
- * cause.
+ * BOTH are empty, `accountId` is omitted entirely, OR `accountId` is
+ * non-empty but MALFORMED (round 2 security review — see
+ * `resolveEndpoint`'s own doc comment for why shape matters here), this
+ * factory throws rather than construct a client that would fall through
+ * to the AWS SDK's own default endpoint resolution, or address the wrong
+ * host outright, and fail later — on the first `.send()`, or silently —
+ * far from this misconfiguration's actual cause.
  *
- * [security] The thrown message names only the two env var keys
+ * [security] The thrown message names only the relevant env var keys
  * (`R2_ENDPOINT`, `R2_ACCOUNT_ID`) an operator needs to fix — never
- * `config` itself, and never `accessKeyId`/`secretAccessKey`, which this
- * module's own test suite (client.test.ts) verifies directly via an
- * absence assertion, not an assumption.
+ * `config` itself, and never `accessKeyId`/`secretAccessKey`/the raw
+ * malformed `accountId` value, which this module's own test suite
+ * (client.test.ts) verifies directly via absence assertions, not an
+ * assumption.
  */
 export function createR2Client(config: R2ClientConfig): S3Client {
   const endpoint = resolveEndpoint(config);
@@ -164,24 +182,67 @@ export function createR2Client(config: R2ClientConfig): S3Client {
 }
 
 /**
+ * Cloudflare's own documented R2 account-id format: exactly 32 lowercase
+ * hex characters. `resolveEndpoint` enforces this BEFORE interpolating
+ * `accountId` into a URL (round 2 security review, MEDIUM) — a value
+ * containing `/` (e.g. `evil.example.com/x`) would otherwise terminate
+ * the URL's authority early, so `https://${accountId}.r2.
+ * cloudflarestorage.com` would silently address `evil.example.com`, not
+ * R2, while still carrying real SigV4 credentials. `S3Client` resolves
+ * `endpoint` LAZILY, not at construction, so an unvalidated malformed
+ * value would not even fail at boot — only on the first real write,
+ * against the wrong host. Validating the shape here, at construction, is
+ * what keeps this task's own design goal ("throw loud and immediate
+ * instead of failing later with a confusing error") true for this branch
+ * too.
+ */
+const R2_ACCOUNT_ID_FORMAT = /^[0-9a-f]{32}$/;
+
+/**
  * Resolves the endpoint URL {@link createR2Client} passes to `S3Client`,
- * per the three-way rule documented on `createR2Client` itself: verbatim
- * `endpoint` first, else derive from `accountId`, else throw. Pulled out
- * as its own function (rather than inlined into the conditional spread
- * the previous version used) because the "both empty" branch now needs
- * to THROW, not merely omit a key — a conditional spread has no natural
- * place to do that.
+ * per the rule documented on `createR2Client` itself: verbatim `endpoint`
+ * first, else derive from a WELL-FORMED `accountId`, else throw. Pulled
+ * out as its own function (rather than inlined into the conditional
+ * spread the previous version used) because the "nothing usable" branches
+ * now need to THROW, not merely omit a key — a conditional spread has no
+ * natural place to do that.
  *
  * `config.accountId` being OMITTED (an existing caller that predates this
- * field) and `config.accountId` being the EMPTY STRING (a caller that
- * knows about the field and has nothing to put in it) fall through to
- * the exact same falsy check below — an absent key and an empty value
- * mean the same thing here, deliberately (see `R2ClientConfig.accountId`'s
- * own doc comment).
+ * field), being the EMPTY STRING (a caller that knows about the field and
+ * has nothing to put in it), and being a non-empty but MALFORMED value
+ * (round 2 security review) all end up in an error — an absent key, an
+ * empty value, and a value that fails `R2_ACCOUNT_ID_FORMAT` are handled
+ * as three DISTINCT cases below, not collapsed into one, because only the
+ * first two mean "R2_ACCOUNT_ID wasn't set" — the third means "it was set
+ * to something that is not actually an account id," which deserves its
+ * own message naming the format problem, not a generic "both empty" one.
+ *
+ * Parameter typed via `Pick<R2ClientConfig, 'endpoint' | 'accountId'>` to
+ * DOCUMENT what this function reads — it is not a runtime isolation
+ * guarantee (round 2 security review, LOW): `createR2Client` calls this
+ * with the FULL `config` object, which still carries
+ * `accessKeyId`/`secretAccessKey` by reference underneath that narrower
+ * static type. Nothing in this function's own body ever touches those
+ * two fields, which is the actual guarantee — the `Pick` only narrows
+ * what the type checker will let this function's CODE reference.
  */
 function resolveEndpoint(config: Pick<R2ClientConfig, 'endpoint' | 'accountId'>): string {
   if (config.endpoint) return config.endpoint;
-  if (config.accountId) return `https://${config.accountId}.r2.cloudflarestorage.com`;
+
+  if (config.accountId) {
+    if (R2_ACCOUNT_ID_FORMAT.test(config.accountId)) {
+      return `https://${config.accountId}.r2.cloudflarestorage.com`;
+    }
+
+    // [security] Names ONLY the env var key — never the malformed value
+    // itself (R2_ACCOUNT_ID is SECRET_ENV_KEYS-classified, see
+    // `R2ClientConfig.accountId`'s own doc comment) and never `config`,
+    // which carries accessKeyId/secretAccessKey.
+    throw new Error(
+      'createR2Client: R2_ACCOUNT_ID is not a valid Cloudflare account id (expected 32 ' +
+        'lowercase hex characters) — fix R2_ACCOUNT_ID, or set R2_ENDPOINT explicitly instead.',
+    );
+  }
 
   // [security] Names ONLY the two env var keys — never `config`, which
   // carries accessKeyId/secretAccessKey.

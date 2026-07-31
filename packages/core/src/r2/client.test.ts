@@ -32,20 +32,23 @@ async function resolveClientEndpoint(client: S3Client): Promise<{ hostname: stri
 // process.env — only each app's own dotenv-wrapped scripts do). These
 // are local-dev-only MinIO root credentials, already checked into
 // .env.example in plaintext — not a real secret.
+// Cloudflare account ids are 32 lowercase hex characters (R2ClientConfig's
+// own `accountId` doc comment, security review round 2) — this is NOT
+// this worktree's actual .env value (which is a human-readable dev
+// placeholder, not a real Cloudflare id) but a well-formed FAKE one,
+// deliberately shaped to pass the format validation `resolveEndpoint` now
+// enforces, so the derived-endpoint tests below exercise the REAL
+// validated path rather than accidentally relying on a value that would
+// itself be rejected as malformed.
+const REAL_ACCOUNT_ID = 'deadbeefcafef00dfeedfacefeedface';
+
 const REAL_CONFIG: R2ClientConfig = {
   endpoint: 'http://localhost:9000',
-  accountId: 'posta-local-dev-account',
+  accountId: REAL_ACCOUNT_ID,
   accessKeyId: 'posta-local-dev',
   secretAccessKey: 'posta-local-dev-secret',
   bucket: 'posta-events',
 };
-
-// This worktree's own .env value for R2_ACCOUNT_ID (see REAL_CONFIG's own
-// comment above on hardcoding literal constants rather than reading
-// dotenv) — used by the T3.7.4 derived-endpoint tests below, which force
-// `endpoint: ''` to exercise the account-id fallback path in isolation
-// from `endpoint`.
-const REAL_ACCOUNT_ID = 'posta-local-dev-account';
 
 // The exact config SHAPE existing callers use today (apps/worker's
 // app.module.ts, replay.ts, and roughly a dozen test-file R2ClientConfig
@@ -264,6 +267,58 @@ describe('createR2Client (T3.4.1)', () => {
 
       expect(message).not.toContain(REAL_CONFIG.accessKeyId);
       expect(message).not.toContain(REAL_CONFIG.secretAccessKey);
+    });
+  });
+
+  // [security review round 2, MEDIUM] resolveEndpoint used to interpolate
+  // `config.accountId` into a URL with ZERO format validation. A value
+  // containing `/` terminates the authority early — `accountId =
+  // 'evil.example.com/x'` produced `https://evil.example.com/x.r2.
+  // cloudflarestorage.com`, whose ACTUAL connection host is
+  // `evil.example.com`, not the intended R2 endpoint — and S3Client
+  // resolves `endpoint` lazily, so this was never caught at boot, only on
+  // the first real write, silently sending SigV4 credentials and event
+  // data to the wrong host. These tests prove createR2Client rejects a
+  // malformed accountId LOUDLY, before ever constructing that client, per
+  // Cloudflare's own documented account-id format (32 lowercase hex
+  // characters) — restoring this task's actual design goal ("fail loud
+  // at construction, not silently on the first PUT") for this branch too.
+  describe('accountId format validation (security review round 2, T3.7.4)', () => {
+    const HOST_INJECTION_ACCOUNT_ID = 'evil.example.com/x';
+
+    it('throws, naming R2_ACCOUNT_ID, rather than derive a client pointed at an attacker-controlled host', () => {
+      expect(() =>
+        createR2Client({ ...REAL_CONFIG, endpoint: '', accountId: HOST_INJECTION_ACCOUNT_ID }),
+      ).toThrow(/R2_ACCOUNT_ID/);
+    });
+
+    it('never echoes the malformed accountId value into the thrown message — R2_ACCOUNT_ID is SECRET_ENV_KEYS-classified (packages/contracts/src/env.ts)', () => {
+      let caught: unknown;
+      try {
+        createR2Client({ ...REAL_CONFIG, endpoint: '', accountId: HOST_INJECTION_ACCOUNT_ID });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      const message = caught instanceof Error ? caught.message : String(caught);
+
+      expect(message).not.toContain(HOST_INJECTION_ACCOUNT_ID);
+    });
+
+    it('rejects other malformed shapes too, not only slash-bearing ones — wrong length, non-hex, and wrong case all fail Cloudflare\'s documented 32-lowercase-hex format', () => {
+      const malformedValues = [
+        'not-hex-at-all!!',
+        'DEADBEEFCAFEF00DFEEDFACEFEEDFACE', // uppercase — Cloudflare's own format is lowercase-only
+        'deadbeef', // far too short
+        `${REAL_ACCOUNT_ID}00`, // one byte too long
+      ];
+
+      for (const malformed of malformedValues) {
+        expect(() =>
+          createR2Client({ ...REAL_CONFIG, endpoint: '', accountId: malformed }),
+        ).toThrow(/R2_ACCOUNT_ID/);
+      }
     });
   });
 });
