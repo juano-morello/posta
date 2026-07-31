@@ -993,3 +993,24 @@ No unverified claim was accepted; the added content is accurate as written.
 **Findings surviving triage:** none — no [security] tag; no CRITICAL/HIGH surfaced.
 **Deviation from plan:** T3.1.7's pre-existing 503 test case was deliberately re-planted (`queue_depth: 0` → `1`) per the task's own instruction, since a zero-queue/zero-batch idle worker is no longer 503-worthy after this fix.
 **Handed back to:** n/a
+
+---
+
+## T3.7.2 · `49bef09` · 2026-07-31T14:46:33-03:00
+
+**Outcome:** done · verify passed: `pnpm test classify-flush-error.test.ts split-retry.test.ts dlq.service.test.ts` — 7 files, 212 tests (combined with env.test.ts run alongside T3.7.5's fix-forward), all passing. Also confirmed `pnpm typecheck:tests` and `pnpm --filter @posta/worker run build` clean myself before committing.
+**Findings surviving triage**
+- MEDIUM (self-correcting, not a defect in shipped code) · apps/worker/src/batch/split-retry.test.ts — the review that accompanied this task found that its fakes (`createFakeFlushBatch`, `createIdCapturingFlushBatch`) originally threw plain errors with no SQLSTATE, which under the new closed allowlist in classify-flush-error.ts classify as `'infrastructure'`. That meant every split/poison-isolation test in this file would have been reaching its assertions through the wrong branch (or not reaching the intended one at all) — a vacuous-assertion mirror image: a test passing by accident rather than by exercising the path it claims to. Fixed before commit: both fakes now throw via a shared `simulatedRowFaultError()` helper that sets `.code = '22001'` (string_data_right_truncation, the real SQLSTATE matching the "value too long" message the fakes already used). All 21 split-retry.test.ts tests were re-run individually under the verbose reporter to confirm none were weakened (backoff sequence, all six batchId tests, sequential-split-halves), and log output was checked to confirm fake-driven failures now take the `"splitting to isolate the failure"` path, never `"infrastructure error, rejecting rather than splitting"`.
+**Deviation from plan:** none — matches the plan's closed-allowlist design (classes 22/23 = row-fault, everything else = infrastructure) and keeps the split logic outside flushBatch per the recorded rejected alternative.
+**Handed back to:** n/a — fix applied before I received the work; commit beeb404 lands it as-is.
+
+---
+
+## T3.7.5 · `49bef09` · 2026-07-31T14:46:33-03:00
+
+**Outcome:** done · verify passed: `pnpm test env.test.ts` (combined run alongside T3.7.2: 7 files, 212 tests, all passing), `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean — all three confirmed by me directly, not assumed from a report.
+**Findings surviving triage**
+- HIGH · apps/worker/src/env.ts, `requireAtLeastOneR2AddressingVar` — compared `R2_ACCOUNT_ID` against `''` without trimming, unlike every other required field in this file which uses `zNonEmpty = z.string().trim().min(1)`. A whitespace-only `R2_ACCOUNT_ID` therefore passed the boot-time cross-field check this task exists to add, then failed one layer down inside `createR2Client`'s regex — silently defeating the fail-fast-at-boot goal the task states in its own rationale. RED confirmed before the fix (`expected true to be false`). Fixed by comparing `(values.R2_ACCOUNT_ID ?? '').trim() !== ''` instead.
+**Deviation from plan:** none in the original T3.7.2/T3.7.5 scope. The fix above is a fix-forward on already-committed 5e8a1ad, landed separately per this epic's established convention (see fe8301e, 64f8666, 58976c6, f24b40e, 087945e for precedent) rather than amending the original commit.
+**Fix-forward commit:** `49bef09` `fix: trim R2_ACCOUNT_ID before checking presence in requireAtLeastOneR2AddressingVar` — 2 files (env.ts, env.test.ts). Verify observed myself: targeted test run green, typecheck:tests clean, worker build clean.
+**Handed back to:** n/a — fix-forward was already applied and verified before I received the work; commit 49bef09 lands it as-is, stamped against the original 5e8a1ad.
