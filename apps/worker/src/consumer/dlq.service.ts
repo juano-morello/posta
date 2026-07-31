@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { EVENTS_DLQ_QUEUE } from '@posta/core';
 import { redactCredentialsFromMessage } from '@posta/contracts';
+import { extractSqlState } from '../batch/classify-flush-error';
 
 // T3.1.5 [E3, S3.1] — the ONE writer EVENTS_DLQ_QUEUE has. Before this
 // task, T3.1.4's EventsConsumer.routeToDlq() built a DLQ entry and wrote
@@ -215,33 +216,6 @@ export interface DlqSendMeta {
   readonly originalJobId: string;
   readonly attemptsMade: number;
   readonly issues?: readonly EventsDlqIssue[];
-}
-
-/** [T3.3.4] Reads the SQLSTATE off `error`'s own `.code` property, or the
- * first `.code` found by walking a BOUNDED chain of standard
- * `Error.prototype.cause` links — `pg`'s `DatabaseError` sets `.code` to
- * the real 5-character SQLSTATE directly, but the error a real
- * `flushBatch` (apps/worker/src/batch/flush.ts) rejects with is
- * drizzle-orm's own `DrizzleQueryError`, which wraps the ORIGINAL `pg`
- * error via the standard ES2022 `cause` chain rather than copying `.code`
- * onto itself (verified against the installed drizzle-orm@0.45.2 source,
- * `errors.cjs`'s `DrizzleQueryError` constructor: `this.cause = cause`).
- * A plain structural `.code` check, not an `instanceof` against `pg`'s or
- * drizzle's own error classes: this file has no dependency on either (it
- * is transport-agnostic, see this file's own header), and duck-typing one
- * property at each link costs nothing an import would buy here. Bounded
- * at 5 links so an accidental `cause` cycle cannot loop forever. Any
- * error whose whole chain has no string `.code` (a plain `Error`, a
- * `ZodError`, ...) yields `null`. */
-function extractSqlState(error: Error): string | null {
-  const MAX_CAUSE_DEPTH = 5;
-  let current: unknown = error;
-  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth++) {
-    const code = (current as { readonly code?: unknown }).code;
-    if (typeof code === 'string') return code;
-    current = (current as { readonly cause?: unknown }).cause;
-  }
-  return null;
 }
 
 /**

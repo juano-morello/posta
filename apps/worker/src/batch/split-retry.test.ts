@@ -103,6 +103,32 @@ function createRecordingLogger(): SplitRetryLogger & { calls: Array<{ message: s
   };
 }
 
+// [T3.7.2] Both fakes below throw via this ONE helper rather than a bare
+// `new Error(...)`: `retryWithSplit`'s classifier now defaults to the
+// REAL `classifyFlushError` (classify-flush-error.ts), which is a closed
+// SQLSTATE allowlist — a bare `Error` with no `.code` classifies
+// `'infrastructure'` (correctly; see that module's own header) and would
+// make `attemptBatch` reject instead of splitting/poisoning, which is
+// exactly wrong for what these fakes are simulating: a single BAD ROW,
+// not an outage. `'22001'` (string_data_right_truncation) is the REAL
+// Postgres SQLSTATE for "value too long for column" — the exact
+// condition this fake's message already claimed to simulate, so this
+// also makes the fixture internally honest (a message naming a specific
+// failure now actually carries that failure's real code) rather than
+// merely appeasing the classifier. Class 22 is squarely inside
+// classify-flush-error.ts's `'row-fault'` allowlist, so every test below
+// that relies on these fakes still exercises split/poison behavior — now
+// via the REAL default classifier reaching that verdict correctly,
+// instead of the old "any rejection at all" default reaching the same
+// verdict by accident.
+function simulatedRowFaultError(): Error {
+  const error = new Error('simulated Postgres rejection: value too long for column "slug"') as Error & {
+    code?: string;
+  };
+  error.code = '22001';
+  return error;
+}
+
 /**
  * A fake `flushBatch` that mimics a real Postgres multi-row INSERT: it
  * "commits" (records) every event in the sub-batch it receives ONLY when
@@ -139,7 +165,7 @@ function createFakeFlushBatch(
         await new Promise((resolve) => setTimeout(resolve, callDelayMs));
       }
       if (events.some(isPoison)) {
-        throw new Error('simulated Postgres rejection: value too long for column "slug"');
+        throw simulatedRowFaultError();
       }
       for (const event of events) committed.add(event.event_id);
     } finally {
@@ -182,7 +208,7 @@ function createIdCapturingFlushBatch(
     // id stops being threaded through at all.
     capturedBatchIds.push(batchId as string);
     if (fails(events)) {
-      throw new Error('simulated Postgres rejection: value too long for column "slug"');
+      throw simulatedRowFaultError();
     }
   };
   return { flushBatch, capturedBatchIds };

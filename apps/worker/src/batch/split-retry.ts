@@ -1,5 +1,6 @@
 import type { CaptureEvent } from '@posta/contracts';
 import { newId } from '@posta/core';
+import { classifyFlushError, type FlushErrorClassification } from './classify-flush-error';
 import type { FlushBatch } from './flush';
 
 // T3.3.3 [E3, S3.3] — `retryWithSplit` is what makes flush.ts's own
@@ -33,22 +34,35 @@ import type { FlushBatch } from './flush';
 // GENERIC OVER `flushBatch`, NOT COUPLED TO POSTGRES: this file takes a
 // `FlushBatch`-shaped function (flush.ts's own exported type,
 // `(events: readonly CaptureEvent[]) => Promise<void>`) as a parameter,
-// never imports `@posta/core`'s db helpers itself, and inspects nothing
-// about WHY a call rejected inside the retry/split algorithm itself — no
-// SQLSTATE parsing, no Postgres-specific error shape anywhere in
-// `attemptBatch`. Any rejection at all is treated as "this sub-batch did
-// not commit, try again / split it" — the SAME contract flush.test.ts's
-// own `createFlushBatch` already promises, which is also why
-// split-retry.test.ts can point this module at either a real
-// testcontainer-backed `flushBatch` OR a plain injected function that
-// fails on cue, and get identical behavior either way. [T3.3.4] A
-// poisoned sub-batch's final Error IS carried through onto its
-// `PoisonedEvent` unchanged now (never reduced to a string, as before
-// this task) — a real Postgres error's own `.code` IS the SQLSTATE, and
-// a caller reads it off `PoisonedEvent.error`. `attemptBatch` itself
-// still never branches on `.code` or on what kind of error it received;
-// it only ever decides "retry, split, or declare poison" from attempt
-// count and sub-batch size.
+// never imports `@posta/core`'s db helpers itself, and `attemptBatch`
+// itself still never parses a SQLSTATE or inspects any Postgres-specific
+// error shape directly — that knowledge lives entirely behind the
+// injected classification seam T3.7.2 added (see `SplitRetryOptions.
+// classifyFlushError`'s own doc comment, below), the SAME "narrow,
+// replaceable seam" discipline this file's own `Sleep`/`SplitRetryLogger`
+// already follow. [T3.3.4] A poisoned sub-batch's final Error IS carried
+// through onto its `PoisonedEvent` unchanged (never reduced to a string)
+// — a real Postgres error's own `.code` IS the SQLSTATE, and a caller
+// reads it off `PoisonedEvent.error`.
+//
+// [T3.7.2] "ANY REJECTION BELONGS TO A ROW" IS NO LONGER THE WHOLE
+// CONTRACT — before this task, `attemptBatch` treated every `flushBatch`
+// rejection identically: retry the whole sub-batch, then split it (or, at
+// size one, declare it poison). That is exactly wrong for a Postgres
+// OUTAGE, which fails every sub-batch equally and would otherwise binary-
+// search all the way down and declare EVERY event in the batch poison —
+// a recoverable outage converted into a mass dead-letter. `attemptBatch`
+// now classifies a sub-batch's LAST error, once its own retry budget is
+// exhausted (never per-attempt), via the injected `classify` predicate:
+// a `'row-fault'` verdict proceeds exactly as before (split if size > 1,
+// declare poison if size === 1); an `'infrastructure'` verdict makes
+// `attemptBatch` REJECT instead — never splitting, never declaring
+// poison. See `classify-flush-error.ts`'s own header for the closed
+// SQLSTATE allowlist behind that verdict, and `sendPoisonEventsToDlq`'s
+// section below for why `retryWithSplit`'s promise rejecting outright,
+// rather than resolving with an empty result, is the correct signal for
+// a caller: BullMQ redelivering the whole job is the recovery path for an
+// outage, not a DLQ entry per event.
 //
 // SEQUENTIAL, NOT `Promise.all`, ACROSS THE TWO HALVES: a split's two
 // halves are awaited one after another rather than concurrently. This
@@ -57,7 +71,13 @@ import type { FlushBatch } from './flush';
 // REDIRECT, not this) — so there is no latency budget here worth
 // racing Postgres connections for, and sequential execution keeps the
 // recursion's actual call order (and therefore its round-trip count)
-// simple to reason about and to assert on directly in tests.
+// simple to reason about and to assert on directly in tests. [T3.7.2] An
+// infrastructure verdict on the LEFT half after the RIGHT half has
+// already committed (or been split-and-poisoned) throws out of the
+// recursive `attemptBatch` call awaiting it, discarding that already-done
+// work — an accepted consequence, not a bug: BullMQ redelivers the whole
+// job, and T3.3.3's `ON CONFLICT DO NOTHING` [INV-8] makes re-flushing
+// the already-committed half free, so nothing is lost, only redone.
 
 /** Minimal logger shape this file needs — the SAME `{ error(message,
  * meta?): void }` shape flush.ts's own `FlushBatchLogger` and
@@ -87,6 +107,15 @@ export type Sleep = (ms: number) => Promise<void>;
 
 /** Production default — a real `setTimeout`-based delay. */
 export const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** [T3.7.2] Classifies a sub-batch's LAST error — the one `attemptBatch`
+ * is left holding once that sub-batch's own retry loop exhausts
+ * `maxAttemptsPerBatch` — as {@link FlushErrorClassification}. See
+ * `SplitRetryOptions.classifyFlushError`'s own doc comment for how the
+ * two possible verdicts change `attemptBatch`'s behavior, and
+ * `classify-flush-error.ts`'s own header for the closed SQLSTATE
+ * allowlist behind the real implementation. */
+export type ClassifyFlushError = (error: unknown) => FlushErrorClassification;
 
 export interface SplitRetryOptions {
   /**
@@ -126,6 +155,27 @@ export interface SplitRetryOptions {
    * gets a stable id for the lifetime of this one `retryWithSplit` call.
    */
   readonly batchId?: string;
+  /**
+   * [T3.7.2] Classifies a sub-batch's last error, once its own retry loop
+   * exhausts `maxAttemptsPerBatch`, as {@link FlushErrorClassification} —
+   * consulted ONCE per sub-batch (never per-attempt). A `'row-fault'`
+   * verdict proceeds exactly as before this task: split the sub-batch if
+   * it holds more than one event, or declare its one remaining event
+   * poison. An `'infrastructure'` verdict makes `attemptBatch` REJECT
+   * instead — never splitting, never declaring poison — because a
+   * Postgres outage fails every sub-batch equally, and binary search
+   * cannot isolate a failure that is not any one row's fault; see this
+   * file's own header for the full [T3.7.2] rationale and
+   * `classify-flush-error.ts`'s own header for the closed SQLSTATE
+   * allowlist (classes 22/23 only) behind that verdict.
+   *
+   * Optional: defaults to the real `classifyFlushError` (classify-flush-
+   * error.ts) — the SAME "narrow, replaceable seam" discipline this
+   * file's own `Sleep`/`SplitRetryLogger`/`batchId` already follow. A
+   * caller substitutes this to force a classification without needing to
+   * construct an error carrying a genuine SQLSTATE-shaped `cause` chain.
+   */
+  readonly classifyFlushError?: ClassifyFlushError;
 }
 
 /** A poisoned event, paired with the Error that caused its final,
@@ -185,7 +235,11 @@ function toError(error: unknown): Error {
 /** The single choke point every sub-batch (whole batch or a split half,
  * all the way down to size one) goes through — retries up to
  * `maxAttempts` times with exponential backoff between attempts, then
- * either splits (size > 1) or declares poison (size === 1).
+ * classifies the last error and either proceeds to split (size > 1) or
+ * declare poison (size === 1) for a `'row-fault'` verdict, or REJECTS
+ * outright for an `'infrastructure'` one — see this file's own [T3.7.2]
+ * header section and `SplitRetryOptions.classifyFlushError`'s own doc
+ * comment for the full rationale.
  *
  * `batchId` is this sub-batch's OWN stable id — the same value on every
  * attempt in the loop below (so a retry overwrites its own R2 object,
@@ -200,6 +254,7 @@ async function attemptBatch(
   sleep: Sleep,
   logger: SplitRetryLogger,
   batchId: string,
+  classify: ClassifyFlushError,
 ): Promise<SplitRetryResult> {
   let lastError: unknown;
 
@@ -216,6 +271,21 @@ async function attemptBatch(
   }
 
   const message = errorMessage(lastError);
+
+  // [T3.7.2] Classified ONCE here, off the LAST error only — never
+  // per-attempt. An infrastructure verdict short-circuits BOTH branches
+  // below: this sub-batch's failure is not attributable to any one row,
+  // so neither splitting it nor declaring its (possibly sole) event
+  // poison would be sound — see this file's own [T3.7.2] header section.
+  if (classify(lastError) === 'infrastructure') {
+    const error = toError(lastError);
+    logger.error(
+      `retryWithSplit: sub-batch of ${events.length} event(s) failed ${maxAttempts} attempt(s) with an ` +
+        `infrastructure error, rejecting rather than splitting: ${message}`,
+      { batchSize: events.length, attempts: maxAttempts },
+    );
+    throw error;
+  }
 
   if (events.length === 1) {
     const poisonEvent = events[0]!;
@@ -245,7 +315,16 @@ async function attemptBatch(
   const leftBatchId = `${batchId}.0`;
   const rightBatchId = `${batchId}.1`;
 
-  const leftResult = await attemptBatch(left, flushBatch, maxAttempts, initialDelayMs, sleep, logger, leftBatchId);
+  const leftResult = await attemptBatch(
+    left,
+    flushBatch,
+    maxAttempts,
+    initialDelayMs,
+    sleep,
+    logger,
+    leftBatchId,
+    classify,
+  );
   const rightResult = await attemptBatch(
     right,
     flushBatch,
@@ -254,6 +333,7 @@ async function attemptBatch(
     sleep,
     logger,
     rightBatchId,
+    classify,
   );
 
   return {
@@ -264,13 +344,27 @@ async function attemptBatch(
 
 /**
  * Flushes `events` through `flushBatch`, retrying the whole batch with
- * exponential backoff on failure and, once those retries are exhausted,
- * binary-splitting it and recursing into each half — see this file's own
- * header for the full design rationale. Resolves with every event split
- * between `committedEvents` (actually written) and `poisonEvents`
- * (isolated because a sub-batch containing only that one event still
- * failed) — this function never throws for a partial failure, since a
- * poison row is an expected, handled outcome, not an exceptional one.
+ * exponential backoff on failure and, once those retries are exhausted
+ * and its last error classifies `'row-fault'`, binary-splitting it and
+ * recursing into each half — see this file's own header for the full
+ * design rationale. Resolves with every event split between
+ * `committedEvents` (actually written) and `poisonEvents` (isolated
+ * because a sub-batch containing only that one event still failed a
+ * `'row-fault'`-classified rejection) — a poison row is an expected,
+ * handled outcome, not an exceptional one.
+ *
+ * [T3.7.2] This function DOES now reject — a deliberate, amended contract
+ * from before this task, when it never threw for a partial failure at
+ * all: once any sub-batch's last error classifies `'infrastructure'`
+ * (see `SplitRetryOptions.classifyFlushError`), that sub-batch's own
+ * `attemptBatch` call throws instead of splitting or declaring poison,
+ * and that throw propagates out of this function's returned promise. An
+ * infrastructure failure is genuinely not a partial failure — it says
+ * nothing about any individual row — so retrying it into oblivion via an
+ * ever-finer binary search and dead-lettering the whole batch would be
+ * the wrong outcome; see this file's own header for the full rationale,
+ * including the accepted cost when this happens after a sibling half has
+ * already committed or been split-and-poisoned.
  *
  * An empty `events` array is a no-op: `flushBatch` is never called, and
  * both result arrays are empty.
@@ -292,6 +386,9 @@ export async function retryWithSplit(
   // `attemptBatch` itself, which only ever suffixes this value. See
   // `SplitRetryOptions.batchId`'s own doc comment for the full rationale.
   const batchId = options.batchId ?? newId();
+  // [T3.7.2] Defaults to the real `classifyFlushError` — see
+  // `SplitRetryOptions.classifyFlushError`'s own doc comment.
+  const classify = options.classifyFlushError ?? classifyFlushError;
 
   return attemptBatch(
     events,
@@ -301,6 +398,7 @@ export async function retryWithSplit(
     sleep,
     logger,
     batchId,
+    classify,
   );
 }
 
