@@ -144,6 +144,23 @@ export interface AppModuleConfig {
   /** [T3.4.4] `R2_BUCKET_EVENTS` — see `r2Endpoint` above for why this is
    * required unless `flush` is overridden. */
   readonly r2Bucket?: string;
+  /** [T3.7.5] `R2_ACCOUNT_ID` — passed straight to `createR2Client`
+   * (packages/core/src/r2/client.ts), which reads it ONLY to derive
+   * `R2_ENDPOINT` when that field is empty (R2's own documented
+   * account-scoped endpoint). Unlike `r2Endpoint`/`r2AccessKeyId`/
+   * `r2SecretAccessKey`/`r2Bucket` above, this is never independently
+   * "required" here — `workerEnvSchema`'s own `.superRefine` (env.ts)
+   * already guarantees at least one of `R2_ENDPOINT`/`R2_ACCOUNT_ID` is
+   * non-empty before main.ts ever calls `forRoot()`, and
+   * `buildProductionFlush`/`createR2Client` itself throws if BOTH end up
+   * empty regardless — no third copy of that check belongs here.
+   * Explicitly typed `| undefined` (not just `?:string`) because
+   * `env.R2_ACCOUNT_ID` (env.ts) is itself optional and main.ts passes it
+   * straight through — `exactOptionalPropertyTypes` (tsconfig.base.json)
+   * requires the target property's own type to name `undefined`, not
+   * just be an omittable key, before an `undefined`-typed source value can
+   * be assigned to it in an object literal. */
+  readonly r2AccountId?: string | undefined;
   /** Overrides the `EVENT_SINK` DI token `EventsConsumer` injects.
    * Defaults to `AccumulatingEventSink` (T3.1.6) when omitted —
    * production (main.ts) never sets this. events.consumer.test.ts and
@@ -219,6 +236,16 @@ function buildProductionFlush(
       accessKeyId: r2AccessKeyId,
       secretAccessKey: r2SecretAccessKey,
       bucket: r2Bucket,
+      // [T3.7.5] `R2ClientConfig.accountId` is `accountId?: string` (no
+      // `| undefined` in ITS own type — that file is not this task's to
+      // edit) — same `exactOptionalPropertyTypes` conditional-spread
+      // discipline the `DB_CLIENT` factory's own `max` already uses
+      // above, so an omitted `config.r2AccountId` becomes a genuinely
+      // OMITTED key here, not an explicit `accountId: undefined`, which
+      // `R2ClientConfig.accountId`'s own doc comment (client.ts) already
+      // documents as meaning the same thing as `''` — either way,
+      // `createR2Client` treats it as "not set".
+      ...(config.r2AccountId !== undefined ? { accountId: config.r2AccountId } : {}),
     }),
     r2Bucket,
     // [T3.4.6] See this function's own doc comment above.

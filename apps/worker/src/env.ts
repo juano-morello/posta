@@ -15,7 +15,7 @@ import { zNonEmpty, zOptionalUrl, zPort, zUrl } from '@posta/contracts';
 // `events` (T4.2.4). Two roles means two URLs, wired from the start
 // even though the privilege separation itself lands later.
 
-export const workerEnvSchema = z.object({
+const workerEnvSchemaObject = z.object({
   // Datastores — writer role (see file header). No domain/auth vars: the
   // worker builds no URLs and serves no auth-gated routes.
   DATABASE_URL_WORKER: zUrl,
@@ -24,7 +24,22 @@ export const workerEnvSchema = z.object({
   // Cloudflare R2 — only what writing events needs: credentials, the
   // events bucket, and the endpoint override. NOT R2_BUCKET_AVATARS —
   // avatar upload is a dashboard/API concern, not the worker's.
-  R2_ACCOUNT_ID: zNonEmpty,
+  //
+  // [T3.7.5] R2_ACCOUNT_ID is OPTIONAL (unlike the zNonEmpty this used to
+  // be) — createR2Client (packages/core/src/r2/client.ts, T3.7.4) reads
+  // it only to DERIVE R2_ENDPOINT when that var is left empty, R2's own
+  // documented production shape (see R2_ENDPOINT's own comment below).
+  // Marking it zNonEmpty made a `.env` copied verbatim from .env.example
+  // fail this schema's own validation — .env.example ships it empty by
+  // design, for local dev against MinIO via R2_ENDPOINT instead — and
+  // nothing caught that until this task. The `.superRefine` below is what
+  // still catches the ACTUAL misconfiguration (neither var set) instead
+  // of silently accepting it: exactly one of R2_ENDPOINT / R2_ACCOUNT_ID
+  // must be non-empty, named explicitly so an operator sees which of the
+  // two keys to fix. Format validation (32 lowercase hex chars) stays
+  // downstream, in createR2Client itself — this schema only decides
+  // presence, not shape.
+  R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: zNonEmpty,
   R2_SECRET_ACCESS_KEY: zNonEmpty,
   R2_BUCKET_EVENTS: zNonEmpty,
@@ -72,5 +87,43 @@ export const workerEnvSchema = z.object({
   // (`tests/infra/grace-period.test.ts`) exists to catch.
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive(),
 });
+
+/**
+ * [T3.7.5] Cross-field rule createR2Client (packages/core/src/r2/client.ts,
+ * T3.7.4) already enforces one level down, at construction time: at least
+ * one of R2_ENDPOINT / R2_ACCOUNT_ID must be non-empty, or there is no way
+ * to address R2/MinIO at all. Enforcing it here too — at boot, against the
+ * raw env — means a misconfigured `.env` fails LOUD via loadEnv's own
+ * named-key report (main.ts) instead of surfacing later as
+ * createR2Client's thrown error the first time the accumulator's
+ * BATCH_ACCUMULATOR provider is constructed (app.module.ts).
+ *
+ * Both `.superRefine` issues below share one message and are added on
+ * BOTH keys' own paths (never a bare root-level issue) so that:
+ *   - this schema's own tests can assert the message names both keys
+ *     directly off `result.error.issues`;
+ *   - `loadEnv` (packages/contracts/src/env.ts) — which derives its
+ *     `EnvFailure.key` from `issue.path[0]`, one entry per distinct key —
+ *     reports BOTH R2_ENDPOINT and R2_ACCOUNT_ID as failing keys, not just
+ *     one, matching this task's own "message names BOTH keys" spec.
+ */
+function requireAtLeastOneR2AddressingVar(
+  values: Pick<z.input<typeof workerEnvSchemaObject>, 'R2_ENDPOINT' | 'R2_ACCOUNT_ID'>,
+  ctx: z.RefinementCtx,
+): void {
+  const hasEndpoint = values.R2_ENDPOINT !== '';
+  const hasAccountId = values.R2_ACCOUNT_ID !== undefined && values.R2_ACCOUNT_ID !== '';
+
+  if (hasEndpoint || hasAccountId) return;
+
+  const message =
+    'R2_ENDPOINT and R2_ACCOUNT_ID are both empty — set one of them. R2_ENDPOINT for local ' +
+    'dev (MinIO), or leave it empty and set R2_ACCOUNT_ID for production R2.';
+
+  ctx.addIssue({ code: 'custom', path: ['R2_ENDPOINT'], message });
+  ctx.addIssue({ code: 'custom', path: ['R2_ACCOUNT_ID'], message });
+}
+
+export const workerEnvSchema = workerEnvSchemaObject.superRefine(requireAtLeastOneR2AddressingVar);
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

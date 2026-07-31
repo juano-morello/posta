@@ -42,6 +42,14 @@ async function bootstrap(): Promise<void> {
   // constructs `createR2Client()` from these; this file's only job is
   // handing down the already-validated values, never re-reading
   // `process.env` itself.
+  //
+  // [T3.7.5] r2AccountId — the same discipline, extended to
+  // env.R2_ACCOUNT_ID, which workerEnvSchema now validates as OPTIONAL
+  // (may be `undefined`, unlike the other four R2_* vars above): its own
+  // `.superRefine` guarantees at least one of R2_ENDPOINT / R2_ACCOUNT_ID
+  // is non-empty, not that this one specifically is set. createR2Client
+  // (packages/core/src/r2/client.ts, T3.7.4) reads it only to derive
+  // R2_ENDPOINT when that var is left empty — production's own shape.
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule.forRoot({
       redisUrl: env.REDIS_URL,
@@ -53,6 +61,7 @@ async function bootstrap(): Promise<void> {
       r2AccessKeyId: env.R2_ACCESS_KEY_ID,
       r2SecretAccessKey: env.R2_SECRET_ACCESS_KEY,
       r2Bucket: env.R2_BUCKET_EVENTS,
+      r2AccountId: env.R2_ACCOUNT_ID,
     }),
   );
 
