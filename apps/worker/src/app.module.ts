@@ -4,6 +4,7 @@ import { createDbClient, createR2Client, EVENTS_DLQ_QUEUE, EVENTS_QUEUE, type Db
 import type { CaptureEvent } from '@posta/contracts';
 import { BatchAccumulator, type BatchFlushCallback } from './batch/accumulator';
 import { createFlushBatch } from './batch/flush';
+import { retryWithSplit, sendPoisonEventsToDlq } from './batch/split-retry';
 import {
   AccumulatingEventSink,
   BATCH_ACCUMULATOR,
@@ -183,6 +184,42 @@ export interface AppModuleConfig {
 }
 
 /**
+ * [T3.7.3] `retryWithSplit`'s own retry budget for the production flush —
+ * two module constants, deliberately NOT new env vars and NOT threaded
+ * through `AppModuleConfig` (this task's own brief): nobody outside this
+ * file has a reason to tune this per-deployment, and a new env var per
+ * tunable is exactly the kind of surface area S3.1's "config from env
+ * only, read in exactly one place" discipline (CLAUDE.md) is meant to
+ * bound, not expand for its own sake.
+ *
+ * Sized so a batch's full binary-split recursion cannot plausibly outlast
+ * `config.shutdownTimeoutMs` (`SHUTDOWN_TIMEOUT_MS`, this file's own
+ * import). Isolating ONE poison row out of a realistic batch (e.g.
+ * `EVENT_BATCH_SIZE` around 100) costs at most ~⌈log2(batchSize)⌉ levels
+ * of split, each paying at most `SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH - 1`
+ * backoff sleeps before it either splits further or (at size one)
+ * declares poison — with the values below, that is 2 sleeps per level of
+ * 150ms + 300ms = 450ms, so ~7 levels for a 100-event batch is
+ * comfortably under 3.5s of pure backoff, an order of magnitude below
+ * `SHUTDOWN_TIMEOUT_MS`'s own production default (30s, env.ts). Mirrors
+ * `r2-retry.ts`'s own `DEFAULT_R2_MAX_ATTEMPTS`/
+ * `DEFAULT_R2_INITIAL_DELAY_MS` precedent in shape (a small attempt count,
+ * a short base delay that doubles each retry) — smaller here because a
+ * sub-batch's retry loop is one of potentially many along a single split
+ * path, unlike the R2 PUT's own single, un-nested retry loop.
+ *
+ * The genuinely pathological case — EVERY row in the batch poison, which
+ * would otherwise binary-search all the way down to `batchSize` singleton
+ * sub-batches (~2×batchSize - 1 sub-batches total) — is NOT what these
+ * constants are sized against: T3.7.2's `classifyFlushError` already
+ * rejects that case as `'infrastructure'` before it ever reaches a split
+ * (split-retry.ts's own header), so it is unreachable in practice, not
+ * merely unlikely.
+ */
+const SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH = 3;
+const SPLIT_RETRY_INITIAL_DELAY_MS = 150;
+
+/**
  * [T3.4.4] Builds the real, production `flushBatch` closure — a real R2
  * client (`createR2Client`, packages/core/src/r2/client.ts, constructed
  * ONCE here, matching that function's own "never per-request/per-batch"
@@ -207,6 +244,30 @@ export interface AppModuleConfig {
  * can never route a terminal R2 failure to a real DLQ would have no
  * recoverable path at all, only ever-repeating BatchAccumulator retries
  * against the same dead endpoint.
+ *
+ * [T3.7.3] The returned callback is no longer `createFlushBatch`'s own
+ * closure directly — `retryWithSplit`/`sendPoisonEventsToDlq`
+ * (split-retry.ts, T3.3.3/T3.3.4) were built, reviewed and tested but
+ * never actually called from production until this task: before this
+ * change, a single poison row failed the WHOLE batch (all
+ * `insertEventsBatch`'s rows share one multi-row `INSERT`, flush.ts's own
+ * header) and dead-lettered every event in it through the consumer's own
+ * 'attempts-exhausted' path — exactly the outcome S3.3's acceptance
+ * criteria reject. The wrapper below calls the SAME `flushBatch` this
+ * function already built (unchanged, still rejects on a poison row —
+ * `poison-dlq.test.ts`'s own 4-committed/2-poison assertions depend on
+ * that, and moving the split INSIDE `flushBatch` itself was a rejected
+ * alternative recorded in the plan for exactly that reason) through
+ * `retryWithSplit`, then routes whatever it isolates as poison to the
+ * SAME `dlqService` already threaded in above — via `PoisonDlqSink`,
+ * which a real `DlqService` instance satisfies structurally, zero adapter
+ * code, the same precedent `R2BatchDlqSink` already established one
+ * paragraph up. `batchId` — the SECOND argument this callback receives
+ * from `BatchAccumulator.runFlush` — is passed straight through as
+ * `retryWithSplit`'s own `batchId` option, per T3.7.1's own invariant:
+ * the whole recursion keys off the SAME stable id `BatchAccumulator`
+ * minted for this batch, never a fresh one `retryWithSplit` would
+ * otherwise default to minting itself.
  */
 function buildProductionFlush(
   config: AppModuleConfig,
@@ -223,7 +284,7 @@ function buildProductionFlush(
     );
   }
 
-  return createFlushBatch({
+  const flushBatch = createFlushBatch({
     db: dbClient.db,
     r2Client: createR2Client({
       // `R2ClientConfig.endpoint` is a REQUIRED `string`, unlike
@@ -251,6 +312,28 @@ function buildProductionFlush(
     // [T3.4.6] See this function's own doc comment above.
     dlqSink: dlqService,
   });
+
+  // [T3.7.3] See this function's own doc comment above for the full
+  // composition rationale. Matches `BatchFlushCallback<CaptureEvent>`'s
+  // exact signature — `batchId` here is REQUIRED (unlike `FlushBatch`'s
+  // own optional second parameter), which is exactly right: this callback
+  // is only ever invoked by `BatchAccumulator.runFlush`, which always
+  // supplies a real, non-empty, freshly minted `batchId`.
+  return async function flushWithSplitRetryAndPoisonDlq(
+    events: readonly CaptureEvent[],
+    batchId: string,
+  ): Promise<void> {
+    const result = await retryWithSplit(events, flushBatch, {
+      maxAttemptsPerBatch: SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH,
+      initialDelayMs: SPLIT_RETRY_INITIAL_DELAY_MS,
+      batchId,
+    });
+
+    await sendPoisonEventsToDlq(result.poisonEvents, dlqService, {
+      batchId,
+      maxAttemptsPerBatch: SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH,
+    });
+  };
 }
 
 @Module({})
