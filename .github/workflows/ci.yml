@@ -233,6 +233,17 @@ jobs:
       # artifact was silently understating things. redirect-hot-path's
       # fileParallelism: false is structural in vitest.config.ts, not a CLI
       # flag, so naming the project here does not reintroduce that flake.
+      #
+      # The `e2e` project is NOT named here, and that is the one omission on
+      # this line that is deliberate rather than an oversight — it is the
+      # same call `containers` gets, for the same reason. Those files need
+      # the docker-compose stack (a real MinIO on :9000, and in one case
+      # `docker compose stop minio`), which this job has no way to provide:
+      # it wires Postgres and Redis as `services:` containers and writes no
+      # .env, so Compose cannot even parse docker-compose.yml here. Adding
+      # `--project e2e` would not gain coverage, it would just make this
+      # step red. The `event-pipeline` job at the bottom of this file owns
+      # them and runs them on every PR against a real, healthy stack.
       - name: Test (with coverage)
         run: pnpm test --project default --project web --project core --project redirect-hot-path --coverage
 
@@ -569,3 +580,176 @@ jobs:
       # measured locally, test/ alone vs test/ + this file).
       - name: Hot path invariant suite (S2.6)
         run: pnpm test apps/api/src/redirect/test/ apps/api/src/redirect/ordering.test.ts --no-file-parallelism
+
+  # T3.5 (E3) — S3.5's event-pipeline integration suite, which the `ci` job
+  # above cannot run and never could. Same shape as `hot-path`,
+  # `migrate-from-empty` and `visual-regression` above: its own runner, its
+  # own timeout, its own pass/fail line, decoupled from the main job's
+  # lint/typecheck/test/build/depcruise budget.
+  #
+  # WHY A SEPARATE JOB AND NOT A STEP: these tests need the real
+  # docker-compose stack, specifically its MinIO service on
+  # http://localhost:9000. The `ci` job provides Postgres and Redis as
+  # `services:` containers instead, has no MinIO at all, and writes no
+  # `.env` — and docker-compose.yml's api/worker/web services declare
+  # `env_file: .env`, which Compose resolves when it parses the file on ANY
+  # subcommand, not just the ones that start those services. So in the main
+  # job even a read-only `docker compose ps` dies before it does anything:
+  # `env file /home/runner/work/posta/posta/.env not found`, then
+  # `"docker compose ps -a -q minio" exited status=1`, then every spawned
+  # worker failing to flush a batch (INV-7 writes R2 first and Postgres only
+  # if that succeeded) and the suite timing out on
+  # `waitForRowCountAtLeast: did not reach 60 row(s) within 60000ms`.
+  # vitest.config.ts's `e2e` project carries the matching exclusion from
+  # `default` and enumerates exactly which files are affected and why.
+  #
+  # This is the same precedent tests/containers/** already set: excluded
+  # from `default` for the identical reason, and run by images.yml, which
+  # writes its own `.env` first. The heredoc below is deliberately a copy of
+  # that workflow's own — keep the two in sync — with ONE load-bearing
+  # divergence, called out because it is exactly the kind of thing a later
+  # "let's dedupe these" pass would flatten and break:
+  #
+  #   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are posta-local-dev /
+  #   posta-local-dev-secret here, NOT images.yml's posta-ci /
+  #   posta-ci-secret. docker-compose.yml feeds these two values straight
+  #   into MinIO as MINIO_ROOT_USER/MINIO_ROOT_PASSWORD, and the tests in
+  #   this suite hard-code the local-dev pair (pipeline-harness.ts's
+  #   REAL_R2_CONFIG, e2e-kill-recovery.test.ts's own REAL_R2_* constants)
+  #   because that is what .env.example ships and what a developer's stack
+  #   is already running. images.yml can pick any pair it likes — it only
+  #   ever talks to MinIO through the app images, which read the same .env.
+  #   This job cannot: the credentials the test process presents are fixed
+  #   in TypeScript, so the ones MinIO boots with have to match them or
+  #   every R2 call fails auth. Neither pair is a real secret; both are the
+  #   published local-dev defaults.
+  #
+  # No GeoIP fetch step (unlike `ci`): geo lookup happens at capture, in
+  # apps/api, and workerEnvSchema has no GEOIP key at all — apps/worker's
+  # own image ships without the .mmdb files for exactly that reason
+  # (T0.7.10, INV-6). No Redis eviction-policy step either: the compose
+  # Redis mounts docker/redis.conf, which already sets volatile-lru (INV-7),
+  # and the suite's own Redis is a per-file testcontainer regardless.
+  event-pipeline:
+    name: Event pipeline integration (S3.5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Written BEFORE anything touches Compose — see this job's header for
+      # why a missing .env breaks `docker compose` outright rather than only
+      # affecting the services that reference it.
+      - name: Write a CI-only .env for docker compose
+        run: |
+          cat > .env <<'EOF'
+          POSTA_LINK_DOMAIN=posta.test
+          POSTA_APP_SUBDOMAIN=app
+          POSTA_API_SUBDOMAIN=api
+          POSTA_PROTOCOL=http
+          POSTA_RESERVED_HANDLES=app,api,www,admin,static,assets,cdn,mail,blog,docs,status
+          DATABASE_URL=postgresql://posta:posta@localhost:5432/posta
+          DB_POOL_MAX=10
+          POSTGRES_USER=posta
+          POSTGRES_PASSWORD=posta
+          POSTGRES_DB=posta
+          DATABASE_URL_WORKER=postgresql://posta:posta@localhost:5432/posta
+          REDIS_URL=redis://localhost:6379
+          R2_ACCOUNT_ID=ci-placeholder
+          # These two become MinIO's root credentials and MUST stay equal to
+          # the values this suite hard-codes — see this job's own header.
+          R2_ACCESS_KEY_ID=posta-local-dev
+          R2_SECRET_ACCESS_KEY=posta-local-dev-secret
+          R2_BUCKET_EVENTS=posta-events
+          R2_BUCKET_AVATARS=posta-avatars
+          R2_ENDPOINT=http://localhost:9000
+          GEOIP_DB_DIR=./data/geoip
+          BETTER_AUTH_SECRET=ci-only-placeholder-secret-value
+          BETTER_AUTH_URL=http://localhost:3000
+          SEED_USER_EMAIL=ci@posta.test
+          SEED_USER_PASSWORD=ci-only-placeholder-pw
+          SEED_USER_HANDLE=ci
+          NODE_ENV=production
+          LOG_LEVEL=info
+          API_PORT=3001
+          WORKER_PORT=3002
+          WEB_PORT=3000
+          NEXT_PUBLIC_API_URL=http://localhost:3001
+          REVALIDATE_SECRET=ci-only-placeholder-secret
+          EVENT_BATCH_SIZE=100
+          EVENT_BATCH_INTERVAL_MS=2000
+          # Both mirror .env.example. SHUTDOWN_TIMEOUT_MS is load-bearing:
+          # workerEnvSchema (T3.1.6) requires it with no default, so without
+          # it the worker fails boot validation. WORKER_CONCURRENCY only
+          # defaults to 8 — T3.7.7 warns at boot when it sits below
+          # EVENT_BATCH_SIZE, which is 100 above. Don't trim either.
+          WORKER_CONCURRENCY=100
+          SHUTDOWN_TIMEOUT_MS=30000
+          LINK_CACHE_TTL_SECONDS=3600
+          REDIS_LOOKUP_TIMEOUT_MS=30
+          MAX_INFLIGHT_ENQUEUES=1000
+          EOF
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Same reason the `hot-path` job builds these: every file in this
+      # suite imports @posta/core and @posta/contracts by PACKAGE NAME,
+      # which resolve to real dist/ output, and this job has no typecheck
+      # step emitting them as a side effect and no shared disk with the `ci`
+      # job's runner. `--filter=@posta/core` alone is enough — turbo.json's
+      # build task declares dependsOn ["^build"], so contracts builds first.
+      # The worker's OWN dist/ is not built here on purpose: the harness
+      # builds it itself, inside the test run, under a cross-process lock
+      # (pipeline-harness-process.ts's buildWorkerExclusively) so that
+      # parallel test files cannot corrupt each other's nest build output.
+      - name: Build contracts + core
+        run: pnpm exec turbo run build --filter=@posta/core
+
+      # `--wait`, not a bare `up -d`: without it Compose returns as soon as
+      # the containers are created, and this suite would race a MinIO that
+      # is listening but not yet ready.
+      #
+      # Scoped to the three datastores, and minio-init deliberately left out
+      # of this selection — both parts matter. Naming no services would also
+      # bring up api/worker/web, i.e. three full image builds this suite
+      # never touches. And including minio-init would break `--wait`
+      # outright: Compose only honours service_completed_successfully when
+      # another SELECTED service declares that dependency (only api and
+      # worker do, and neither is selected), so it falls back to
+      # running_or_healthy and fails the whole command even when the
+      # one-shot exits 0. That was established with evidence in commit
+      # 029188c — don't collapse these two steps back into one.
+      - name: Start the compose datastores
+        run: docker compose up -d --wait postgres redis minio
+
+      # The buckets this suite writes into (posta-events) do not exist until
+      # this runs. `run --rm`, not `up -d` + `compose wait`: minio-init
+      # finishes in well under a second, and `compose wait` resolves its
+      # target with ContainerList all=false, so it intermittently sees an
+      # empty list and exits 1 on a perfectly clean bootstrap (029188c
+      # again). `run` executes it in the foreground and hands back its real
+      # exit code, so a genuine bootstrap failure fails this step loudly
+      # instead of surfacing later as an opaque NoSuchBucket.
+      - name: Create the MinIO buckets (minio-init)
+        run: docker compose run --rm minio-init
+
+      # No --coverage, deliberately: the `ci` job owns the 80% lines/branches
+      # gate (vitest.config.ts's thresholds) and computes it over `default`,
+      # `web`, `core` and `redirect-hot-path`. These are integration tests
+      # over an already-covered surface — adding a second, partial coverage
+      # run here would produce a number measured against a fraction of the
+      # suite and gate nothing useful.
+      - name: Event pipeline integration suite (S3.5)
+        run: pnpm test --project e2e
