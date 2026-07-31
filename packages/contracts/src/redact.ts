@@ -162,3 +162,177 @@ function redactUrlLikeChunk(chunk: string): string {
 export function redactCredentialsFromMessage(message: string): string {
   return message.replace(URL_LIKE_PATTERN, redactUrlLikeChunk);
 }
+
+// T3.7.8 [INV-6][security] — a DIFFERENT redaction problem from
+// redactCredentialsFromMessage above, one layer down: that function
+// scrubs credentials out of free TEXT with no keys to redact by; this one
+// scrubs forbidden KEYS out of a parsed JSON STRUCTURE. Both belong in
+// this file for the same reason — isomorphic, zero server dependencies,
+// reused everywhere the same class of leak can occur.
+//
+// Invariant 6 is two clauses, not one: "the raw IP is never stored or
+// queued" AND "no cookies, ever". A DLQ entry landing in Redis (T3.7.9,
+// which wires this function in — NOT this task) is both "stored" and
+// "queued", so a malformed capture payload sitting there with a raw IP or
+// a raw cookie violates the invariant today. This constant and function
+// are the single source of truth for the forbidden-key vocabulary from
+// here on.
+//
+// Defined to be a SUPERSET of T2.3.8's already-enforced, narrower,
+// log-text-only regex (`/ip|addr|forwarded|cookie/i`,
+// apps/api/src/redirect/capture-privacy.test.ts, referenced at
+// 02-redirect-hot-path.md:168): every alternation branch that regex
+// offers (ip, addr, forwarded, cookie) has at least one representative
+// key here, and (checked the other direction too, in this file's test
+// suite) every key here also matches that regex — so this vocabulary
+// does not silently drift into a THIRD, different definition of
+// "forbidden" alongside E2's. `cookie`/`set-cookie` are both present
+// because the invariant's second clause is not derivable from its first;
+// nothing about "no raw IP" implies "no cookie".
+export const FORBIDDEN_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  'ip',
+  'client_ip',
+  'remote_addr',
+  'x-forwarded-for',
+  'x_forwarded_for',
+  'cf-connecting-ip',
+  'true-client-ip',
+  'cookie',
+  'set-cookie',
+]);
+
+function isForbiddenKey(key: string): boolean {
+  return FORBIDDEN_PAYLOAD_KEYS.has(key.toLowerCase());
+}
+
+// Path representation for `redactedKeys` — chosen to read like the JS
+// property-access expression that would reach the same value, so a DLQ
+// operator (T3.7.9's actual consumer) can tell at a glance where the
+// violation was: a top-level `ip` key is just `ip`; a nested,
+// identifier-safe key is dotted (`headers.cookie`); a nested key that is
+// NOT a valid identifier (contains `-`, starts with a digit, ...) is
+// bracket-quoted (`headers['x-forwarded-for']`), since `headers.x-forwarded-for`
+// would not parse as JS at all; an array element is bracket-indexed
+// (`items[0].cookie`).
+const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+function buildPropertyPath(parentPath: string, key: string): string {
+  const segment = IDENTIFIER_PATTERN.test(key) ? key : `['${key}']`;
+  if (parentPath === '') {
+    return segment;
+  }
+  return IDENTIFIER_PATTERN.test(key) ? `${parentPath}.${key}` : `${parentPath}${segment}`;
+}
+
+function buildIndexPath(parentPath: string, index: number): string {
+  return `${parentPath}[${index}]`;
+}
+
+// Bounds recursion depth so a payload that is by definition already
+// malformed (this function's whole reason to exist — see the module
+// comment above) cannot exhaust the call stack. 50 is comfortably deeper
+// than any real capture/DLQ payload (CaptureEventSchema, capture.ts, is a
+// single flat object) while stopping well short of Node's default stack
+// limit even for a pathological, deliberately-deep input (this file's own
+// test suite exercises 200 levels). A subtree beyond the limit is
+// replaced with a placeholder rather than walked further — losing
+// diagnosability for that one pathological shape is the accepted cost of
+// never recursing forever.
+const MAX_REDACTION_DEPTH = 50;
+
+const MAX_DEPTH_EXCEEDED_PLACEHOLDER = '[MAX_DEPTH_EXCEEDED]';
+
+// A self-referencing object (`a.self = a`) is not valid JSON and cannot
+// have come from `JSON.parse`, but this function's whole premise is that
+// its input already failed validation and cannot be trusted to be
+// well-formed — see the module comment above. `ancestors` tracks only the
+// objects on the CURRENT recursion path (added on entry, removed on
+// backtrack via `finally`), not every object ever visited: a DAG where
+// the same object is legitimately reachable via two different paths (not
+// a cycle) must still be walked twice, and a global "already seen" set
+// would wrongly collapse that case too.
+const CIRCULAR_REFERENCE_PLACEHOLDER = '[CIRCULAR_REFERENCE]';
+
+interface RedactionContext {
+  readonly ancestors: WeakSet<object>;
+  readonly redactedKeys: string[];
+}
+
+function redactNode(node: unknown, path: string, depth: number, ctx: RedactionContext): unknown {
+  if (node === null || typeof node !== 'object') {
+    return node;
+  }
+
+  if (depth >= MAX_REDACTION_DEPTH) {
+    return MAX_DEPTH_EXCEEDED_PLACEHOLDER;
+  }
+
+  if (ctx.ancestors.has(node)) {
+    return CIRCULAR_REFERENCE_PLACEHOLDER;
+  }
+
+  ctx.ancestors.add(node);
+  try {
+    if (Array.isArray(node)) {
+      return node.map((item, index) =>
+        redactNode(item, buildIndexPath(path, index), depth + 1, ctx),
+      );
+    }
+
+    const source = node as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      if (isForbiddenKey(key)) {
+        result[key] = SECRET_REDACTION_PLACEHOLDER;
+        ctx.redactedKeys.push(buildPropertyPath(path, key));
+      } else {
+        result[key] = redactNode(source[key], buildPropertyPath(path, key), depth + 1, ctx);
+      }
+    }
+    return result;
+  } finally {
+    ctx.ancestors.delete(node);
+  }
+}
+
+/** The result of {@link redactForbiddenKeys}: the redacted copy, plus the
+ * property-access-style path of every key whose value was replaced (see
+ * {@link buildPropertyPath}'s doc comment for the path format). An empty
+ * `redactedKeys` means the input had nothing to redact — the exact shape
+ * a valid `CaptureEvent` produces, since `CaptureEventSchema` is `.strict()`
+ * and structurally cannot carry any of {@link FORBIDDEN_PAYLOAD_KEYS}.
+ */
+export interface RedactForbiddenKeysResult<T> {
+  readonly value: T;
+  readonly redactedKeys: readonly string[];
+}
+
+/**
+ * Walks an arbitrary parsed JSON value — object, array, or primitive, at
+ * any nesting depth — and returns a NEW structure (never mutates `value`)
+ * with the VALUE of any object key matching {@link FORBIDDEN_PAYLOAD_KEYS}
+ * (case-insensitively) replaced by {@link SECRET_REDACTION_PLACEHOLDER}.
+ * The key itself, and its original casing, are preserved — only the value
+ * underneath it is destroyed, which is the half invariant 6 forbids;
+ * `redactedKeys` keeps the other half (that a forbidden key was present,
+ * and where) so the entry stays diagnosable.
+ *
+ * Generic over `T` so a well-typed caller (a real `CaptureEvent`, for
+ * instance) gets its own type back rather than `unknown`. This is safe
+ * specifically BECAUSE `T` is meant to be a contract type: nothing in
+ * this codebase's contracts ever legitimately declares a field named `ip`,
+ * `cookie`, etc. (that is the whole point of this vocabulary), so for a
+ * well-formed `T` no redaction ever fires and the returned value is
+ * exactly `T`, unchanged. The type is NOT a sound guarantee for arbitrary,
+ * already-malformed input (T3.7.9's `job.data` case) — there, `T` is
+ * whatever the untyped queue payload was typed as by the caller, and a
+ * redacted field's runtime value (the placeholder string) may no longer
+ * match that field's declared type. That mismatch is accepted rather than
+ * hidden behind a wider return type, because the caller in that situation
+ * already knows the payload is untrustworthy.
+ */
+export function redactForbiddenKeys<T>(value: T): RedactForbiddenKeysResult<T> {
+  const ctx: RedactionContext = { ancestors: new WeakSet(), redactedKeys: [] };
+  const redactedValue = redactNode(value, '', 0, ctx) as T;
+  return { value: redactedValue, redactedKeys: ctx.redactedKeys };
+}
