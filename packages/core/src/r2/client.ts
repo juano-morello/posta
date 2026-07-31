@@ -36,8 +36,9 @@ import { S3Client } from '@aws-sdk/client-s3';
 // R2_ENDPOINT through Zod), then closes over the single returned client.
 
 /**
- * Config {@link createR2Client} needs. All four fields are REQUIRED here
- * — deliberately no `process.env` fallback inside this module (CLAUDE.md:
+ * Config {@link createR2Client} needs. Four fields are REQUIRED;
+ * `accountId` is OPTIONAL (see its own doc comment below for why) —
+ * deliberately no `process.env` fallback inside this module (CLAUDE.md:
  * "config from env only... everything comes from the factory's config
  * parameter, which callers (api/worker) build from their own validated
  * env"). apps/api and apps/worker each already validate every one of
@@ -60,13 +61,26 @@ export interface R2ClientConfig {
    * The R2/MinIO endpoint URL, e.g. `http://localhost:9000` in local dev.
    * May be the empty string — production's own documented value (see
    * R2_ENDPOINT's schema comment, packages/contracts/src/env.ts's
-   * `zOptionalUrl`, and .env.example) — in which case this factory omits
-   * `endpoint` from the S3Client config entirely and falls through to the
-   * AWS SDK's own default endpoint resolution. See this function's own
-   * docstring for why that fallback is a KNOWN, DELIBERATELY UNRESOLVED
-   * gap for this task, not a solved production path.
+   * `zOptionalUrl`, and .env.example) — in which case this factory
+   * derives the endpoint from `accountId` instead. See this function's
+   * own docstring for the full derivation/error rules.
    */
   readonly endpoint: string;
+  /**
+   * The Cloudflare account id `R2_ACCOUNT_ID` carries — only READ by this
+   * factory when `endpoint` is empty, to derive R2's own account-scoped
+   * endpoint (`https://<accountId>.r2.cloudflarestorage.com`). OPTIONAL,
+   * unlike `endpoint` above — the key may be OMITTED entirely, not just
+   * set to `''` — because `R2ClientConfig` object literals already exist
+   * at call sites across apps/worker (production code and tests alike)
+   * that predate this field and do not know about it yet; wiring
+   * `R2_ACCOUNT_ID` down through each of those call sites is T3.7.5's own
+   * job, not this one's, and a required field here would break every one
+   * of them at compile time before T3.7.5 ever lands. A missing key is
+   * treated identically to an empty string by `createR2Client` — see its
+   * own docstring — so omitting it and passing `''` mean the same thing.
+   */
+  readonly accountId?: string;
   readonly accessKeyId: string;
   readonly secretAccessKey: string;
   readonly bucket: string;
@@ -116,26 +130,30 @@ export interface R2ClientConfig {
  * already applies to ioredis errors, extended here to whatever shape the
  * AWS SDK throws.
  *
- * KNOWN GAP, left deliberately unresolved by this task's own brief: when
- * `config.endpoint` is the empty string, this function omits `endpoint`
- * from the S3Client config, which falls through to the AWS SDK's own
- * default endpoint resolution for the configured region. That default
- * does NOT correctly address a real R2 account — R2's actual default
- * endpoint is `https://<account-id>.r2.cloudflarestorage.com`, which
- * needs an account id this task's four-env-var brief does not list
- * (`R2_ACCOUNT_ID`). Left unresolved here on purpose, per this task's own
- * instructions — do not "fix" this by silently reaching for
- * `R2_ACCOUNT_ID`; that is a decision for whichever later task actually
- * wires production R2 endpoint resolution.
+ * ENDPOINT RESOLUTION (T3.7.4, closes this file's former "KNOWN GAP"):
+ * when `config.endpoint` is non-empty, it is used VERBATIM — the local
+ * MinIO path is completely unaffected by `accountId`. When `endpoint` is
+ * empty and `accountId` is set to a non-empty string, this factory
+ * derives R2's own documented account-scoped endpoint,
+ * `https://<accountId>.r2.cloudflarestorage.com`, and uses that. When
+ * BOTH are empty OR `accountId` is omitted entirely, this factory throws
+ * rather than construct a client that would fall through to the AWS
+ * SDK's own default endpoint resolution — which cannot address a real R2
+ * account — and fail later, on the first `.send()`, with a confusing
+ * bucket-not-found-shaped error far from this misconfiguration's actual
+ * cause.
+ *
+ * [security] The thrown message names only the two env var keys
+ * (`R2_ENDPOINT`, `R2_ACCOUNT_ID`) an operator needs to fix — never
+ * `config` itself, and never `accessKeyId`/`secretAccessKey`, which this
+ * module's own test suite (client.test.ts) verifies directly via an
+ * absence assertion, not an assumption.
  */
 export function createR2Client(config: R2ClientConfig): S3Client {
+  const endpoint = resolveEndpoint(config);
+
   return new S3Client({
-    // Conditional spread, not `endpoint: config.endpoint || undefined` —
-    // this repo's `exactOptionalPropertyTypes` forbids an explicit
-    // `undefined` for an optional key; the key must be OMITTED entirely
-    // (same pattern createEnqueueDroppedCounter, apps/api/src/redirect/
-    // enqueue.ts, already uses for its own optional `registers` field).
-    ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+    endpoint,
     region: 'auto',
     forcePathStyle: true,
     credentials: {
@@ -143,4 +161,32 @@ export function createR2Client(config: R2ClientConfig): S3Client {
       secretAccessKey: config.secretAccessKey,
     },
   });
+}
+
+/**
+ * Resolves the endpoint URL {@link createR2Client} passes to `S3Client`,
+ * per the three-way rule documented on `createR2Client` itself: verbatim
+ * `endpoint` first, else derive from `accountId`, else throw. Pulled out
+ * as its own function (rather than inlined into the conditional spread
+ * the previous version used) because the "both empty" branch now needs
+ * to THROW, not merely omit a key — a conditional spread has no natural
+ * place to do that.
+ *
+ * `config.accountId` being OMITTED (an existing caller that predates this
+ * field) and `config.accountId` being the EMPTY STRING (a caller that
+ * knows about the field and has nothing to put in it) fall through to
+ * the exact same falsy check below — an absent key and an empty value
+ * mean the same thing here, deliberately (see `R2ClientConfig.accountId`'s
+ * own doc comment).
+ */
+function resolveEndpoint(config: Pick<R2ClientConfig, 'endpoint' | 'accountId'>): string {
+  if (config.endpoint) return config.endpoint;
+  if (config.accountId) return `https://${config.accountId}.r2.cloudflarestorage.com`;
+
+  // [security] Names ONLY the two env var keys — never `config`, which
+  // carries accessKeyId/secretAccessKey.
+  throw new Error(
+    'createR2Client: both R2_ENDPOINT and R2_ACCOUNT_ID are empty — set one of them. ' +
+      'R2_ENDPOINT for local dev (MinIO), or leave it empty and set R2_ACCOUNT_ID for production R2.',
+  );
 }
