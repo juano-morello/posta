@@ -225,6 +225,91 @@ describe('DlqService — unit (real BullMQ queue, no consumer)', () => {
     }
   });
 
+  it('send() redacts forbidden keys (a top-level "ip" and a nested headers["x-forwarded-for"]) out of rawPayload before storing it, and records both paths in redactedKeys', async () => {
+    // T3.7.9 [security][INV-6] — the ONLY DLQ entries that can carry a
+    // forbidden key are 'schema-validation-failed' ones: their payload is
+    // PRE-VALIDATION job.data, which never passed CaptureEventSchema's
+    // `.strict()` check and so can still smuggle a raw `ip` or an
+    // `x-forwarded-for` header. This proves DlqService.send() now runs
+    // that payload through `redactForbiddenKeys` before writing it to
+    // Redis, closing the gap dlq.service.ts's own header used to defend
+    // as a deliberate, accepted exception to invariant 6.
+    const queue = new Queue<EventsDlqJobPayload>(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    const service = new DlqService(queue);
+
+    try {
+      const payload = {
+        ip: '203.0.113.5',
+        headers: { 'x-forwarded-for': '203.0.113.5, 70.41.3.18' },
+        nonsense: true,
+      };
+      const error = new Error('parse failed');
+
+      await service.send('schema-validation-failed', payload, error, {
+        originalJobId: 'job-ip-leak',
+        attemptsMade: 1,
+        issues: [{ path: 'ip', message: 'Unrecognized key', code: 'unrecognized_keys' }],
+      });
+
+      const jobs = await queue.getJobs(['waiting']);
+      expect(jobs).toHaveLength(1);
+
+      const entry = jobs[0]!.data;
+
+      // Traversed key by key — NEVER via JSON.stringify(...).toContain(...),
+      // which an allowlist/redactedKeys array embedded elsewhere in the
+      // same object could make pass regardless of the actual field value
+      // (see this epic's own review history for exactly that failure mode).
+      const rawPayload = entry.rawPayload as Record<string, unknown>;
+      expect(rawPayload['ip']).toBe(SECRET_REDACTION_PLACEHOLDER);
+      const headers = rawPayload['headers'] as Record<string, unknown>;
+      expect(headers['x-forwarded-for']).toBe(SECRET_REDACTION_PLACEHOLDER);
+      // A key that was never forbidden survives untouched — proof this is
+      // a targeted redaction, not a payload-wide wipe.
+      expect(rawPayload['nonsense']).toBe(true);
+
+      expect(entry.redactedKeys).toEqual(['ip', "headers['x-forwarded-for']"]);
+    } finally {
+      await queue.obliterate({ force: true });
+      await queue.close();
+    }
+  });
+
+  it('send() stores a valid CaptureEvent (attempts-exhausted) unchanged, with redactedKeys: [] — nothing is falsely flagged for clean input', async () => {
+    // The companion of the redaction test above: a real CaptureEvent
+    // already passed CaptureEventSchema's `.strict()` check, so it
+    // structurally cannot carry any FORBIDDEN_PAYLOAD_KEYS entry —
+    // redactForbiddenKeys must be a true no-op here, not just "close
+    // enough". toEqual (deep-equal) against the exact original payload
+    // proves no field was mutated or dropped.
+    const queue = new Queue<EventsDlqJobPayload>(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    const service = new DlqService(queue);
+
+    try {
+      const payload = buildCaptureEvent();
+      const error = new Error('sink rejected forever');
+
+      await service.send('attempts-exhausted', payload, error, {
+        originalJobId: 'job-clean',
+        attemptsMade: 5,
+      });
+
+      const jobs = await queue.getJobs(['waiting']);
+      expect(jobs).toHaveLength(1);
+
+      const entry = jobs[0]!.data;
+      expect(entry.rawPayload).toEqual(payload);
+      expect(entry.redactedKeys).toEqual([]);
+    } finally {
+      await queue.obliterate({ force: true });
+      await queue.close();
+    }
+  });
+
   it('depth() reflects the number of jobs currently sitting in the DLQ', async () => {
     const queue = new Queue<EventsDlqJobPayload>(EVENTS_DLQ_QUEUE, {
       connection: { url: redis.url, maxRetriesPerRequest: null },

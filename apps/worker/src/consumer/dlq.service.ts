@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { EVENTS_DLQ_QUEUE } from '@posta/core';
-import { redactCredentialsFromMessage } from '@posta/contracts';
+import { redactCredentialsFromMessage, redactForbiddenKeys } from '@posta/contracts';
 import { extractSqlState } from '../batch/classify-flush-error';
 
 // T3.1.5 [E3, S3.1] — the ONE writer EVENTS_DLQ_QUEUE has. Before this
@@ -76,20 +76,40 @@ import { extractSqlState } from '../batch/classify-flush-error';
 // `classifyR2Error`) — so "exhausted" would misdescribe that case.
 // 'r2-put-failed' covers both terminal outcomes honestly.
 //
-// [security, invariant 6] `rawPayload` is stored EXACTLY as received,
-// unredacted, for BOTH reasons — this is T3.1.4's own established
-// decision (its own EventsDlqJobPayload doc comment, preserved here:
-// "including whatever made it fail eventJobSchema (e.g. an
-// invariant-6-violating ip key)"), carried forward unchanged rather than
-// relitigated by this task. The DLQ is the quarantine invariant 6's
-// "never stored or queued" is not about — it exists specifically to hold
-// byte-for-byte evidence of a payload that violated an invariant, for
-// diagnosis and replay. See events.consumer.ts's own header for why
-// 'attempts-exhausted' can, in one narrow edge case, ALSO end up storing
-// a payload that never actually passed eventJobSchema — and why that
-// case reuses this exact same already-accepted behavior (by reporting
-// `reason: 'schema-validation-failed'` instead) rather than inventing a
-// new, un-reviewed redaction policy.
+// [security, invariant 6][T3.7.9 — AMENDS the decision this section used
+// to record] `rawPayload` is NO LONGER stored exactly as received.
+// T3.1.4's original decision (quoted here until this task, verbatim:
+// "rawPayload is stored EXACTLY as received, unredacted... including
+// whatever made it fail eventJobSchema (e.g. an invariant-6-violating ip
+// key)") reasoned that the DLQ is the quarantine invariant 6's "never
+// stored or queued" is not about, since it holds byte-for-byte evidence
+// of a payload that violated an invariant, for diagnosis and replay. That
+// reasoning still holds for a DLQ entry itself — but "byte-for-byte
+// evidence" and "the raw IP sitting unredacted in Redis" turn out not to
+// be the same requirement, and this task closes the gap between them.
+//
+// Every entry now runs through `redactForbiddenKeys` (packages/contracts,
+// T3.7.8) before it is written: `send()`, below, stores
+// `redactForbiddenKeys(payload).value` as `rawPayload`, and its own
+// `redactedKeys` as the new `EventsDlqJobPayload.redactedKeys` field, so a
+// DLQ operator can still SEE that a forbidden key was present, and at
+// exactly which path, without the invariant-6-violating value itself
+// sitting in Redis. This is unconditional, for every `reason` — `send()`
+// still never branches on `reason` to decide HOW to write an entry (this
+// file's own "flat shape" reasoning, above). For a 'schema-validation-
+// failed' entry (pre-validation `job.data`, the ONLY payload shape that
+// can structurally carry a forbidden key — `CaptureEventSchema` is
+// `.strict()`, so nothing that passed it ever could) this is a real
+// redaction; for every other reason, whose payload already IS (or is
+// built from) a valid `CaptureEvent`, `redactForbiddenKeys` naturally
+// returns `redactedKeys: []` and an unchanged value — no per-reason
+// special-casing needed, this falls out of calling the same function on
+// every entry regardless of `reason`. See events.consumer.ts's own header
+// for why 'attempts-exhausted' can, in one narrow edge case, ALSO end up
+// storing a payload that never actually passed eventJobSchema — and why
+// that case reports `reason: 'schema-validation-failed'` instead of
+// inventing a separate redaction policy for it: it goes through this
+// exact same unconditional redaction pass, via the exact same reason.
 
 /** The job name every DLQ-routing `add()` call uses, regardless of
  * `reason` — mirrors apps/api/src/redirect/enqueue.ts's own
@@ -163,10 +183,29 @@ export type DlqReason = 'schema-validation-failed' | 'attempts-exhausted' | 'flu
  * `readonly CaptureEvent[]` — the WHOLE failed batch, not a single event
  * — see this file's own header for why that reason's payload shape is
  * deliberately different from every other reason's.
+ *
+ * [T3.7.9][security][INV-6] `rawPayload` is `redactForbiddenKeys`'s own
+ * `.value`, not the raw `payload` argument `send()` received — see this
+ * file's own header, above, for why that changed. For any payload that
+ * cannot structurally carry a forbidden key (every reason except
+ * 'schema-validation-failed'), this is unconditionally byte-for-byte
+ * identical to what was passed in.
  */
 export interface EventsDlqJobPayload {
   readonly reason: DlqReason;
   readonly rawPayload: unknown;
+  /** [T3.7.9][security][INV-6] The `redactedKeys` half of
+   * `redactForbiddenKeys(payload)` — the property-access-style path (see
+   * that function's own JSDoc, packages/contracts/src/redact.ts) of every
+   * key in `rawPayload` whose value was replaced by
+   * `SECRET_REDACTION_PLACEHOLDER`. `[]` for every reason whose payload
+   * cannot structurally carry a forbidden key (a real `CaptureEvent`
+   * already passed `CaptureEventSchema`'s `.strict()` check) — non-empty
+   * only when a 'schema-validation-failed' entry's pre-validation payload
+   * actually smuggled one. Lets a DLQ operator see THAT a forbidden key
+   * was present, and where, without the forbidden value itself sitting in
+   * Redis. */
+  readonly redactedKeys: readonly string[];
   /** The underlying error's own `.message`, REDACTED via
    * `redactCredentialsFromMessage` before storage (`send()`, below) — the
    * sink's rejection reason for 'attempts-exhausted' (once a real sink
@@ -232,9 +271,17 @@ export class DlqService {
   ) {}
 
   async send(reason: DlqReason, payload: unknown, error: Error, meta: DlqSendMeta): Promise<void> {
+    // [T3.7.9][security][INV-6] Run UNCONDITIONALLY, for every `reason` —
+    // this file's own header (above) records why: a payload that already
+    // passed `CaptureEventSchema`'s `.strict()` check cannot structurally
+    // carry a forbidden key, so this is a true no-op for every reason
+    // except 'schema-validation-failed', with no per-reason branch needed.
+    const { value: redactedPayload, redactedKeys } = redactForbiddenKeys(payload);
+
     const entry: EventsDlqJobPayload = {
       reason,
-      rawPayload: payload,
+      rawPayload: redactedPayload,
+      redactedKeys,
       // [security fix, review round 1] `error.message` is redacted here,
       // in this ONE shared writer, rather than trusting each of
       // routeToDlq()/onFailed() (events.consumer.ts) to remember to do it
@@ -242,10 +289,6 @@ export class DlqService {
       // today's callers and any future one, the same reasoning
       // `redactCredentialsFromMessage`'s own header gives for living in
       // packages/contracts instead of being copied per call site.
-      // Deliberately NOT applied to `rawPayload` (this file's own header,
-      // "[security, invariant 6] rawPayload is stored EXACTLY as
-      // received, unredacted" — a different, already-reviewed decision
-      // this fix does not touch).
       errorMessage: redactCredentialsFromMessage(error.message),
       sqlstate: extractSqlState(error),
       issues: meta.issues ?? [],

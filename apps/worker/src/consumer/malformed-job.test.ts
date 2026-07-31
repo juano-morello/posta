@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import type { INestApplicationContext } from '@nestjs/common';
 import { EVENTS_DLQ_QUEUE, EVENTS_QUEUE, newId } from '@posta/core';
 import { startRedisContainer, type RedisContainerHandle } from '@posta/core/testing';
-import type { CaptureEvent } from '@posta/contracts';
+import { SECRET_REDACTION_PLACEHOLDER, type CaptureEvent } from '@posta/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../app.module';
 import type { EventsConsumerLogger, EventSink, EventsDlqJobPayload } from './events.consumer';
@@ -121,7 +121,15 @@ describe('EventsConsumer — malformed jobs route to the DLQ (real BullMQ, testc
       expect(dlqJobs).toHaveLength(1);
       const dlqJob = dlqJobs[0]!;
       expect(dlqJob.data.reason).toBe('schema-validation-failed');
+      // T3.7.9 [security][INV-6] — `malformedPayload` above carries NOTHING
+      // from FORBIDDEN_PAYLOAD_KEYS, so DlqService.send()'s redaction pass
+      // (dlq.service.ts) must be a true no-op for it: this now doubles as
+      // the "redactor returns a deep-equal COPY when nothing matches" proof
+      // — toEqual is deep equality, not reference identity, so this still
+      // holds even though rawPayload is no longer the exact same object
+      // reference send() was called with.
       expect(dlqJob.data.rawPayload).toEqual(malformedPayload);
+      expect(dlqJob.data.redactedKeys).toEqual([]);
       expect(dlqJob.data.originalJobId).toBe(job.id);
       expect(Array.isArray(dlqJob.data.issues)).toBe(true);
       expect(dlqJob.data.issues.length).toBeGreaterThan(0);
@@ -133,6 +141,70 @@ describe('EventsConsumer — malformed jobs route to the DLQ (real BullMQ, testc
         expect(serializedCall).not.toContain(secretMarker);
         expect(serializedCall).not.toContain('nonsense');
       }
+    } finally {
+      await queue.obliterate({ force: true });
+      await queue.close();
+      await dlqQueue.obliterate({ force: true });
+      await dlqQueue.close();
+      await app?.close();
+    }
+  });
+
+  it('[security][INV-6] redacts a raw "ip" key and a nested headers["x-forwarded-for"] key out of a malformed payload before it reaches the DLQ', async () => {
+    // T3.7.9 — this is precisely the case dlq.service.ts's own header
+    // identifies as the ONLY path a forbidden key can reach the DLQ
+    // through: `job.data` here is PRE-VALIDATION (it never passed
+    // eventJobSchema's `.strict()` check — that is WHY it lands in
+    // routeToDlq() at all), so unlike a genuine CaptureEvent it can still
+    // carry an invariant-6-violating `ip`/`x-forwarded-for` value.
+    const handle = vi.fn(async (_event: CaptureEvent): Promise<void> => {
+      void _event;
+    });
+    const sink: EventSink = { handle };
+
+    const queue = new Queue(EVENTS_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+    const dlqQueue = new Queue<EventsDlqJobPayload>(EVENTS_DLQ_QUEUE, {
+      connection: { url: redis.url, maxRetriesPerRequest: null },
+    });
+
+    let app: INestApplicationContext | undefined;
+    try {
+      app = await NestFactory.createApplicationContext(
+        AppModule.forRoot({ redisUrl: redis.url, eventSink: sink, ...UNUSED_ACCUMULATOR_CONFIG }),
+      );
+
+      const malformedPayload = {
+        nonsense: true,
+        ip: '203.0.113.5',
+        headers: { 'x-forwarded-for': '203.0.113.5, 70.41.3.18' },
+      };
+
+      const job = await queue.add('capture', malformedPayload);
+
+      await vi.waitFor(
+        async () => {
+          expect(await job.getState()).toBe('completed');
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+
+      expect(handle).not.toHaveBeenCalled();
+
+      const dlqJobs = await dlqQueue.getJobs(['waiting']);
+      expect(dlqJobs).toHaveLength(1);
+      const dlqJob = dlqJobs[0]!;
+      expect(dlqJob.data.reason).toBe('schema-validation-failed');
+
+      // Traversed key by key — never JSON.stringify(...).toContain(...).
+      const rawPayload = dlqJob.data.rawPayload as Record<string, unknown>;
+      expect(rawPayload['ip']).toBe(SECRET_REDACTION_PLACEHOLDER);
+      const headers = rawPayload['headers'] as Record<string, unknown>;
+      expect(headers['x-forwarded-for']).toBe(SECRET_REDACTION_PLACEHOLDER);
+      expect(rawPayload['nonsense']).toBe(true);
+
+      expect(dlqJob.data.redactedKeys).toEqual(['ip', "headers['x-forwarded-for']"]);
     } finally {
       await queue.obliterate({ force: true });
       await queue.close();
