@@ -952,3 +952,44 @@ No unverified claim was accepted; the added content is accurate as written.
 **Findings surviving triage:** none blocking closure. Six items above are genuine, verified, standing gaps for a future epic/human decision — not defects in the work done in E3.
 **Deviation from plan:** none in any task's own scope this session. Process deviation noted above (reviewer self-applying a fix instead of reporting) — content independently re-verified before being kept.
 **Handed back to:** n/a.
+
+---
+
+## T3.7.4 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test r2/client.test.ts` (12/12), `npx tsc -b packages/contracts packages/core apps/api apps/worker` clean, `pnpm typecheck:tests` clean — all re-run and confirmed independently, not accepted on report alone.
+**Findings surviving triage**
+- MEDIUM · packages/core/src/r2/client.ts (resolveEndpoint) — unvalidated `accountId` raw-interpolated into a URL; a slash-bearing value silently redirected credentials to an attacker-controlled host instead of failing loud. Fixed in 38ad315: `R2_ACCOUNT_ID_FORMAT = /^[0-9a-f]{32}$/` validated before use, throws naming only the var name on mismatch.
+- LOW (addressed opportunistically in the same fix) · undocumented trust boundary on `accountId`, and a `Pick<...>` type giving a false impression of runtime isolation in `resolveEndpoint`. Both now documented inline.
+**Deviation from plan:** none in scope; mid-flight I caught (before the fix agent even reported) that an initial required-field `accountId` design broke `apps/worker/src/app.module.ts` and `apps/worker/src/cli/replay.ts` (production code, outside this task's file list) — corrected to optional before commit, consistent with T3.7.5 owning that wiring.
+**Handed back to:** a774730d52d359ab4 (one round, MEDIUM fix, resolved)
+
+---
+
+## T3.7.8 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test redact.test.ts redact-forbidden-keys.test.ts` (38/38), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage**
+- MEDIUM · packages/contracts/src/redact.ts (redactNode) — `result` built as a plain `{}` literal; a literal `__proto__` key (legitimately producible via `JSON.parse`) hit `Object.prototype`'s accessor on write, silently dropping the whole subtree while `redactedKeys` still claimed it was redacted. Fixed in ff75f9d via `Object.create(null)`.
+- MEDIUM · vocabulary gap — missing `x-real-ip`, RFC 7239 `forwarded`, `x-client-ip`, `fastly-client-ip`, and asymmetric dash/underscore pairing; the module's "superset of T2.3.8's regex" claim was false in the safety-relevant direction (regex is substring-matching over free text, effectively infinite match set — an exact-match Set cannot literally be its superset). Vocabulary expanded; claim corrected in the module comment to the honest, narrower, test-verified form.
+- MEDIUM (anti-vacuous) · two tests caught not discriminating: the 200-deep-nesting test asserted only `toBeDefined()`, the circular-reference test asserted only `not.toThrow()`. Both rewritten to prove a planted secret/redaction is actually absent/present, with `MAX_DEPTH_EXCEEDED_PLACEHOLDER`/`CIRCULAR_REFERENCE_PLACEHOLDER` exported so tests assert real sentinels, not hand-copied strings.
+**Deviation from plan:** the task text's literal "superset of T2.3.8's regex" framing was corrected as unachievable by construction (substring regex vs. exact-match Set) rather than satisfied literally — recorded in-code, not silently reworded.
+**Handed back to:** adeffbeb401d45dc5 (one round, four MEDIUMs, resolved)
+
+---
+
+## T3.7.1 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test split-retry.test.ts poison-dlq.test.ts` (25/25), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage:** none — standard trio review not separately dispatched (no [security] tag); no CRITICAL/HIGH surfaced.
+**Deviation from plan:** none.
+**Handed back to:** n/a
+
+---
+
+## T3.7.11 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test health.controller.test.ts` (8/8), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage:** none — no [security] tag; no CRITICAL/HIGH surfaced.
+**Deviation from plan:** T3.1.7's pre-existing 503 test case was deliberately re-planted (`queue_depth: 0` → `1`) per the task's own instruction, since a zero-queue/zero-batch idle worker is no longer 503-worthy after this fix.
+**Handed back to:** n/a
