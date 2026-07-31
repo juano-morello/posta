@@ -22,6 +22,7 @@ import {
   main,
   parseReplayArgs,
   runReplayCli,
+  replayEnvSchema,
   ReplayArgsError,
   type ReplayCliDeps,
   type ReplayCliResult,
@@ -628,6 +629,106 @@ describe('runReplayCli (T3.6.4) — real replay against Postgres + MinIO [INV-6]
 });
 
 // ---------------------------------------------------------------------
+// replayEnvSchema (T3.7.6) — mirrors apps/worker/src/env.ts's own
+// "at least one of R2_ENDPOINT / R2_ACCOUNT_ID" cross-field rule
+// (env.test.ts's own describe block for workerEnvSchema is this block's
+// direct precedent, same assertions, same reasoning). Pure schema-level
+// tests, no containers: this CLI is a disaster-recovery tool that has to
+// reach the SAME production R2 bucket, addressed the SAME way, as the
+// live worker — so a `.env` with only R2_ACCOUNT_ID set (production's
+// own shape, R2_ENDPOINT left empty) must parse, and a `.env` with
+// NEITHER set must fail loudly, naming both keys, before this CLI ever
+// touches Postgres or R2.
+// ---------------------------------------------------------------------
+describe('replayEnvSchema (T3.7.6) — the R2_ENDPOINT / R2_ACCOUNT_ID at-least-one-of rule', () => {
+  const VALID_REPLAY_ENV: Record<string, string> = {
+    DATABASE_URL_WORKER: 'postgresql://posta:posta@localhost:5432/posta',
+    R2_ACCESS_KEY_ID: 'test-access-key-id',
+    R2_SECRET_ACCESS_KEY: 'test-secret-access-key',
+    R2_BUCKET_EVENTS: 'posta-events',
+    R2_ENDPOINT: 'http://localhost:9000',
+  };
+
+  it('parses a fully populated, valid env — the existing MinIO-backed shape (R2_ACCOUNT_ID omitted, R2_ENDPOINT set) stays valid', () => {
+    const result = replayEnvSchema.safeParse(VALID_REPLAY_ENV);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('parses when R2_ACCOUNT_ID is set alone and R2_ENDPOINT is empty — production\'s own documented shape', () => {
+    const result = replayEnvSchema.safeParse({
+      ...VALID_REPLAY_ENV,
+      R2_ENDPOINT: '',
+      R2_ACCOUNT_ID: 'a'.repeat(32),
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are empty, naming BOTH keys', () => {
+    const result = replayEnvSchema.safeParse({
+      ...VALID_REPLAY_ENV,
+      R2_ENDPOINT: '',
+      R2_ACCOUNT_ID: '',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+      expect(failingPaths).toContain('R2_ENDPOINT');
+      expect(failingPaths).toContain('R2_ACCOUNT_ID');
+
+      const messages = result.error.issues.map((issue) => issue.message).join(' ');
+      expect(messages).toContain('R2_ENDPOINT');
+      expect(messages).toContain('R2_ACCOUNT_ID');
+    }
+  });
+
+  it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are omitted entirely', () => {
+    const { R2_ENDPOINT: _R2_ENDPOINT, ...rest } = VALID_REPLAY_ENV;
+    const result = replayEnvSchema.safeParse(rest);
+
+    expect(result.success).toBe(false);
+  });
+
+  // [T3.7.5's own security review, MEDIUM — mirrored here because this
+  // schema mirrors that one's exact validation shape] A whitespace-only
+  // R2_ACCOUNT_ID (a plausible copy/paste or trailing-newline artifact in
+  // a `.env` file or k8s Secret) must NOT read as "set" — the field's own
+  // bare `z.string().optional()` does no trimming, so this has to be
+  // asserted explicitly rather than assumed to fall out of the '' case
+  // above.
+  it('rejects a whitespace-only R2_ACCOUNT_ID with an empty R2_ENDPOINT, naming BOTH keys', () => {
+    const result = replayEnvSchema.safeParse({
+      ...VALID_REPLAY_ENV,
+      R2_ENDPOINT: '',
+      R2_ACCOUNT_ID: '   ',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+      expect(failingPaths).toContain('R2_ENDPOINT');
+      expect(failingPaths).toContain('R2_ACCOUNT_ID');
+
+      const messages = result.error.issues.map((issue) => issue.message).join(' ');
+      expect(messages).toContain('R2_ENDPOINT');
+      expect(messages).toContain('R2_ACCOUNT_ID');
+    }
+  });
+
+  it('parses when R2_ACCOUNT_ID is omitted entirely and R2_ENDPOINT is set (non-regression: every existing MinIO-backed replay run in this file)', () => {
+    // VALID_REPLAY_ENV never carries an R2_ACCOUNT_ID key to begin with —
+    // this is the exact shape every MinIO-backed test elsewhere in this
+    // file already sets, restated here as its own explicit assertion.
+    expect(VALID_REPLAY_ENV).not.toHaveProperty('R2_ACCOUNT_ID');
+    const result = replayEnvSchema.safeParse(VALID_REPLAY_ENV);
+
+    expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------
 // main() — the real, env-driven CLI entrypoint. [review round 2,
 // database-reviewer finding] main() had ZERO test coverage despite its
 // own docstring's claim of "the same 'main() itself is fully covered
@@ -657,6 +758,7 @@ describe('main() — the real posta replay CLI entrypoint (coverage, review roun
     'DATABASE_URL_WORKER',
     'DATABASE_URL',
     'DB_POOL_MAX',
+    'R2_ACCOUNT_ID',
     'R2_ACCESS_KEY_ID',
     'R2_SECRET_ACCESS_KEY',
     'R2_BUCKET_EVENTS',
@@ -727,6 +829,11 @@ describe('main() — the real posta replay CLI entrypoint (coverage, review roun
     process.env.R2_SECRET_ACCESS_KEY = overrides.R2_SECRET_ACCESS_KEY ?? REAL_R2_CONFIG.secretAccessKey;
     process.env.R2_BUCKET_EVENTS = overrides.R2_BUCKET_EVENTS ?? REAL_R2_CONFIG.bucket;
     process.env.R2_ENDPOINT = overrides.R2_ENDPOINT ?? REAL_R2_CONFIG.endpoint;
+    // REAL_R2_CONFIG (MinIO) carries no accountId — this stays UNSET by
+    // default, same "existing MinIO-backed run" shape every other test in
+    // this describe already relies on, unless a test overrides it.
+    if (overrides.R2_ACCOUNT_ID === undefined) delete process.env.R2_ACCOUNT_ID;
+    else process.env.R2_ACCOUNT_ID = overrides.R2_ACCOUNT_ID;
   }
 
   it('fails fast with exitCode 1 (never throwing) when required env vars are missing, before touching Postgres or R2', async () => {
@@ -743,6 +850,40 @@ describe('main() — the real posta replay CLI entrypoint (coverage, review roun
 
     expect(process.exitCode).toBe(1);
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  // [T3.7.6] main() itself — not just replayEnvSchema in isolation — must
+  // fail loudly, naming BOTH R2_ENDPOINT and R2_ACCOUNT_ID, when neither
+  // addresses R2. loadEnv (packages/contracts/src/env.ts) never echoes a
+  // custom .superRefine message text into its EnvFailure list — it
+  // reduces every failing Zod issue down to `{key, reason}`, one line per
+  // distinct `issue.path[0]` — so the two variable NAMES are what must
+  // show up in main()'s own formatEnvFailures() report, one line each,
+  // never the refine's own prose.
+  it('[T3.7.6] exits 1 naming BOTH R2_ENDPOINT and R2_ACCOUNT_ID when both are empty, before touching Postgres or R2', async () => {
+    setRealEnv({ R2_ENDPOINT: '' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    process.exitCode = undefined;
+
+    await expect(main()).resolves.toBeUndefined();
+
+    expect(process.exitCode).toBe(1);
+    const output = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toMatch(/R2_ENDPOINT/);
+    expect(output).toMatch(/R2_ACCOUNT_ID/);
+  });
+
+  it('[T3.7.6] exits 1 naming BOTH R2_ENDPOINT and R2_ACCOUNT_ID when R2_ENDPOINT is empty and R2_ACCOUNT_ID is whitespace-only', async () => {
+    setRealEnv({ R2_ENDPOINT: '', R2_ACCOUNT_ID: '   ' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    process.exitCode = undefined;
+
+    await expect(main()).resolves.toBeUndefined();
+
+    expect(process.exitCode).toBe(1);
+    const output = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toMatch(/R2_ENDPOINT/);
+    expect(output).toMatch(/R2_ACCOUNT_ID/);
   });
 
   it('[a][b] happy path: replays a real seeded event through completion using DATABASE_URL_WORKER/R2_* env vars, exitCode 0 — the row only reappears because THOSE env vars drove main()\'s own DB/R2 clients', async () => {

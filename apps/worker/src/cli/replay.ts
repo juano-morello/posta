@@ -354,23 +354,83 @@ export async function runReplayCli(
 //
 // Deliberately its OWN, narrower env schema — not apps/worker's
 // `workerEnvSchema` (env.ts) — scoped to exactly what this CLI touches:
-// the writer-role Postgres URL and the four R2 fields `createR2Client`
-// needs. `WORKER_PORT`/`EVENT_BATCH_SIZE`/`EVENT_BATCH_INTERVAL_MS`/
-// `SHUTDOWN_TIMEOUT_MS`/`LOG_LEVEL`/`NODE_ENV`/`R2_ACCOUNT_ID` all govern
-// the long-running BullMQ consumer process (main.ts) and are irrelevant
-// to a one-shot replay run — requiring them here would fail this CLI's
-// own startup on missing config that has nothing to do with replay.
-// `R2_ACCOUNT_ID` in particular: `workerEnvSchema` validates it, but
-// (like main.ts's own `buildProductionFlush`, apps/worker/src/
-// app.module.ts) nothing ever actually reads it — `createR2Client`'s
-// `endpoint` comes from `R2_ENDPOINT` alone.
-const replayEnvSchema = z.object({
+// the writer-role Postgres URL and the R2 fields `createR2Client` needs.
+// `WORKER_PORT`/`EVENT_BATCH_SIZE`/`EVENT_BATCH_INTERVAL_MS`/
+// `SHUTDOWN_TIMEOUT_MS`/`LOG_LEVEL`/`NODE_ENV` all govern the
+// long-running BullMQ consumer process (main.ts) and are irrelevant to a
+// one-shot replay run — requiring them here would fail this CLI's own
+// startup on missing config that has nothing to do with replay.
+//
+// [T3.7.6] `R2_ACCOUNT_ID`, unlike those, IS included — this CLI is a
+// disaster-recovery tool that has to reach the SAME production R2
+// bucket, addressed the SAME way, as the live worker already does
+// (T3.7.5, env.ts). `createR2Client` (packages/core/src/r2/client.ts,
+// T3.7.4) reads `R2_ACCOUNT_ID` to DERIVE `R2_ENDPOINT` when that var is
+// left empty — R2's own documented production shape — so a replay run
+// pointed at production (`R2_ENDPOINT` unset, only `R2_ACCOUNT_ID` set)
+// needs this schema to accept that value, and `main()` below to forward
+// it, the same way apps/worker's own `main.ts` already does
+// (`env.R2_ACCOUNT_ID` -> `AppModuleConfig.r2AccountId` ->
+// `createR2Client`). Before this task, the field was left out on the
+// grounds that "nothing ever actually reads it" — true when written,
+// false since T3.7.5 landed R2_ACCOUNT_ID support in the worker's own
+// path; the omission meant a production replay run with only
+// R2_ACCOUNT_ID set would pass THIS schema's old (narrower) validation
+// yet still crash one layer down, inside `createR2Client` itself, the
+// first time it tried to resolve an endpoint from nothing.
+const replayEnvSchemaObject = z.object({
   DATABASE_URL_WORKER: zUrl,
+  // Mirrors env.ts's own R2_ACCOUNT_ID field exactly: OPTIONAL and
+  // UNTRIMMED at the schema-field level (trimming happens in the
+  // `.superRefine` below, not here) — see
+  // `requireAtLeastOneReplayR2AddressingVar`'s own doc comment for why.
+  R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: zNonEmpty,
   R2_SECRET_ACCESS_KEY: zNonEmpty,
   R2_BUCKET_EVENTS: zNonEmpty,
   R2_ENDPOINT: zOptionalUrl,
 });
+
+/**
+ * [T3.7.6] The same cross-field rule env.ts's own
+ * `requireAtLeastOneR2AddressingVar` enforces for the worker's boot path,
+ * duplicated here rather than imported — env.ts does not export that
+ * function (only `workerEnvSchema`/`WorkerEnv`), and this schema
+ * intentionally stays its OWN narrower type rather than a re-export of
+ * `workerEnvSchema`'s shape (see this file's own header, above). Same
+ * trim-before-check discipline, same both-keys-named message, same
+ * both-issues-on-both-paths shape, for the same reason: `loadEnv`
+ * (packages/contracts/src/env.ts) derives its `EnvFailure.key` from
+ * `issue.path[0]`, one entry per distinct key, so adding the issue on
+ * BOTH `R2_ENDPOINT` and `R2_ACCOUNT_ID` is what makes `main()`'s own
+ * `formatEnvFailures()` report name both variables to an operator,
+ * instead of just one.
+ */
+function requireAtLeastOneReplayR2AddressingVar(
+  values: Pick<z.input<typeof replayEnvSchemaObject>, 'R2_ENDPOINT' | 'R2_ACCOUNT_ID'>,
+  ctx: z.RefinementCtx,
+): void {
+  // [mirrors env.ts's own fix, T3.7.5 security review, MEDIUM] Trim
+  // before checking presence — R2_ACCOUNT_ID's own `z.string().optional()`
+  // does no trimming (unlike zNonEmpty), so a whitespace-only value must
+  // be rejected explicitly here rather than assumed to read as "set".
+  // Without this, R2_ACCOUNT_ID: '   ' would sail past this check and
+  // only be caught one layer down, inside createR2Client's own format
+  // regex — the exact bug env.ts's own history already records.
+  const hasEndpoint = values.R2_ENDPOINT !== '';
+  const hasAccountId = (values.R2_ACCOUNT_ID ?? '').trim() !== '';
+
+  if (hasEndpoint || hasAccountId) return;
+
+  const message =
+    'R2_ENDPOINT and R2_ACCOUNT_ID are both empty — set one of them. R2_ENDPOINT for local ' +
+    'dev (MinIO), or leave it empty and set R2_ACCOUNT_ID for production R2.';
+
+  ctx.addIssue({ code: 'custom', path: ['R2_ENDPOINT'], message });
+  ctx.addIssue({ code: 'custom', path: ['R2_ACCOUNT_ID'], message });
+}
+
+export const replayEnvSchema = replayEnvSchemaObject.superRefine(requireAtLeastOneReplayR2AddressingVar);
 
 /**
  * The real `posta replay` CLI entrypoint: validates env (fail-fast, same
@@ -405,6 +465,13 @@ export async function main(): Promise<void> {
     accessKeyId: env.R2_ACCESS_KEY_ID,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucket: env.R2_BUCKET_EVENTS,
+    // [T3.7.6] Same conditional-spread discipline as apps/worker/src/
+    // app.module.ts's own `buildProductionFlush` — `R2ClientConfig.
+    // accountId` is `accountId?: string` (no `| undefined`), and this
+    // repo builds with `exactOptionalPropertyTypes`, so an omitted
+    // `env.R2_ACCOUNT_ID` must become a genuinely OMITTED key here, never
+    // an explicit `accountId: undefined`.
+    ...(env.R2_ACCOUNT_ID !== undefined ? { accountId: env.R2_ACCOUNT_ID } : {}),
   });
 
   let runError: unknown;
