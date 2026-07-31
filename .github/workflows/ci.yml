@@ -4,8 +4,9 @@ name: CI
 # deployable." Runs on every PR and on every push to main: install → lint →
 # typecheck → test (with an 80% coverage floor) → build → dependency
 # boundaries (S0.2), with pnpm store + turbo caching so a clean run stays
-# fast, and real Postgres/Redis service containers so integration tests
-# run against real datastores rather than mocks. Built up incrementally
+# fast, and real datastores — Postgres/Redis as `services:` containers, a
+# real MinIO started from docker-compose as a step (E3) — so integration
+# tests run against the real thing rather than mocks. Built up incrementally
 # across T0.5.1–T0.5.5 — see this file's git history for how each stage
 # was added and verified on its own.
 on:
@@ -186,6 +187,160 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # A real MinIO for this job's own R2-backed suites (E3).
+      #
+      # S3.4-S3.6 put ~20 test files in the `default` and `core` projects
+      # this job runs that read and write a REAL S3-compatible store, never
+      # a mock: apps/worker/src/batch/ (coupled-writes, flush,
+      # flush-poison-wiring, hostile-ua, idempotency, r2-put, r2-retry,
+      # reconciliation), the whole replay CLI under apps/worker/src/cli/,
+      # and packages/core/src/r2/stream-read.test.ts. Each of them
+      # hard-codes `http://localhost:9000` plus the posta-local-dev
+      # credential pair in its own R2ClientConfig (e.g. flush.test.ts's
+      # REAL_R2_CONFIG), so with no MinIO listening there they all fail on a
+      # connection refused rather than on anything they assert — which is
+      # exactly what happened once E3 landed: 27 files / 28 tests red, and
+      # nothing else in common between them.
+      #
+      # WHY A STEP AND NOT A `services:` CONTAINER: minio/minio is only a
+      # server when it is started as `server /data --console-address :9001`
+      # (docker-compose.yml's own `command:`); the image does nothing useful
+      # without that override, and a service container cannot reliably
+      # override `command:` — the SAME constraint the redis service's
+      # comment above already records for its eviction policy (the field
+      # exists but is very recent, rollout-flag-gated, and unknown to
+      # actionlint). So this file solves it the same way it already solves
+      # that one: at runtime, in a plain job step. Steps run after
+      # actions/checkout, so docker-compose.yml — and the .env it needs —
+      # are on disk by the time these run.
+      #
+      # The `services:` Postgres and Redis above are untouched, and nothing
+      # below starts compose's OWN postgres/redis: those publish 5432/6379
+      # and would collide head-on with the service containers this job's
+      # DATABASE_URL/REDIS_URL already point at. That is what `--no-deps` on
+      # the minio-init step is for.
+      #
+      # This heredoc is a copy of the `event-pipeline` job's own (and of
+      # images.yml's) — keep them in sync. It is needed even though this job
+      # only ever starts MinIO: docker-compose.yml's api/worker/web services
+      # declare `env_file: .env`, which Compose resolves while PARSING the
+      # file on ANY subcommand, not only the ones that start those services,
+      # so a missing .env fails `docker compose up minio` outright. The
+      # `${R2_*}` values are separately load-bearing — Compose interpolates
+      # them into the minio and minio-init services, and an absent variable
+      # substitutes a blank string rather than erroring.
+      #
+      # R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are posta-local-dev /
+      # posta-local-dev-secret, NOT images.yml's posta-ci pair — the same
+      # load-bearing divergence the `event-pipeline` job's header spells out.
+      # docker-compose.yml feeds these two straight into MinIO as
+      # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD, and the credentials the test
+      # process presents are fixed in TypeScript, so the ones MinIO boots
+      # with have to match them or every R2 call fails auth. Neither pair is
+      # a real secret; both are the published local-dev defaults.
+      - name: Write a CI-only .env for docker compose
+        run: |
+          cat > .env <<'EOF'
+          POSTA_LINK_DOMAIN=posta.test
+          POSTA_APP_SUBDOMAIN=app
+          POSTA_API_SUBDOMAIN=api
+          POSTA_PROTOCOL=http
+          POSTA_RESERVED_HANDLES=app,api,www,admin,static,assets,cdn,mail,blog,docs,status
+          DATABASE_URL=postgresql://posta:posta@localhost:5432/posta
+          DB_POOL_MAX=10
+          POSTGRES_USER=posta
+          POSTGRES_PASSWORD=posta
+          POSTGRES_DB=posta
+          DATABASE_URL_WORKER=postgresql://posta:posta@localhost:5432/posta
+          REDIS_URL=redis://localhost:6379
+          R2_ACCOUNT_ID=ci-placeholder
+          # These two become MinIO's root credentials and MUST stay equal to
+          # the values these suites hard-code — see this step's own header.
+          R2_ACCESS_KEY_ID=posta-local-dev
+          R2_SECRET_ACCESS_KEY=posta-local-dev-secret
+          R2_BUCKET_EVENTS=posta-events
+          R2_BUCKET_AVATARS=posta-avatars
+          R2_ENDPOINT=http://localhost:9000
+          GEOIP_DB_DIR=./data/geoip
+          BETTER_AUTH_SECRET=ci-only-placeholder-secret-value
+          BETTER_AUTH_URL=http://localhost:3000
+          SEED_USER_EMAIL=ci@posta.test
+          SEED_USER_PASSWORD=ci-only-placeholder-pw
+          SEED_USER_HANDLE=ci
+          NODE_ENV=production
+          LOG_LEVEL=info
+          API_PORT=3001
+          WORKER_PORT=3002
+          WEB_PORT=3000
+          NEXT_PUBLIC_API_URL=http://localhost:3001
+          REVALIDATE_SECRET=ci-only-placeholder-secret
+          EVENT_BATCH_SIZE=100
+          EVENT_BATCH_INTERVAL_MS=2000
+          # Both mirror .env.example. SHUTDOWN_TIMEOUT_MS is load-bearing:
+          # workerEnvSchema (T3.1.6) requires it with no default, so without
+          # it the worker fails boot validation. WORKER_CONCURRENCY only
+          # defaults to 8 — T3.7.7 warns at boot when it sits below
+          # EVENT_BATCH_SIZE, which is 100 above. Don't trim either.
+          WORKER_CONCURRENCY=100
+          SHUTDOWN_TIMEOUT_MS=30000
+          LINK_CACHE_TTL_SECONDS=3600
+          REDIS_LOOKUP_TIMEOUT_MS=30
+          MAX_INFLIGHT_ENQUEUES=1000
+          EOF
+
+      # `--wait`, not a bare `up -d`: without it Compose returns as soon as
+      # the container is created and the suites would race a MinIO that is
+      # listening but not yet ready.
+      #
+      # `minio` named explicitly, and it is the ONLY service named. Naming
+      # none would bring up the whole file — compose's own postgres/redis
+      # (port collision, see the header above) plus three full image builds
+      # nothing here touches. No `--no-deps` needed on THIS command,
+      # verified against docker-compose.yml rather than assumed: the `minio`
+      # service declares no `depends_on` at all, so this starts exactly one
+      # container.
+      - name: Start the compose MinIO
+        run: docker compose up -d --wait minio
+
+      # The bucket these suites write into (posta-events) does not exist
+      # until this runs — MinIO boots with none.
+      #
+      # `--no-deps` is the load-bearing flag here, unlike on the step above:
+      # minio-init declares depends_on on postgres AND redis AND minio, all
+      # `service_healthy`, so without it Compose would start compose's own
+      # Postgres and Redis, which publish 5432/6379 and would collide with
+      # this job's `services:` containers. `run --rm` rather than `up -d` +
+      # `compose wait`: minio-init finishes in well under a second and
+      # `compose wait` resolves its target with ContainerList all=false, so
+      # it intermittently sees an empty list and exits 1 on a perfectly clean
+      # bootstrap (established with evidence in 029188c). `run` executes it
+      # in the foreground and hands back its real exit code.
+      - name: Create the MinIO buckets (minio-init)
+        run: docker compose run --rm --no-deps minio-init
+
+      # Not decoration: "minio-init exited 0" and "the bucket these suites
+      # write to exists, on the endpoint they actually connect to" are two
+      # different claims, and only the second one is the precondition.
+      #
+      # The curl proves the PUBLISHED host port works. The healthcheck that
+      # `--wait` gates on runs INSIDE the minio container against its own
+      # localhost, which says nothing about the 127.0.0.1:9000 port mapping
+      # the test process on the runner actually goes through — and that
+      # mapping is precisely what "connect ECONNREFUSED 127.0.0.1:9000 /
+      # ::1:9000" was in the failing run. `mc ls`
+      # exits non-zero on a bucket that does not exist, so a silently
+      # skipped or no-op bootstrap fails here, loudly, instead of surfacing
+      # 20 test files later as an opaque NoSuchBucket.
+      - name: Verify MinIO and its buckets
+        run: |
+          curl -fsS http://localhost:9000/minio/health/live
+          docker compose run --rm --no-deps --entrypoint /bin/sh minio-init -c '
+            set -eu
+            mc alias set local "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+            mc ls "local/$R2_BUCKET_EVENTS"
+            mc ls "local/$R2_BUCKET_AVATARS"
+          '
+
       # NOTE: no `--` before the flags. Unlike npm, pnpm forwards script
       # args literally — `pnpm test -- --coverage` would append a literal
       # "--" to the underlying `vitest run`, which vitest's CLI parses as
@@ -236,14 +391,24 @@ jobs:
       #
       # The `e2e` project is NOT named here, and that is the one omission on
       # this line that is deliberate rather than an oversight — it is the
-      # same call `containers` gets, for the same reason. Those files need
-      # the docker-compose stack (a real MinIO on :9000, and in one case
-      # `docker compose stop minio`), which this job has no way to provide:
-      # it wires Postgres and Redis as `services:` containers and writes no
-      # .env, so Compose cannot even parse docker-compose.yml here. Adding
-      # `--project e2e` would not gain coverage, it would just make this
-      # step red. The `event-pipeline` job at the bottom of this file owns
-      # them and runs them on every PR against a real, healthy stack.
+      # same call `containers` gets, though NO LONGER for the reason this
+      # comment used to give. It said this job "has no way to provide" a
+      # compose MinIO because it writes no .env and Compose cannot even parse
+      # docker-compose.yml here; the four MinIO steps above make both halves
+      # of that false, and the ~20 files that merely read and write MinIO now
+      # run in `default`/`core` right here.
+      #
+      # What still rules the `e2e` project out is a different property: those
+      # files do not just USE MinIO, they OPERATE it. e2e-r2-outage.test.ts's
+      # entire method is `docker compose stop minio` / `start minio` to
+      # simulate an R2 outage, which takes the store down for every other
+      # process on the machine, not only itself — vitest.config.ts's `e2e`
+      # project already had to set fileParallelism: false because that
+      # collided with its own six siblings (measured there, not predicted).
+      # Sharing this job's single MinIO with the ~20 read/write files would
+      # reintroduce exactly that collision, an order of magnitude wider.
+      # The `event-pipeline` job at the bottom of this file owns them and
+      # runs them on every PR against a stack it is free to stop and restart.
       - name: Test (with coverage)
         run: pnpm test --project default --project web --project core --project redirect-hot-path --coverage
 
