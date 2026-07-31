@@ -92,6 +92,8 @@ export default defineConfig({
             'tests/containers/**',
             'packages/core/**',
             'apps/api/src/redirect/test/**',
+            'apps/worker/src/test/e2e-*.test.ts',
+            'apps/worker/src/test/pipeline-harness.test.ts',
           ],
         },
       },
@@ -99,6 +101,87 @@ export default defineConfig({
         test: {
           name: 'containers',
           include: ['tests/containers/**/*.test.ts'],
+          fileParallelism: false,
+        },
+      },
+      // 'e2e' project (T3.5, E3) — the SAME constraint that already keeps
+      // tests/containers/** out of 'default' two blocks up, applied to the
+      // one other suite that has it: these files need the docker-compose
+      // stack itself, which the main `ci` job does not and cannot provide.
+      // It gives Postgres and Redis as `services:` containers and never
+      // writes a `.env`, so `docker compose` there cannot even resolve
+      // docker-compose.yml's own `env_file: .env`/`${VAR}` interpolation —
+      // observed as `env file /home/runner/work/posta/posta/.env not found`
+      // followed by `"docker compose ps -a -q minio" exited status=1`.
+      // .github/workflows/ci.yml's `event-pipeline` job is what actually
+      // runs this project: it writes that .env, brings the stack up
+      // healthy, then invokes `pnpm test --project e2e`. As with
+      // 'redirect-hot-path' below, 'default' excludes these same two globs,
+      // so this project is the ONLY one that ever runs these files — if
+      // that job is ever removed, they silently stop running everywhere.
+      //
+      // The dependency is NOT uniform, so the include list is enumerated
+      // rather than taking the whole apps/worker/src/test/ directory:
+      //   - e2e-r2-outage.test.ts drives `docker compose stop/start/ps
+      //     minio` directly (its own stopMinio/startMinio/waitForMinioHealthy).
+      //   - e2e-pg-outage.test.ts and e2e-kill-recovery.test.ts don't call
+      //     `docker compose` at all — they drive `docker pause`/`inspect`
+      //     against their OWN testcontainers — but both point R2_ENDPOINT at
+      //     the compose MinIO on http://localhost:9000, so the worker child
+      //     process they spawn cannot flush a batch without it (INV-7:
+      //     R2 first, Postgres only if it succeeded).
+      //   - e2e-exactly-once/-duplicate-delivery/-enrichment.test.ts and
+      //     pipeline-harness.test.ts inherit that same MinIO dependency
+      //     through startPipelineHarness()'s REAL_R2_CONFIG.
+      // Deliberately NOT included: pipeline-harness-process.test.ts, the
+      // one file in that directory with no compose dependency at all — it
+      // imports only `acquireBuildLock` and drives it with a mocked
+      // fs.mkdirSync, boots nothing, and passes in the main job today.
+      // Moving it here would quietly drop a passing unit test (and
+      // pipeline-harness-process.ts's coverage) out of the 80% gate for no
+      // reason. Note that `buildWorkerExclusively`, which the e2e files DO
+      // import, is not itself a reason to move anything: it shells out to
+      // `pnpm --filter @posta/worker run build` (nest build) and never to
+      // docker — the "docker compose build" in its neighbouring comment is
+      // an analogy, not an invocation.
+      //
+      // Timeouts, not left at Vitest's 5s/10s defaults: every file here
+      // already calls vi.setConfig() with its own (testTimeout 60_000,
+      // hookTimeout up to 900_000 in e2e-pg-outage/e2e-kill-recovery) and
+      // passes explicit per-hook timeouts on top, so these project-level
+      // values are the ceiling those files assume rather than a new
+      // policy — set here so a file added to this glob later inherits a
+      // workable budget instead of timing out at 10s inside a beforeAll
+      // that boots containers, builds and spawns a worker, and waits on
+      // STALL_REDELIVERY_TIMEOUT_MS (150s) for BullMQ's stalled-job
+      // redelivery. Strictly above 'default', never below it.
+      //
+      // `fileParallelism: false` — the same defense 'containers' and
+      // 'redirect-hot-path' already take, and here it is mandatory rather
+      // than precautionary, because pulling these seven files out of
+      // 'default' is what made the collision reliable. MinIO is ONE shared
+      // compose service, not a per-file container, and
+      // e2e-r2-outage.test.ts's whole method is `docker compose stop minio`
+      // — which takes it down for every other process on the machine, not
+      // just itself. Spread across 'default''s 83 files those seven rarely
+      // overlapped; alone in a 7-file project they are all in flight at
+      // once. Measured, not predicted: the first run of this project with
+      // parallelism left on failed exactly that way — 1 failed | 6 passed,
+      // e2e-pg-outage.test.ts dying on `connect ECONNREFUSED 127.0.0.1:9000`
+      // (and ::1:9000) mid-drain while e2e-r2-outage.test.ts had MinIO
+      // stopped. Serialized, the same seven files pass 121/121. Cost is
+      // ~88s wall-clock parallel versus ~182s serial (both measured on the
+      // same machine), against this job's own 30-minute CI budget — and the
+      // parallel number is worthless when it is not reproducibly green.
+      {
+        test: {
+          name: 'e2e',
+          include: [
+            'apps/worker/src/test/e2e-*.test.ts',
+            'apps/worker/src/test/pipeline-harness.test.ts',
+          ],
+          testTimeout: 60_000,
+          hookTimeout: 900_000,
           fileParallelism: false,
         },
       },
