@@ -1014,3 +1014,23 @@ No unverified claim was accepted; the added content is accurate as written.
 **Deviation from plan:** none in the original T3.7.2/T3.7.5 scope. The fix above is a fix-forward on already-committed 5e8a1ad, landed separately per this epic's established convention (see fe8301e, 64f8666, 58976c6, f24b40e, 087945e for precedent) rather than amending the original commit.
 **Fix-forward commit:** `49bef09` `fix: trim R2_ACCOUNT_ID before checking presence in requireAtLeastOneR2AddressingVar` — 2 files (env.ts, env.test.ts). Verify observed myself: targeted test run green, typecheck:tests clean, worker build clean.
 **Handed back to:** n/a — fix-forward was already applied and verified before I received the work; commit 49bef09 lands it as-is, stamped against the original 5e8a1ad.
+
+---
+
+## T3.7.6 · `1617ce0` · 2026-07-31T14:58:17-03:00
+
+**Outcome:** done · verify passed: `pnpm test replay.test.ts` — 1 file, 41 tests, all passing. `pnpm typecheck:tests` clean. Both confirmed by me directly.
+**Security review (dispatched in the first wave, per this epic's convention for [security]-tagged tasks):** security-reviewer found no CRITICAL/HIGH/MEDIUM. Confirmed the T3.7.4 host-injection fix in `createR2Client`'s `resolveEndpoint` (packages/core/src/r2/client.ts, `R2_ACCOUNT_ID_FORMAT` anchor regex) is untouched and this new CLI caller goes through it unconditionally — no alternate code path constructs a URL from the account id itself. Confirmed no credential/value leakage in the new `superRefine` error message (names only the two var keys, never a value) and traced it through `loadEnv`/`formatEnvFailures` to confirm neither ever prints a value. Confirmed trim-before-presence-check mirrors the T3.7.5 fix (`49bef09`) exactly.
+**Findings surviving triage:** none.
+**Deviation from plan:** none — mirrors env.ts's `requireAtLeastOneR2AddressingVar` pattern exactly, as instructed; does not import `workerEnvSchema` wholesale (rejected alternative, per plan).
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.9 · `1617ce0` · 2026-07-31T14:58:17-03:00
+
+**Outcome:** done · verify passed: `pnpm test dlq.service.test.ts malformed-job.test.ts` — 2 files, 10 tests, all passing. `pnpm typecheck:tests` clean. Both confirmed by me directly. Implementer also performed the required vacuous-assertion double-check: temporarily replaced `redactForbiddenKeys(payload)` with a passthrough, confirmed both redaction-content tests failed with the exact original RED mismatch, then reverted and confirmed GREEN — proving the assertions exercise the real redaction path.
+**Security review (dispatched in the first wave, per this epic's convention for [security]-tagged tasks):** security-reviewer found no CRITICAL/HIGH. Explicitly re-verified the T3.7.8 `__proto__` prototype-pollution fix (`ff75f9d`, `Object.create(null)` in packages/contracts/src/redact.ts:334) is a genuine ancestor of this commit and still in place — re-derived from current code, not trusted from the commit message. Confirmed redaction is unconditional with no bypass path to `dlqQueue.add()` (grepped every EVENTS_DLQ_QUEUE writer in apps/worker/src — DlqService.send() is the only one). Confirmed `redactedKeys` carries only path strings, never the redacted value. Confirmed `FORBIDDEN_PAYLOAD_KEYS` already covers `ip` and `x-forwarded-for` (case-insensitive). Noted as informational (not a finding) that the new tests correctly avoid the JSON.stringify(...).toContain(...) anti-pattern this epic has flagged before.
+**Findings surviving triage:** none.
+**Deviation from plan:** none — reuses the existing, already-hardened `redactForbiddenKeys` (packages/contracts/src/redact.ts) rather than writing new redaction logic, per the plan's own instruction; header comment rewritten in the same commit per the plan's "amend in writing" requirement.
+**Handed back to:** n/a — no fix needed.
