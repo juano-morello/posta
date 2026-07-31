@@ -178,27 +178,55 @@ export function redactCredentialsFromMessage(message: string): string {
 // are the single source of truth for the forbidden-key vocabulary from
 // here on.
 //
-// Defined to be a SUPERSET of T2.3.8's already-enforced, narrower,
-// log-text-only regex (`/ip|addr|forwarded|cookie/i`,
-// apps/api/src/redirect/capture-privacy.test.ts, referenced at
-// 02-redirect-hot-path.md:168): every alternation branch that regex
-// offers (ip, addr, forwarded, cookie) has at least one representative
-// key here, and (checked the other direction too, in this file's test
-// suite) every key here also matches that regex — so this vocabulary
-// does not silently drift into a THIRD, different definition of
-// "forbidden" alongside E2's. `cookie`/`set-cookie` are both present
-// because the invariant's second clause is not derivable from its first;
-// nothing about "no raw IP" implies "no cookie".
+// [security fix round 1, post-commit review 75e5f2e] T2.3.8's regex
+// (`/ip|addr|forwarded|cookie/i`, apps/api/src/redirect/capture-privacy.
+// test.ts, referenced at 02-redirect-hot-path.md:168) matches by
+// SUBSTRING over free log TEXT, which is strictly more permissive than
+// this Set's exact-match-per-key semantics can ever be: the regex also
+// flags ordinary English words containing "ip"/"addr"/"forwarded"/
+// "cookie" ("zip", "shipping", "cookiecutter", ...) that have nothing to
+// do with invariant 6. A literal claim that this vocabulary is a
+// mathematical superset of everything that regex matches is therefore
+// false and unmaintainable — the regex's match set is effectively
+// infinite. What this vocabulary DOES commit to (verified by this file's
+// own test suite, in both directions): every CONCRETE, known header
+// alias that regex was written to catch — the standard forwarding/
+// client-IP headers (`X-Forwarded-For`, `Forwarded` per RFC 7239,
+// `X-Real-IP`), the CDN-specific ones (Cloudflare's
+// `CF-Connecting-IP`, Fastly's `Fastly-Client-IP`, Akamai/others'
+// `True-Client-IP`, the generic `X-Client-IP`), `Cookie`/`Set-Cookie`,
+// and the flat `ip`/`client_ip`/`remote_addr` field names this codebase's
+// own payloads would use — has a representative entry here, in BOTH its
+// `-` and `_` spellings where a header name can plausibly appear either
+// way on the wire or in a JSON key. The original round only paired
+// `x-forwarded-for`/`x_forwarded_for`; the asymmetry on the rest (no
+// underscore variant for `cf-connecting-ip`, `true-client-ip`,
+// `set-cookie`, no dash variant for `client_ip`/`remote_addr`) was an
+// oversight, not a decision, and is fixed below. `cookie`/`set-cookie`
+// are present because the invariant's second clause is not derivable
+// from its first; nothing about "no raw IP" implies "no cookie".
 export const FORBIDDEN_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'ip',
   'client_ip',
+  'client-ip',
   'remote_addr',
+  'remote-addr',
   'x-forwarded-for',
   'x_forwarded_for',
+  'forwarded',
+  'x-real-ip',
+  'x_real_ip',
+  'x-client-ip',
+  'x_client_ip',
   'cf-connecting-ip',
+  'cf_connecting_ip',
   'true-client-ip',
+  'true_client_ip',
+  'fastly-client-ip',
+  'fastly_client_ip',
   'cookie',
   'set-cookie',
+  'set_cookie',
 ]);
 
 function isForbiddenKey(key: string): boolean {
@@ -240,7 +268,14 @@ function buildIndexPath(parentPath: string, index: number): string {
 // never recursing forever.
 const MAX_REDACTION_DEPTH = 50;
 
-const MAX_DEPTH_EXCEEDED_PLACEHOLDER = '[MAX_DEPTH_EXCEEDED]';
+// Exported (with CIRCULAR_REFERENCE_PLACEHOLDER, below) so this file's own
+// test suite can assert on the ACTUAL sentinel value rather than a
+// hand-copied string literal that could silently drift out of sync with
+// it, and so a regression test for "depth truncation actually fired" can
+// search the serialized output for this exact marker instead of just
+// checking the call didn't throw — a call not throwing is true whether
+// truncation ran or the input simply wasn't deep enough to need it.
+export const MAX_DEPTH_EXCEEDED_PLACEHOLDER = '[MAX_DEPTH_EXCEEDED]';
 
 // A self-referencing object (`a.self = a`) is not valid JSON and cannot
 // have come from `JSON.parse`, but this function's whole premise is that
@@ -250,8 +285,9 @@ const MAX_DEPTH_EXCEEDED_PLACEHOLDER = '[MAX_DEPTH_EXCEEDED]';
 // backtrack via `finally`), not every object ever visited: a DAG where
 // the same object is legitimately reachable via two different paths (not
 // a cycle) must still be walked twice, and a global "already seen" set
-// would wrongly collapse that case too.
-const CIRCULAR_REFERENCE_PLACEHOLDER = '[CIRCULAR_REFERENCE]';
+// would wrongly collapse that case too. Exported for the same reason as
+// MAX_DEPTH_EXCEEDED_PLACEHOLDER above.
+export const CIRCULAR_REFERENCE_PLACEHOLDER = '[CIRCULAR_REFERENCE]';
 
 interface RedactionContext {
   readonly ancestors: WeakSet<object>;
@@ -280,7 +316,22 @@ function redactNode(node: unknown, path: string, depth: number, ctx: RedactionCo
     }
 
     const source = node as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
+    // [security fix round 1, post-commit review 75e5f2e] `JSON.parse`
+    // creates a literal `__proto__` KEY as an ordinary own data property
+    // (spec-guaranteed — internalizeJSONProperty uses CreateDataProperty,
+    // which never triggers Object.prototype's `__proto__` accessor), so
+    // Object.keys(source) picks it up correctly on the READ side above.
+    // The WRITE side does not get that guarantee for free: a plain `{}`
+    // object literal's `__proto__` IS Object.prototype's accessor, so
+    // `result['__proto__'] = redactedValue` would not create an own
+    // property at all — it would reassign `result`'s prototype (or
+    // no-op for a primitive redactedValue), silently dropping the whole
+    // subtree from the output while `ctx.redactedKeys` still recorded it
+    // as present. `Object.create(null)` gives `result` no inherited
+    // `__proto__` accessor to intercept the assignment, so a literal
+    // `__proto__` key behaves as an ordinary own property on both read
+    // and write.
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(source)) {
       if (isForbiddenKey(key)) {
         result[key] = SECRET_REDACTION_PLACEHOLDER;
