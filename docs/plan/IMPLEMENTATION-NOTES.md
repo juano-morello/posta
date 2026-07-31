@@ -1034,3 +1034,23 @@ No unverified claim was accepted; the added content is accurate as written.
 **Findings surviving triage:** none.
 **Deviation from plan:** none — reuses the existing, already-hardened `redactForbiddenKeys` (packages/contracts/src/redact.ts) rather than writing new redaction logic, per the plan's own instruction; header comment rewritten in the same commit per the plan's "amend in writing" requirement.
 **Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.3 · `eeed8b5` · 2026-07-31T15:20:47-03:00
+
+**Outcome:** done · verify passed, all confirmed by me directly: `pnpm test flush-poison-wiring.test.ts` — 5/5. `pnpm test poison-dlq.test.ts` — 4/4, zero changes to that file (confirms flushBatch itself still rejects on a poison row, per the rejected-alternative constraint). `pnpm test e2e-pg-outage.test.ts` — 8/8 on my run; implementer separately confirmed via revert-to-baseline reproduction that this file is flaky (health-check timing) independent of this change, consistent with that file's own documented "nothing ever REJECTS" framing (cannot discriminate this change either way). `pnpm typecheck:tests` clean. `pnpm --filter @posta/worker run build` clean.
+**RED observed (implementer, reproduced against the pre-change baseline):** 100-event batch with one out-of-range asn (SQLSTATE 22003) — 0 rows committed, no DLQ entry, only 1 R2 object (the root PUT) instead of the correct split's 15.
+**Findings surviving triage:** none — implementation matches both load-bearing constraints from the plan exactly: (1) split composition kept OUTSIDE flushBatch (a new wrapper in buildProductionFlush calls flushBatch through retryWithSplit, never modifies flushBatch itself), verified live against poison-dlq.test.ts staying green with zero edits; (2) batchId threaded through from BatchAccumulator (never re-minted), verified via the R2 content-signature-multiset assertion, which is the discriminating check the plan called for — reviewed the test file directly and confirmed it compares per-key CONTENT signatures against an independently-computed expectation (computeExpectedR2Nodes, mirroring attemptBatch's own Math.ceil split), not a weaker union-of-ids check, which the plan explicitly flagged as passing trivially even under a real key-collision bug (root PUT alone already contains all 100 ids before any split happens).
+**Module constants chosen:** SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH = 3, SPLIT_RETRY_INITIAL_DELAY_MS = 150ms — sized (per the in-code comment) so isolating one poison row in a 100-event batch costs ~7 split levels × up to 450ms backoff ≈ 3.5s, an order of magnitude under SHUTDOWN_TIMEOUT_MS's 30s production default. The fully-poisoned pathological case is explicitly excluded from this sizing since T3.7.2's classifyFlushError already rejects that case as 'infrastructure' before any split happens.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.7 · `eeed8b5` · 2026-07-31T15:20:47-03:00
+
+**Outcome:** done · verify passed, all confirmed by me directly: `pnpm test env.test.ts no-secret-logging.test.ts events.consumer.test.ts` — 6 files, 207 tests, all passing. `pnpm test sigterm-flush.test.ts` — 5/5 (deliberate EVENT_BATCH_SIZE=500/WORKER_CONCURRENCY=250 pairing unaffected). `pnpm test e2e-kill-recovery.test.ts` — 10/10 (deliberate 500/15/45 pairings unaffected). `pnpm typecheck:tests` clean.
+**Findings surviving triage:** none. Confirmed the fix is a non-fatal `console.warn` (`warnIfConcurrencyCannotFillBatchSize`, env.ts) called from main.ts immediately after `loadEnv` succeeds, never a `.superRefine` — matches the plan's explicit "warns, does NOT fail the boot" requirement. `DEFAULT_WORKER_CONCURRENCY` now single-sourced in env.ts; events.consumer.ts imports and re-exports it so existing import sites keep working. Implementer did the deliberate-break-then-revert check on both "should be silent" cases (equal pair, larger-concurrency pair) and confirmed each fails independently when the comparison operator is flipped.
+**Deviation from plan:** implementer found and fixed a pre-existing, unrelated bug in `tests/conventions/no-secret-logging.test.ts`'s `VALID_WORKER_ENV` fixture — missing `SHUTDOWN_TIMEOUT_MS`, a field `workerEnvSchema` already required independent of this task's change. Fixed since the file was in-scope and the task's own verify gate required it green; this is a test-fixture correction, not a scope expansion. Separately flagged (not fixed, correctly out of scope) that `.github/workflows/images.yml`'s own `.env` heredoc has the same missing-`SHUTDOWN_TIMEOUT_MS` gap — noting here in case a future task wants to close it.
+**Handed back to:** n/a — no fix needed.
