@@ -123,14 +123,37 @@ export class HealthController {
 
     const lastFlushAgeMs = this.accumulator.lastFlushAgeMs();
     const staleThresholdMs = this.flushIntervalMs * FLUSH_STALE_MULTIPLIER;
-    const isStale = lastFlushAgeMs > staleThresholdMs;
+    const batchSize = this.accumulator.size();
+
+    // [T3.7.11] The age threshold ALONE used to be sufficient for a 503 —
+    // but the accumulator's own interval timer only runs while a batch is
+    // open, so `lastFlushAgeMs` grows unbounded through a genuine traffic
+    // lull with nothing actually wrong, and a Kubernetes liveness/readiness
+    // probe acting on that 503 would restart a perfectly healthy pod. This
+    // gate is ADDED ON TOP of the age check, not a replacement for it:
+    // staleness now requires the age breach AND at least one sign of work
+    // actually in flight. `queueDepth > 0` is the LOAD-BEARING term — a
+    // wedged flush leaves every job whose event it holds stuck in BullMQ's
+    // `active` state (jobs are held open until their batch flushes settles,
+    // T3.5.4), and `'active'` is one of `QUEUE_DEPTH_JOB_TYPES` above, so a
+    // genuinely wedged worker trips this even though the accumulator's own
+    // internal batch bookkeeping may read empty. `batchSize > 0` is
+    // belt-and-braces for the narrower race where a batch is open but its
+    // jobs haven't been counted into queue_depth yet — it is explicitly
+    // NOT the primary wedged-flush signal: `BatchAccumulator.size()` reads
+    // the OPEN batch only and "never reflects a batch that has already
+    // been detached to an in-flight flush" (accumulator.ts's own size()
+    // doc comment), so during an actual wedged flush this term alone reads
+    // 0 and `queueDepth` is what catches it.
+    const hasWorkInFlight = queueDepth > 0 || batchSize > 0;
+    const isStale = lastFlushAgeMs > staleThresholdMs && hasWorkInFlight;
 
     const body: WorkerHealthStatus = {
       status: isStale ? 'unhealthy' : 'ok',
       queue_depth: queueDepth,
       dlq_depth: dlqDepth,
       last_flush_age_ms: lastFlushAgeMs,
-      batch_size: this.accumulator.size(),
+      batch_size: batchSize,
     };
 
     if (isStale) {

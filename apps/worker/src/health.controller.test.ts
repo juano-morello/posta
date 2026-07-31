@@ -43,6 +43,14 @@ import {
 
 const BATCH_INTERVAL_MS = 1000;
 
+// [T3.7.11] Deliberately far longer than any clock advance the tests below
+// perform — used ONLY for the "batch_size belt-and-braces" test, which
+// needs a batch that stays OPEN (never auto-detached to its own interval
+// flush) for the full duration of the advance, so accumulator.size() keeps
+// reading the planted item instead of the interval trigger flushing it out
+// from under the assertion.
+const STUCK_BATCH_INTERVAL_MS = 1_000_000;
+
 function buildQueue(depth: number): HealthQueue {
   return { getJobCountByTypes: vi.fn(async () => depth) };
 }
@@ -127,8 +135,16 @@ describe('HealthController — 503 once last_flush_age_ms exceeds three flush in
     accumulator.add('a');
     await accumulator.flushNow(); // fresh flush at t=0
 
+    // [T3.7.11 RE-PLANT] This case used to plant `buildQueue(0)` — but
+    // since T3.7.11 the age threshold alone is no longer sufficient for a
+    // 503 (see the new "idle worker" describe block below): a zero
+    // queue_depth AND a zero batch_size now reads as genuinely idle, not
+    // stale, regardless of age. This test's whole point is proving the age
+    // check STILL matters, so it now plants a non-zero queue_depth
+    // alongside the age breach — exactly the "wedged flush leaves jobs
+    // stuck in BullMQ's active state" signal T3.7.11 makes load-bearing.
     const controller = new HealthController(
-      buildQueue(0),
+      buildQueue(1),
       buildDlq(0),
       accumulator,
       BATCH_INTERVAL_MS,
@@ -153,9 +169,101 @@ describe('HealthController — 503 once last_flush_age_ms exceeds three flush in
     const body = httpException.getResponse() as WorkerHealthStatus;
     expect(body.status).toBe('unhealthy');
     expect(body.last_flush_age_ms).toBe(staleThresholdMs + 1);
-    expect(body.queue_depth).toBe(0);
+    expect(body.queue_depth).toBe(1);
     expect(body.dlq_depth).toBe(0);
     expect(body.batch_size).toBe(0);
+  });
+});
+
+describe('HealthController — an idle worker with an empty queue is healthy, not stale (T3.7.11 verify)', () => {
+  it('stays "ok" with queue_depth 0 and batch_size 0 no matter how long the idle stretch runs (ten stale thresholds)', async () => {
+    const accumulator = buildAccumulator();
+    accumulator.add('a');
+    await accumulator.flushNow(); // fresh flush at t=0, batch now closed and empty
+
+    const controller = new HealthController(
+      buildQueue(0),
+      buildDlq(0),
+      accumulator,
+      BATCH_INTERVAL_MS,
+    );
+    const staleThresholdMs = BATCH_INTERVAL_MS * FLUSH_STALE_MULTIPLIER;
+
+    // Nothing is added after the flush, so no new batch ever opens and no
+    // timer is left pending — this advance is pure idle time, exactly the
+    // "genuine traffic lull" this task exists to stop misreporting as 503.
+    await vi.advanceTimersByTimeAsync(staleThresholdMs * 10);
+
+    const body = await controller.getHealth();
+
+    expect(body.status).toBe('ok');
+    expect(body.queue_depth).toBe(0);
+    expect(body.batch_size).toBe(0);
+    expect(body.last_flush_age_ms).toBe(staleThresholdMs * 10);
+  });
+
+  it('still answers 503 at that same advanced clock position when queue_depth is non-zero (the wedged-flush signal)', async () => {
+    const accumulator = buildAccumulator();
+    accumulator.add('a');
+    await accumulator.flushNow(); // fresh flush at t=0, batch now closed and empty
+
+    const controller = new HealthController(
+      buildQueue(1), // a wedged flush leaves this job stuck 'active' in BullMQ
+      buildDlq(0),
+      accumulator,
+      BATCH_INTERVAL_MS,
+    );
+    const staleThresholdMs = BATCH_INTERVAL_MS * FLUSH_STALE_MULTIPLIER;
+
+    await vi.advanceTimersByTimeAsync(staleThresholdMs * 10);
+
+    const caught: unknown = await controller.getHealth().catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(HttpException);
+    const httpException = caught as HttpException;
+    expect(httpException.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+
+    const body = httpException.getResponse() as WorkerHealthStatus;
+    expect(body.status).toBe('unhealthy');
+    expect(body.queue_depth).toBe(1);
+    expect(body.batch_size).toBe(0);
+  });
+
+  it('answers 503 with queue_depth 0 when a REAL BatchAccumulator still holds one item in an open, undetached batch', async () => {
+    // A fresh accumulator with a deliberately huge batchIntervalMs — its
+    // own interval trigger must NEVER fire during this test's clock
+    // advance, or the batch would auto-flush and size() would read 0
+    // again, defeating the entire point of this case (BatchAccumulator.
+    // size() "never reflects a batch that has already been detached to an
+    // in-flight flush" — accumulator.ts's own size() doc comment).
+    const accumulator = new BatchAccumulator<string>({
+      batchSize: 100,
+      batchIntervalMs: STUCK_BATCH_INTERVAL_MS,
+      flush: async () => {},
+    });
+    accumulator.add('a').catch(() => {
+      // Fire-and-forget: this promise only settles once the batch flushes,
+      // which this test deliberately never triggers.
+    });
+
+    const controller = new HealthController(
+      buildQueue(0),
+      buildDlq(0),
+      accumulator,
+      BATCH_INTERVAL_MS,
+    );
+    const staleThresholdMs = BATCH_INTERVAL_MS * FLUSH_STALE_MULTIPLIER;
+
+    await vi.advanceTimersByTimeAsync(staleThresholdMs + 1);
+
+    const caught: unknown = await controller.getHealth().catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(HttpException);
+    const httpException = caught as HttpException;
+    expect(httpException.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+
+    const body = httpException.getResponse() as WorkerHealthStatus;
+    expect(body.status).toBe('unhealthy');
+    expect(body.queue_depth).toBe(0);
+    expect(body.batch_size).toBe(1);
   });
 });
 
