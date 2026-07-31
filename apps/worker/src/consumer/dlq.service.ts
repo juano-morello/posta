@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { EVENTS_DLQ_QUEUE } from '@posta/core';
@@ -257,6 +257,99 @@ export interface DlqSendMeta {
   readonly issues?: readonly EventsDlqIssue[];
 }
 
+/** Minimal logger shape this file needs — the SAME `{ error(message,
+ * meta?): void }` shape split-retry.ts's own `SplitRetryLogger` and
+ * r2-retry.ts's own `R2RetryLogger` already use, deliberately not a
+ * fourth shape. */
+export interface DlqRetentionLogger {
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+/** Production default — writes to stderr via `console.error`, mirroring
+ * the identical `consoleErrorLogger` split-retry.ts/r2-retry.ts already
+ * export, as a separate instance rather than a shared import since none
+ * of these files have any other reason to depend on each other. */
+export const consoleErrorLogger: DlqRetentionLogger = {
+  error(message, meta) {
+    console.error(message, meta);
+  },
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * [T3.7.10][security][INV-6] `send()`'s own retention sweep — see this
+ * file's own header, above, for the full "why a DLQ needs this at all"
+ * reasoning: this project's Redis runs `volatile-lru` (CLAUDE.md's
+ * decision log), a deliberate choice specifically so a key with NO ttl —
+ * every BullMQ job's own Redis keys, a DLQ entry's included — is NEVER
+ * evicted. Nothing drains `EVENTS_DLQ_QUEUE` (no `@Processor` is
+ * registered for it — `depth()`'s own doc comment, below), so without
+ * this sweep an entry sits in the `'wait'` state forever and Redis usage
+ * grows without bound.
+ *
+ * Three module constants, deliberately NOT env vars and NOT threaded
+ * through a second injected DI provider — mirrors split-retry.ts's own
+ * `SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH`/`SPLIT_RETRY_INITIAL_DELAY_MS`
+ * precedent exactly, for the identical reason: nobody outside this file
+ * has a reason to tune these per-deployment, and a new env var per
+ * tunable is exactly the kind of surface area S3.1's "config from env
+ * only, read in exactly one place" discipline (CLAUDE.md) is meant to
+ * bound, not expand for its own sake. The ONLY seam is `DlqService`'s own
+ * second, optional constructor parameter, below — production DI
+ * (`app.module.ts`'s `BullModule.registerQueue({ name: EVENTS_DLQ_QUEUE
+ * })`) only ever supplies the one `@InjectQueue`-decorated `Queue`, so
+ * Nest's own constructor call never passes a second argument and these
+ * defaults apply unconditionally in production.
+ *
+ * `DLQ_RETENTION_WINDOW_MS` — 7 days. Sized against S3.1's own "DLQ depth
+ * is alertable" acceptance criterion: the window has to outlast the
+ * realistic gap between an alert firing and an operator actually looking,
+ * not just "long enough to feel generous". A week covers a full weekend
+ * an alert might land on unattended — this project has no on-call
+ * rotation yet (v1, one operator) — while staying short enough that Redis
+ * usage genuinely stays bounded, rather than this becoming a slow-motion
+ * version of the unbounded growth this task exists to close.
+ *
+ * `DLQ_RETENTION_CLEAN_LIMIT` — 1000. The `limit` BullMQ's own
+ * `Queue.clean()` takes: caps how many jobs a SINGLE sweep can remove, so
+ * a large aged backlog can't turn one opportunistic clean — running
+ * inline, after `send()`'s own `add()`, on the same call a real DLQ write
+ * depends on — into a slow, unbounded Redis operation. 1000 clears a
+ * realistic backlog in one pass while staying cheap; anything left over
+ * is picked up by the NEXT throttled sweep, since a job older than the
+ * retention window only ages further past it, never back under it.
+ *
+ * `DLQ_CLEAN_THROTTLE_MS` — 1 hour. Bounds how often `clean()` itself
+ * actually runs, independent of how often `send()` is called — a failing
+ * sink or a Redis blip can make `send()` fire in a tight burst
+ * (events.consumer.ts's `onFailed()`/`routeToDlq()`, each routing one
+ * job), and without a throttle EVERY one of those sends would also pay
+ * for its own `clean()` scan. An hour is a small fraction of the 7-day
+ * retention window (168 opportunities to sweep over the window's own
+ * lifetime), so retention is still enforced promptly relative to how long
+ * entries are kept, while a burst of sends pays for `clean()` at most
+ * once no matter how tight the burst — see dlq-retention.test.ts's own
+ * burst assertion.
+ */
+const DLQ_RETENTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const DLQ_RETENTION_CLEAN_LIMIT = 1000;
+const DLQ_CLEAN_THROTTLE_MS = 60 * 60 * 1000;
+
+/** Test-only override for `send()`'s own retention sweep — see the
+ * module constants above (`DLQ_RETENTION_WINDOW_MS` et al.) for the
+ * production defaults every field here falls back to when omitted. NOT a
+ * second injected DI provider — see this file's own
+ * `cleanAgedEntriesThrottled` doc comment for why. */
+export interface DlqRetentionOptions {
+  readonly retentionWindowMs?: number;
+  readonly retentionCleanLimit?: number;
+  readonly cleanThrottleMs?: number;
+  readonly logger?: DlqRetentionLogger;
+}
+
 /**
  * The single writer + depth-reader for `EVENTS_DLQ_QUEUE`. `send()`
  * never inspects `reason` to decide HOW to write — every entry is built
@@ -266,9 +359,50 @@ export interface DlqSendMeta {
  */
 @Injectable()
 export class DlqService {
+  private readonly retentionWindowMs: number;
+  private readonly retentionCleanLimit: number;
+  private readonly cleanThrottleMs: number;
+  private readonly retentionLogger: DlqRetentionLogger;
+  /** [T3.7.10] Timestamp of the last `clean()` ATTEMPT (not the last
+   * SUCCESSFUL one) — see `cleanAgedEntriesThrottled`'s own doc comment
+   * for why a failure still counts toward the throttle. `0` initially, so
+   * the very first `send()` on a freshly constructed instance always
+   * attempts a sweep. */
+  private lastCleanAttemptAtMs = 0;
+
   constructor(
     @InjectQueue(EVENTS_DLQ_QUEUE) private readonly dlqQueue: Queue<EventsDlqJobPayload>,
-  ) {}
+    // [T3.7.10] `@Optional()` — NOT just an unadorned `?` — is load-bearing
+    // here: `DlqService` is `@Injectable()` under this project's
+    // `emitDecoratorMetadata: true`, so Nest's own injector inspects
+    // `design:paramtypes` and attempts to resolve EVERY constructor
+    // parameter, not only the ones carrying an explicit `@Inject*()`
+    // decorator (confirmed the hard way — omitting `@Optional()` here
+    // throws Nest's own `UnknownDependenciesException` for "the argument
+    // at index [1]" during real DI construction, which
+    // `NestFactory.createApplicationContext()`'s default `abortOnError:
+    // true` turns into a hard `process.abort()`, exactly the crash
+    // dlq.service.test.ts's own header already documents for a missing
+    // `dbPoolMax`/`flush` config — see that file's comment for the same
+    // failure shape). `@Optional()` tells Nest to inject `undefined`
+    // instead of throwing when nothing in the module can supply this
+    // parameter, which is exactly what SHOULD happen: no provider for
+    // `DlqRetentionOptions` is ever registered (this task deliberately
+    // does not touch app.module.ts — see this file's own
+    // `DlqRetentionOptions` doc comment), so production DI always lands
+    // here with `undefined` and every field below falls back to its
+    // module-constant default. A plain `new DlqService(queue, options)`
+    // call — every test in this file and dlq-retention.test.ts — never
+    // goes through Nest's injector at all, so `@Optional()` has no effect
+    // on that path; it only prevents Nest's OWN automatic construction
+    // from throwing.
+    @Optional() retentionOptions?: DlqRetentionOptions,
+  ) {
+    this.retentionWindowMs = retentionOptions?.retentionWindowMs ?? DLQ_RETENTION_WINDOW_MS;
+    this.retentionCleanLimit = retentionOptions?.retentionCleanLimit ?? DLQ_RETENTION_CLEAN_LIMIT;
+    this.cleanThrottleMs = retentionOptions?.cleanThrottleMs ?? DLQ_CLEAN_THROTTLE_MS;
+    this.retentionLogger = retentionOptions?.logger ?? consoleErrorLogger;
+  }
 
   async send(reason: DlqReason, payload: unknown, error: Error, meta: DlqSendMeta): Promise<void> {
     // [T3.7.9][security][INV-6] Run UNCONDITIONALLY, for every `reason` —
@@ -298,6 +432,80 @@ export class DlqService {
     };
 
     await this.dlqQueue.add(EVENTS_DLQ_JOB_NAME, entry);
+
+    // [T3.7.10][security][INV-6] AFTER `add()` above resolves, never
+    // before — see `cleanAgedEntriesThrottled`'s own doc comment for why
+    // that ordering matters and what it costs.
+    await this.cleanAgedEntriesThrottled();
+  }
+
+  /**
+   * [T3.7.10][security][INV-6] Opportunistic, throttled retention sweep —
+   * see the module constants above (`DLQ_RETENTION_WINDOW_MS` et al.) for
+   * the full "why" and the exact production defaults. Called from `send()`
+   * ONLY after its own `add()` has already resolved: `add()` is the DLQ
+   * write this whole mechanism exists to bound the RETENTION of, not the
+   * durability of — a clean that ran first, or whose failure was allowed
+   * to propagate, must never be able to stop a DLQ entry from landing.
+   *
+   * Throttled via `lastCleanAttemptAtMs`, checked and updated
+   * SYNCHRONOUSLY — no `await` between the check and the write — so a
+   * burst of concurrent `send()` calls can only ever have ONE of them
+   * observe the throttle window as elapsed, no matter how many `add()`
+   * calls resolve at once (dlq-retention.test.ts's own burst assertion).
+   * The timestamp is updated whether or not `clean()` itself SUCCEEDS: a
+   * Redis that is currently failing `clean()` deserves the same backoff
+   * as a healthy one that just swept, not a retry attempt on every single
+   * subsequent `send()`.
+   *
+   * A `clean()` rejection is caught, logged, and NEVER rethrown — the DLQ
+   * write `send()` already committed matters more than this sweep ever
+   * could (this method's own second paragraph). `errorMessage`/
+   * `redactCredentialsFromMessage` mirror `send()`'s own handling of
+   * `error.message` above: a Redis client's connection error can embed
+   * the connection URL, credential included, in `.message` the exact same
+   * way a Postgres/R2 client's can.
+   *
+   * [cost, recorded per this task's own brief] A cleaned entry is gone
+   * for good. For `'flush-poison'`, the underlying event still exists in
+   * R2 (its PUT succeeded before the Postgres INSERT that made it poison
+   * failed) — though nothing today can land it from there: replay
+   * re-attempts the identical failing INSERT (split-retry.ts's own
+   * header). For `'schema-validation-failed'`, the payload never reached
+   * R2 at all, and the DLQ entry was its ONLY existing record — the same
+   * fact poison-dlq.test.ts already asserts, for the `'flush-poison'`
+   * half, at its own "NEITHER poisoned event did" assertion. Losing an
+   * aged entry to this sweep is an accepted, deliberate trade against the
+   * alternative — Redis growing without bound — not a gap nobody noticed.
+   *
+   * [rejected alternative, recorded per this task's own brief] A
+   * count-based cap (drop oldest entries beyond N) would preserve recent
+   * evidence better under a sudden burst, but age is what BullMQ's own
+   * `clean()` implements natively over the `'wait'` state a DLQ entry
+   * actually sits in (no `@Processor` ever drains one into a terminal
+   * state — `depth()`'s own doc comment, below). Reimplementing
+   * eviction-by-count by hand over `'wait'` would be real, unreviewed
+   * complexity for a mechanism BullMQ already provides for the age-based
+   * case — age wins here because it is the native mechanism, not because
+   * it is definitively the better policy in the abstract.
+   */
+  private async cleanAgedEntriesThrottled(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastCleanAttemptAtMs < this.cleanThrottleMs) {
+      return;
+    }
+    this.lastCleanAttemptAtMs = now;
+
+    try {
+      await this.dlqQueue.clean(this.retentionWindowMs, this.retentionCleanLimit, 'wait');
+    } catch (cleanError) {
+      this.retentionLogger.error(
+        `DlqService retention clean() failed; DLQ entries older than ${this.retentionWindowMs}ms may persist ` +
+          `past their intended retention window until the next successful sweep: ` +
+          `${redactCredentialsFromMessage(errorMessage(cleanError))}`,
+        { retentionWindowMs: this.retentionWindowMs, retentionCleanLimit: this.retentionCleanLimit },
+      );
+    }
   }
 
   /**
