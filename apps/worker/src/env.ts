@@ -111,8 +111,20 @@ function requireAtLeastOneR2AddressingVar(
   values: Pick<z.input<typeof workerEnvSchemaObject>, 'R2_ENDPOINT' | 'R2_ACCOUNT_ID'>,
   ctx: z.RefinementCtx,
 ): void {
+  // [security review, MEDIUM] R2_ACCOUNT_ID (line 42) is a bare
+  // `z.string().optional()` — unlike zNonEmpty (z.string().trim().min(1)),
+  // which every OTHER required field in this schema uses, it does no
+  // trimming. Trim here, not on the schema field itself: the field stays
+  // a plain `string | undefined` (main.ts passes it straight through to
+  // AppModuleConfig.r2AccountId, then to createR2Client, which trims
+  // nothing of its own either — R2_ACCOUNT_ID_FORMAT's regex is anchored
+  // and would simply reject a value with leading/trailing whitespace).
+  // Without this, R2_ACCOUNT_ID: '   ' reads as "set" here, sails past
+  // this schema's own boot-time check, and is only caught one layer down
+  // by createR2Client's format check — defeating the reason this
+  // .superRefine exists at all (this function's own doc comment above).
   const hasEndpoint = values.R2_ENDPOINT !== '';
-  const hasAccountId = values.R2_ACCOUNT_ID !== undefined && values.R2_ACCOUNT_ID !== '';
+  const hasAccountId = (values.R2_ACCOUNT_ID ?? '').trim() !== '';
 
   if (hasEndpoint || hasAccountId) return;
 

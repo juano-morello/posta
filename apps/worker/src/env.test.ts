@@ -124,6 +124,37 @@ describe('workerEnvSchema', () => {
 
       expect(result.success).toBe(true);
     });
+
+    // [security review, MEDIUM] A whitespace-only R2_ACCOUNT_ID (a
+    // plausible copy/paste or trailing-newline artifact in a `.env` file
+    // or k8s Secret) must NOT read as "set" — unlike zNonEmpty, which
+    // every other required field in this schema uses (z.string().trim()
+    // .min(1)), R2_ACCOUNT_ID's own z.string().optional() does no
+    // trimming, so this case has to be asserted explicitly rather than
+    // assumed to fall out of the '' check above. createR2Client
+    // (packages/core/src/r2/client.ts) would still safely reject this one
+    // level down (R2_ACCOUNT_ID_FORMAT), but this schema's own
+    // .superRefine exists specifically to fail LOUD at boot instead of
+    // downstream — a whitespace value sailing past this check defeats
+    // that purpose for this one input shape.
+    it('rejects a whitespace-only R2_ACCOUNT_ID with an empty R2_ENDPOINT, naming BOTH keys', () => {
+      const result = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        R2_ENDPOINT: '',
+        R2_ACCOUNT_ID: '   ',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(failingPaths).toContain('R2_ENDPOINT');
+        expect(failingPaths).toContain('R2_ACCOUNT_ID');
+
+        const messages = result.error.issues.map((issue) => issue.message).join(' ');
+        expect(messages).toContain('R2_ENDPOINT');
+        expect(messages).toContain('R2_ACCOUNT_ID');
+      }
+    });
   });
 
   // [T3.7.5] R2_ACCOUNT_ID is excluded from this generic "every key is
