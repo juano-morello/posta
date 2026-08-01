@@ -250,4 +250,92 @@ describe('events_classified view (T4.1.1)', () => {
     expect(row.classification).toBe('humano');
     expect(row.why).toBe('humano');
   });
+
+  it(
+    'all 8 rules produce a distinct, non-null why — collecting one why per rule proves no ' +
+      'two rules ever collapse to the same Spanish explanation (T4.1.2)',
+    async () => {
+      // Self-contained fixture set (fresh event_ids, not reused from the tests above) so this
+      // assertion never depends on execution order of the other `it` blocks in this file.
+      const fixturesByRule: readonly EventFixture[] = [
+        // 1. prefetch/preview signal
+        {
+          eventId: 'evt-distinct-rule1-prefetch',
+          httpMethod: 'GET',
+          userAgent: REALISTIC_CHROME_UA,
+          secPurpose: 'prefetch',
+          acceptLanguage: 'en-US,en;q=0.9',
+          secFetchSite: 'same-origin',
+          secChUa: REALISTIC_CLIENT_HINTS,
+        },
+        // 2. known unfurler token
+        {
+          eventId: 'evt-distinct-rule2-unfurler',
+          httpMethod: 'GET',
+          userAgent: 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        },
+        // 3. HEAD request
+        {
+          eventId: 'evt-distinct-rule3-head',
+          httpMethod: 'HEAD',
+          userAgent: REALISTIC_SAFARI_UA,
+        },
+        // 4. self-declared automation token
+        {
+          eventId: 'evt-distinct-rule4-bot',
+          httpMethod: 'GET',
+          userAgent: 'python-requests/2.31.0',
+        },
+        // 5. no user-agent at all
+        {
+          eventId: 'evt-distinct-rule5-no-ua',
+          httpMethod: 'GET',
+          userAgent: null,
+        },
+        // 6. known-datacenter ASN, no client hints
+        {
+          eventId: 'evt-distinct-rule6-datacenter',
+          httpMethod: 'GET',
+          userAgent: 'SomeInternalMonitor/1.0',
+          acceptLanguage: 'en-US',
+          secFetchSite: 'none',
+          secChUa: null,
+          asn: DATACENTER_ASN,
+        },
+        // 7. no accept-language, fetch metadata, or client hints
+        {
+          eventId: 'evt-distinct-rule7-no-metadata',
+          httpMethod: 'GET',
+          userAgent: 'SomeGenericAgent/1.0',
+          acceptLanguage: null,
+          secFetchSite: null,
+          secChUa: null,
+          asn: null,
+        },
+        // 8. else -> humano
+        {
+          eventId: 'evt-distinct-rule8-humano',
+          httpMethod: 'GET',
+          userAgent: REALISTIC_CHROME_UA,
+          acceptLanguage: 'en-US,en;q=0.9',
+          secFetchSite: 'same-origin',
+          secChUa: REALISTIC_CLIENT_HINTS,
+          asn: null,
+        },
+      ];
+
+      for (const fixture of fixturesByRule) {
+        await insertEvent(handle.pool, fixture);
+      }
+
+      const whyValues = await Promise.all(
+        fixturesByRule.map(async (fixture) => (await classify(handle.pool, fixture.eventId)).why),
+      );
+
+      for (const why of whyValues) {
+        expect(why).not.toBeNull();
+      }
+      expect(new Set(whyValues).size).toBe(8);
+    },
+  );
 });
