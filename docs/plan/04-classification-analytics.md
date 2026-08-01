@@ -27,7 +27,7 @@
 
 **Tasks:**
 
-#### T4.1.1 · `feat: add events_classified view with classification and why` [INV-5]
+#### T4.1.1 · `feat: add events_classified view with classification and why` [INV-5] ✅ done (`c2ebcbd`)
 `CREATE VIEW events_classified AS SELECT <every events column, enumerated>, <classification CASE>, <why CASE> FROM events e LEFT JOIN asn_datacenter d ON d.asn = e.asn`. **Two parallel `CASE`s over the same predicates in the same order** — one returning the verdict, one the user-facing Spanish reason — because that is what makes the recibos stream free from this same view and keeps a rule change and its explanation impossible to desync.
 
 Rule order per spec §7.1: (1) `sec_purpose`/`purpose`/`x_purpose`/`x_moz` declaring `prefetch`/`preview` → `prefetch`; (2) UA matching the twelve known unfurlers → `unfurler`; (3) `http_method = 'HEAD'` → `unfurler`; (4) UA self-declaring automation → `bot`; (5) UA null or empty → `bot`; (6) `d.asn IS NOT NULL AND sec_ch_ua IS NULL` → `bot`; (7) no `accept_language` and no `sec_fetch_site` and no `sec_ch_ua` → `bot`; (8) else `humano`. `why` strings follow POSTA.md §6 — lowercase, direct, rioplatense: `preview de link · Purpose: prefetch`, `user-agent 'facebookexternalhit'`, `método HEAD`, `sin user-agent`, `ASN 16509 (Amazon) sin fingerprint de browser` (from `d.asn`/`d.name`), `sin accept-language ni fetch metadata`, `humano`.
@@ -37,7 +37,7 @@ Columns are enumerated rather than `e.*` because Postgres freezes a `*` at `CREA
 
 > The view ships whole in one commit rather than as verdict-then-reason. A view cannot gain a column without restating its body, so splitting it would mean editing an already-applied migration file — and "never edit an applied migration" (T1.5.6) is not a rule worth bending on the very first view.
 
-#### T4.1.2 · `test: assert every rule returns a distinct Spanish why`
+#### T4.1.2 · `test: assert every rule returns a distinct Spanish why` ✅ done (`e81a6f2`)
 Pure test, no migration change. Seeds one row per rule and asserts the `why` text exactly: `python-requests/2.31` → `user-agent 'python-requests'`, a `HEAD` request → `método HEAD`, a datacenter ASN → the `ASN <n> (<name>)` form built from the join. Asserts all eight `why` values are non-null and mutually distinct, so no two rules can collapse into the same explanation and leave a receipt that says nothing.
 → **files** `packages/core/src/analytics/events-classified.test.ts` · **verify** `pnpm test events-classified.test.ts` · **after** T4.1.1
 
@@ -73,7 +73,7 @@ Asserts `information_schema.columns` for `events_classified` equals the `events`
 
 **Tasks:**
 
-#### T4.2.1 · `test: forbid FROM events outside the view, the writer and replay` [INV-5]
+#### T4.2.1 · `test: forbid FROM events outside the view, the writer and replay` [INV-5] ✅ done (`a0036d2`)
 Scans `apps/**/*.ts` and `packages/core/src/**/*.ts` for `from(events)`, `FROM events`, and `INTO events`, allowing exactly three paths: `packages/core/migrations/sql/`, the worker's batch insert (T3.3.2), and the replay insert path (T3.6.2). Fails naming file and line. Advice, not enforcement — T4.2.2 is the wall — but it fails in the pull request instead of in production.
 → **files** `packages/core/src/analytics/no-raw-events.test.ts` · **verify** `pnpm test no-raw-events.test.ts` passes on the current tree and fails with `file:line` when run against an inline fixture containing `db.select().from(events)` · **after** T4.1.1
 
