@@ -1,0 +1,74 @@
+import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
+import { getViewSelectedFields } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runSqlMigrations } from '../db/sql-migrate';
+import { startPgContainer, type PgContainerHandle } from '../test/pg-container';
+import { eventsClassified } from './events-classified';
+
+// T4.1.3 — a Drizzle `.existing()` pgView mirroring the hand-written
+// `events_classified` view (T4.1.1, packages/core/migrations/sql/
+// 006_events_classified.sql), exported as ClassifiedEventRow so app code
+// reading the classification verdict is typed without drizzle-kit ever
+// owning the view's DDL. The file is excluded from drizzle.config.ts's
+// schema glob so drizzle-kit never emits a CREATE VIEW for it and never
+// tries to "fix" it into existence — mirrors events-types.test.ts (T1.2.4)
+// exactly, both in what it asserts and why.
+const CONTAINER_TEST_TIMEOUT_MS = 120_000;
+const MIGRATIONS_DIR = path.join(__dirname, '..', '..', 'migrations', 'sql');
+const CORE_DIR = path.join(__dirname, '..', '..');
+const DRIZZLE_MIGRATIONS_DIR = path.join(CORE_DIR, 'migrations', 'drizzle');
+
+describe('events_classified Drizzle typing (T4.1.3)', () => {
+  let handle: PgContainerHandle;
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+    await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('the Drizzle column set is identical to information_schema.columns for events_classified (both directions)', async () => {
+    const drizzleColumnNames = Object.values(getViewSelectedFields(eventsClassified))
+      .map((column) => column.name)
+      .sort();
+
+    const result = await handle.pool.query<{ column_name: string }>(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'events_classified'
+    `);
+    const dbColumnNames = result.rows.map((row) => row.column_name).sort();
+
+    // Two separate assertions (rather than one toEqual on the whole sets)
+    // so a drift in either direction names the actual offending column(s)
+    // in the failure message, not just "arrays differ".
+    const inDrizzleNotDb = drizzleColumnNames.filter((name) => !dbColumnNames.includes(name));
+    const inDbNotDrizzle = dbColumnNames.filter((name) => !drizzleColumnNames.includes(name));
+
+    expect(inDrizzleNotDb).toEqual([]);
+    expect(inDbNotDrizzle).toEqual([]);
+  });
+});
+
+describe('drizzle-kit generate (T4.1.3)', () => {
+  it(
+    'emits no new migration file for events-classified.ts — it is excluded from the schema glob',
+    () => {
+      const before = readdirSync(DRIZZLE_MIGRATIONS_DIR).sort();
+
+      execFileSync('pnpm', ['exec', 'drizzle-kit', 'generate'], {
+        cwd: CORE_DIR,
+        env: { ...process.env, DATABASE_URL: 'postgresql://user:pass@localhost:5432/db' },
+        stdio: 'pipe',
+      });
+
+      const after = readdirSync(DRIZZLE_MIGRATIONS_DIR).sort();
+      expect(after).toEqual(before);
+    },
+    30_000,
+  );
+});

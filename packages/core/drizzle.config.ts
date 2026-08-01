@@ -25,8 +25,20 @@ import { defineConfig } from 'drizzle-kit';
 // partitioning away with a plain CREATE TABLE. events-types.test.ts
 // (T1.2.4) asserts this by actually running `db:generate` and checking
 // no new migration file appears.
+//
+// Also excludes src/schema/events-classified.ts (T4.1.3) for the same
+// reason: `events_classified` is a hand-written SQL view
+// (packages/core/migrations/sql/006_events_classified.sql, T4.1.1) over
+// the partitioned `events` table, applied by the same hand-written-SQL
+// runner, never by drizzle-kit. events-classified.ts is a READ-ONLY
+// `.existing()` Drizzle typing mirror of that view (ClassifiedEventRow)
+// — excluding it here is what keeps `db:generate` from ever proposing a
+// `CREATE VIEW` for something that already exists. events-classified-
+// types.test.ts (T4.1.3) asserts this the same way events-types.test.ts
+// does: actually running `db:generate` and checking no new migration
+// file appears.
 export default defineConfig({
-  schema: './src/schema/!(*.test|events).ts',
+  schema: './src/schema/!(*.test|events|events-classified).ts',
   out: './migrations/drizzle',
   dialect: 'postgresql',
   dbCredentials: {
