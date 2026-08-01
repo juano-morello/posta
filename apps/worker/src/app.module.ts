@@ -1,4 +1,491 @@
-import { Module } from '@nestjs/common';
+import { Module, type DynamicModule } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
+import { createDbClient, createR2Client, EVENTS_DLQ_QUEUE, EVENTS_QUEUE, type DbClient } from '@posta/core';
+import type { CaptureEvent } from '@posta/contracts';
+import { BatchAccumulator, type BatchFlushCallback } from './batch/accumulator';
+import { createFlushBatch } from './batch/flush';
+import { retryWithSplit, sendPoisonEventsToDlq } from './batch/split-retry';
+import {
+  AccumulatingEventSink,
+  BATCH_ACCUMULATOR,
+  consoleErrorLogger,
+  EVENT_SINK,
+  EVENTS_CONSUMER_LOGGER,
+  EventsConsumer,
+  type EventSink,
+  type EventsConsumerLogger,
+} from './consumer/events.consumer';
+import { DlqService } from './consumer/dlq.service';
+import {
+  consoleErrorLogger as shutdownConsoleErrorLogger,
+  SHUTDOWN_LOGGER,
+  SHUTDOWN_TIMEOUT_MS,
+  ShutdownService,
+  type ShutdownLogger,
+} from './consumer/shutdown';
+import { FLUSH_INTERVAL_MS, HealthController } from './health.controller';
+
+/** The DI token the worker's real Postgres `DbClient` (packages/core's
+ * `createDbClient`, T1.1.1) is registered under — internal to this
+ * module, not part of `AppModuleConfig`: nothing outside `forRoot()`
+ * needs to override or reach past the `BatchAccumulator` it feeds
+ * `createFlushBatch({ db })`. */
+const DB_CLIENT = Symbol('DB_CLIENT');
+
+// T3.1.2 [E3, S3.1] — establishes the worker's BullMQ ROOT CONNECTION so
+// T3.1.3 (the consumer, a `@Processor`/`WorkerHost` class with tuned
+// concurrency) has something to attach to. This task adds no queue and
+// no processor — `BullModule.registerQueue()`/`@Processor` are T3.1.3's
+// job, not this one. "Root connection, no consumer yet" is deliberate:
+// see this file's own header below for why the connection seam is
+// established here rather than deferred alongside the consumer.
+//
+// [T3.1.3 update] `BullModule.registerQueue({ name: EVENTS_QUEUE })`,
+// `EventsConsumer`, and the `EVENT_SINK` provider now live in THIS
+// dynamic module rather than a separate one, so `AppModule.forRoot()`
+// stays the single thing main.ts (production) and
+// events.consumer.test.ts (a real testcontainers-Redis integration test)
+// both boot through — the test proves the actual production wiring,
+// never a parallel test-only module. `AppModuleConfig.eventSink` is an
+// optional override specifically so that test can substitute an
+// observing sink through the same `EVENT_SINK` DI token production uses
+// for `NoopEventSink`, without needing `@nestjs/testing` (not a
+// dependency of this app) or `overrideProvider`.
+//
+// TWO ESTABLISHED PRECEDENTS, one judgment call:
+//   1. apps/api's main.ts builds its BullMQ producer
+//      (createEventsQueue(env.REDIS_URL), apps/api/src/redirect/enqueue.ts)
+//      entirely OUTSIDE Nest's DI, by hand in bootstrap() — AppModule
+//      there stays `@Module({})`. That is deliberate for the redirect hot
+//      path [INV-2]: "the redirect route is lean... Nest's structure
+//      earns its keep on CRUD, not here."
+//   2. `@nestjs/bullmq`'s own idiomatic pattern is `BullModule.forRoot()`
+//      in `AppModule.imports`, which is how a later `@Processor`
+//      (T3.1.3) attaches to a Worker via DI — `BullExplorer`
+//      (`@nestjs/bullmq`) discovers `@Processor`-decorated classes at
+//      module-init time and wires them to whatever `BullModule.forRoot()`
+//      configured, with no manual `new Worker(...)` anywhere.
+// The worker is NOT the hot path — it is a background batch consumer,
+// closer to a "CRUD-shaped" service where Nest's DI earns its keep, and
+// T3.1.3's consumer needs exactly the seam `@nestjs/bullmq` provides
+// (`@Processor extends WorkerHost`, discovered via DI). So: pattern 2,
+// here, deliberately different from api's pattern 1 — the two processes
+// have different hot-path constraints, not an inconsistency to "fix".
+//
+// `AppModule.forRoot(config)` (a DynamicModule factory), not a bare
+// `@Module({})` reading `process.env` internally, because env.REDIS_URL
+// is validated ONCE in main.ts (workerEnvSchema, T0.3.6) — this module
+// must receive that already-validated value as a parameter rather than
+// re-reading `process.env.REDIS_URL` itself, which is exactly what the
+// "config from env only, read in exactly one place" invariant forbids a
+// second copy of.
+export interface AppModuleConfig {
+  /** Already validated by workerEnvSchema (env.ts) — main.ts's
+   * `env.REDIS_URL`, passed through, never re-read from process.env
+   * here. */
+  readonly redisUrl: string;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.DATABASE_URL_WORKER` (the writer role, CLAUDE.md), passed
+   * through the same "validate once, pass down" discipline as
+   * `redisUrl`. Feeds `createDbClient()` (packages/core, T1.1.1), which
+   * backs both the production `flushBatch` (below) and, transitively,
+   * `AccumulatingEventSink`/`ShutdownService`'s shared
+   * `BatchAccumulator`. */
+  readonly databaseUrl: string;
+  /** [T3.1.6] Overrides `createDbClient()`'s own `max` — production
+   * (main.ts) leaves this unset and relies on `createDbClient`'s
+   * documented `process.env.DB_POOL_MAX` fallback (already set in
+   * .env.example/docker-compose/k8s manifests for real deployments).
+   * shutdown.test.ts passes a small explicit value instead, matching
+   * `packages/core/src/test/pg-container.ts`'s own `CONTAINER_POOL_MAX`
+   * precedent — vitest's own test process never loads `.env`, and unlike
+   * CI's dedicated `migrate-from-empty` job, the main `ci` job that runs
+   * `pnpm test` never sets `DB_POOL_MAX` either. */
+  readonly dbPoolMax?: number;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.EVENT_BATCH_SIZE`/`env.EVENT_BATCH_INTERVAL_MS`, passed through
+   * to the production `BatchAccumulator<CaptureEvent>` this module now
+   * constructs. */
+  readonly batchSize: number;
+  readonly batchIntervalMs: number;
+  /** [T3.1.6] Already validated by workerEnvSchema — main.ts's
+   * `env.SHUTDOWN_TIMEOUT_MS`, passed through to `ShutdownService`. */
+  readonly shutdownTimeoutMs: number;
+  /** [T3.1.6] Overrides the flush callback the production
+   * `BatchAccumulator<CaptureEvent>` uses. Defaults to the real
+   * `createFlushBatch({ db, r2Client, r2Bucket })` (T3.4.4, against the
+   * real `databaseUrl`/`r2*` fields above) when omitted — production
+   * (main.ts) never sets this. shutdown.test.ts substitutes a
+   * controllable delay to prove the `SHUTDOWN_TIMEOUT_MS` bound without
+   * needing a genuinely wedged Postgres write; several consumer-level
+   * tests (dlq.service.test.ts, events.consumer.test.ts,
+   * malformed-job.test.ts) substitute a plain no-op here too — they
+   * override `eventSink` instead, which means the real accumulator this
+   * callback would be attached to is constructed but never actually
+   * driven, so there is nothing for a real flush to prove in those
+   * files. */
+  readonly flush?: BatchFlushCallback<CaptureEvent>;
+  /** [T3.4.4] `R2_ENDPOINT` — passed straight to `createR2Client`
+   * (packages/core/src/r2/client.ts), which itself documents why an
+   * empty string is valid (production's own R2 default-endpoint case,
+   * a KNOWN GAP that function's own docstring names — not this file's
+   * problem to solve). Required unless `flush` is overridden: the
+   * `BATCH_ACCUMULATOR` provider below is constructed eagerly by Nest
+   * regardless of whether anything ever actually drives it (same
+   * reasoning `databaseUrl` above already documents for
+   * `createDbClient`), so a caller that doesn't override `flush` must
+   * still supply enough to build a real R2 client. */
+  readonly r2Endpoint?: string;
+  /** [T3.4.4] `R2_ACCESS_KEY_ID` — see `r2Endpoint` above for why this is
+   * required unless `flush` is overridden. */
+  readonly r2AccessKeyId?: string;
+  /** [T3.4.4] `R2_SECRET_ACCESS_KEY` — see `r2Endpoint` above for why
+   * this is required unless `flush` is overridden. */
+  readonly r2SecretAccessKey?: string;
+  /** [T3.4.4] `R2_BUCKET_EVENTS` — see `r2Endpoint` above for why this is
+   * required unless `flush` is overridden. */
+  readonly r2Bucket?: string;
+  /** [T3.7.5] `R2_ACCOUNT_ID` — passed straight to `createR2Client`
+   * (packages/core/src/r2/client.ts), which reads it ONLY to derive
+   * `R2_ENDPOINT` when that field is empty (R2's own documented
+   * account-scoped endpoint). Unlike `r2Endpoint`/`r2AccessKeyId`/
+   * `r2SecretAccessKey`/`r2Bucket` above, this is never independently
+   * "required" here — `workerEnvSchema`'s own `.superRefine` (env.ts)
+   * already guarantees at least one of `R2_ENDPOINT`/`R2_ACCOUNT_ID` is
+   * non-empty before main.ts ever calls `forRoot()`, and
+   * `buildProductionFlush`/`createR2Client` itself throws if BOTH end up
+   * empty regardless — no third copy of that check belongs here.
+   * Explicitly typed `| undefined` (not just `?:string`) because
+   * `env.R2_ACCOUNT_ID` (env.ts) is itself optional and main.ts passes it
+   * straight through — `exactOptionalPropertyTypes` (tsconfig.base.json)
+   * requires the target property's own type to name `undefined`, not
+   * just be an omittable key, before an `undefined`-typed source value can
+   * be assigned to it in an object literal. */
+  readonly r2AccountId?: string | undefined;
+  /** Overrides the `EVENT_SINK` DI token `EventsConsumer` injects.
+   * Defaults to `AccumulatingEventSink` (T3.1.6) when omitted —
+   * production (main.ts) never sets this. events.consumer.test.ts and
+   * dlq.service.test.ts pass their own observing sink here to assert
+   * what the consumer actually decoded, against a real testcontainers
+   * Redis, with no database involved. */
+  readonly eventSink?: EventSink;
+  /** Overrides the `EVENTS_CONSUMER_LOGGER` DI token `EventsConsumer`
+   * injects. Defaults to `consoleErrorLogger` when omitted — same
+   * override shape as `eventSink` above, for the same reason: a test
+   * substitutes a spy through the real production DI wiring rather than
+   * a parallel one. */
+  readonly logger?: EventsConsumerLogger;
+  /** [T3.1.6] Overrides the `SHUTDOWN_LOGGER` DI token `ShutdownService`
+   * injects. Defaults to shutdown.ts's own `consoleErrorLogger` when
+   * omitted — same override shape as `logger` above: shutdown.test.ts
+   * substitutes a spy to assert the `SHUTDOWN_TIMEOUT_MS` timeout path
+   * actually logs. */
+  readonly shutdownLogger?: ShutdownLogger;
+}
+
+/**
+ * [T3.7.3] `retryWithSplit`'s own retry budget for the production flush —
+ * two module constants, deliberately NOT new env vars and NOT threaded
+ * through `AppModuleConfig` (this task's own brief): nobody outside this
+ * file has a reason to tune this per-deployment, and a new env var per
+ * tunable is exactly the kind of surface area S3.1's "config from env
+ * only, read in exactly one place" discipline (CLAUDE.md) is meant to
+ * bound, not expand for its own sake.
+ *
+ * Sized so a batch's full binary-split recursion cannot plausibly outlast
+ * `config.shutdownTimeoutMs` (`SHUTDOWN_TIMEOUT_MS`, this file's own
+ * import). Isolating ONE poison row out of a realistic batch (e.g.
+ * `EVENT_BATCH_SIZE` around 100) costs at most ~⌈log2(batchSize)⌉ levels
+ * of split, each paying at most `SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH - 1`
+ * backoff sleeps before it either splits further or (at size one)
+ * declares poison — with the values below, that is 2 sleeps per level of
+ * 150ms + 300ms = 450ms, so ~7 levels for a 100-event batch is
+ * comfortably under 3.5s of pure backoff, an order of magnitude below
+ * `SHUTDOWN_TIMEOUT_MS`'s own production default (30s, env.ts). Mirrors
+ * `r2-retry.ts`'s own `DEFAULT_R2_MAX_ATTEMPTS`/
+ * `DEFAULT_R2_INITIAL_DELAY_MS` precedent in shape (a small attempt count,
+ * a short base delay that doubles each retry) — smaller here because a
+ * sub-batch's retry loop is one of potentially many along a single split
+ * path, unlike the R2 PUT's own single, un-nested retry loop.
+ *
+ * The genuinely pathological case — EVERY row in the batch poison, which
+ * would otherwise binary-search all the way down to `batchSize` singleton
+ * sub-batches (~2×batchSize - 1 sub-batches total) — is NOT what these
+ * constants are sized against: T3.7.2's `classifyFlushError` already
+ * rejects that case as `'infrastructure'` before it ever reaches a split
+ * (split-retry.ts's own header), so it is unreachable in practice, not
+ * merely unlikely.
+ */
+const SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH = 3;
+const SPLIT_RETRY_INITIAL_DELAY_MS = 150;
+
+/**
+ * [T3.4.4] Builds the real, production `flushBatch` closure — a real R2
+ * client (`createR2Client`, packages/core/src/r2/client.ts, constructed
+ * ONCE here, matching that function's own "never per-request/per-batch"
+ * discipline) plus `createFlushBatch` itself (apps/worker/src/batch/
+ * flush.ts). Only ever called from the `BATCH_ACCUMULATOR` factory above,
+ * and only on the branch where `config.flush` was NOT supplied — see
+ * `AppModuleConfig.r2Endpoint`'s own doc comment for why that branch is
+ * reachable even in a test that never really flushes, and why this
+ * throws (loudly, at construction time, not silently) rather than
+ * building a client against an empty endpoint/bucket when the `r2*`
+ * fields are missing.
+ *
+ * [T3.4.6] `dlqService` is threaded straight through as `createFlushBatch`'s
+ * own `dlqSink` — a real `DlqService` instance satisfies flush.ts's
+ * `R2BatchDlqSink` structurally, zero adapter code needed (r2-retry.ts's
+ * own header explains why: same method name, same parameter shapes,
+ * `DlqReason` is a strict superset of the one literal `R2BatchDlqSink`
+ * ever passes). Without this, production would fall back to flush.ts's
+ * own `rejectingDlqSink` default — exactly the pre-T3.4.6 "an R2 failure
+ * rejects the whole flush" behavior, which is correct for the TEST call
+ * sites that default still exists for for, but wrong here: a worker that
+ * can never route a terminal R2 failure to a real DLQ would have no
+ * recoverable path at all, only ever-repeating BatchAccumulator retries
+ * against the same dead endpoint.
+ *
+ * [T3.7.3] The returned callback is no longer `createFlushBatch`'s own
+ * closure directly — `retryWithSplit`/`sendPoisonEventsToDlq`
+ * (split-retry.ts, T3.3.3/T3.3.4) were built, reviewed and tested but
+ * never actually called from production until this task: before this
+ * change, a single poison row failed the WHOLE batch (all
+ * `insertEventsBatch`'s rows share one multi-row `INSERT`, flush.ts's own
+ * header) and dead-lettered every event in it through the consumer's own
+ * 'attempts-exhausted' path — exactly the outcome S3.3's acceptance
+ * criteria reject. The wrapper below calls the SAME `flushBatch` this
+ * function already built (unchanged, still rejects on a poison row —
+ * `poison-dlq.test.ts`'s own 4-committed/2-poison assertions depend on
+ * that, and moving the split INSIDE `flushBatch` itself was a rejected
+ * alternative recorded in the plan for exactly that reason) through
+ * `retryWithSplit`, then routes whatever it isolates as poison to the
+ * SAME `dlqService` already threaded in above — via `PoisonDlqSink`,
+ * which a real `DlqService` instance satisfies structurally, zero adapter
+ * code, the same precedent `R2BatchDlqSink` already established one
+ * paragraph up. `batchId` — the SECOND argument this callback receives
+ * from `BatchAccumulator.runFlush` — is passed straight through as
+ * `retryWithSplit`'s own `batchId` option, per T3.7.1's own invariant:
+ * the whole recursion keys off the SAME stable id `BatchAccumulator`
+ * minted for this batch, never a fresh one `retryWithSplit` would
+ * otherwise default to minting itself.
+ */
+function buildProductionFlush(
+  config: AppModuleConfig,
+  dbClient: DbClient,
+  dlqService: DlqService,
+): BatchFlushCallback<CaptureEvent> {
+  const { r2Endpoint, r2AccessKeyId, r2SecretAccessKey, r2Bucket } = config;
+
+  if (r2AccessKeyId === undefined || r2SecretAccessKey === undefined || r2Bucket === undefined) {
+    throw new Error(
+      'AppModule.forRoot: r2AccessKeyId, r2SecretAccessKey and r2Bucket are required unless `flush` ' +
+        'is overridden (T3.4.4) — the BATCH_ACCUMULATOR provider builds a real flushBatch eagerly ' +
+        'regardless of whether anything ever drives the accumulator it is attached to.',
+    );
+  }
+
+  const flushBatch = createFlushBatch({
+    db: dbClient.db,
+    r2Client: createR2Client({
+      // `R2ClientConfig.endpoint` is a REQUIRED `string`, unlike
+      // `AppModuleConfig.r2Endpoint` above — createR2Client's own
+      // docstring documents `''` (not an omitted key) as the way a
+      // caller says "no endpoint override", so an omitted
+      // `AppModuleConfig.r2Endpoint` becomes an explicit `''` here, one
+      // level down.
+      endpoint: r2Endpoint ?? '',
+      accessKeyId: r2AccessKeyId,
+      secretAccessKey: r2SecretAccessKey,
+      bucket: r2Bucket,
+      // [T3.7.5] `R2ClientConfig.accountId` is `accountId?: string` (no
+      // `| undefined` in ITS own type — that file is not this task's to
+      // edit) — same `exactOptionalPropertyTypes` conditional-spread
+      // discipline the `DB_CLIENT` factory's own `max` already uses
+      // above, so an omitted `config.r2AccountId` becomes a genuinely
+      // OMITTED key here, not an explicit `accountId: undefined`, which
+      // `R2ClientConfig.accountId`'s own doc comment (client.ts) already
+      // documents as meaning the same thing as `''` — either way,
+      // `createR2Client` treats it as "not set".
+      ...(config.r2AccountId !== undefined ? { accountId: config.r2AccountId } : {}),
+    }),
+    r2Bucket,
+    // [T3.4.6] See this function's own doc comment above.
+    dlqSink: dlqService,
+  });
+
+  // [T3.7.3] See this function's own doc comment above for the full
+  // composition rationale. Matches `BatchFlushCallback<CaptureEvent>`'s
+  // exact signature — `batchId` here is REQUIRED (unlike `FlushBatch`'s
+  // own optional second parameter), which is exactly right: this callback
+  // is only ever invoked by `BatchAccumulator.runFlush`, which always
+  // supplies a real, non-empty, freshly minted `batchId`.
+  return async function flushWithSplitRetryAndPoisonDlq(
+    events: readonly CaptureEvent[],
+    batchId: string,
+  ): Promise<void> {
+    const result = await retryWithSplit(events, flushBatch, {
+      maxAttemptsPerBatch: SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH,
+      initialDelayMs: SPLIT_RETRY_INITIAL_DELAY_MS,
+      batchId,
+    });
+
+    await sendPoisonEventsToDlq(result.poisonEvents, dlqService, {
+      batchId,
+      maxAttemptsPerBatch: SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH,
+    });
+  };
+}
 
 @Module({})
-export class AppModule {}
+export class AppModule {
+  static forRoot(config: AppModuleConfig): DynamicModule {
+    return {
+      module: AppModule,
+      imports: [
+        BullModule.forRoot({
+          connection: {
+            url: config.redisUrl,
+            // BullMQ's own documented requirement for a connection a
+            // Worker attaches to — unlike a producer-only Queue
+            // (createEventsQueue's `hasBlockingConnection === false`,
+            // packages/core/src/queue/events-queue.ts /
+            // apps/api/src/redirect/enqueue.ts), a Worker's connection
+            // IS a blocking connection type, and BullMQ's own connection
+            // layer enforces this itself if it is left unset. T3.1.3's
+            // `@Processor`/`WorkerHost` will attach to THIS connection,
+            // so the requirement is load-bearing here, not defensive
+            // boilerplate copied from the producer side.
+            maxRetriesPerRequest: null,
+          },
+        }),
+        // T3.1.3 — no `connection` override here: leaving it unset means
+        // this queue's options fall back to the shared config the
+        // `BullModule.forRoot()` import above just registered (globally,
+        // by `@nestjs/bullmq`'s own design), so there is exactly one
+        // Redis connection definition in this module, not two that could
+        // drift apart.
+        BullModule.registerQueue({ name: EVENTS_QUEUE }),
+        // T3.1.4 — same "no connection override, share BullModule.forRoot()'s
+        // config" discipline as EVENTS_QUEUE above. `DlqService`
+        // (./consumer/dlq.service.ts) injects the `Queue` instance this
+        // registration produces via `@InjectQueue(EVENTS_DLQ_QUEUE)` — the
+        // ONE writer both of EventsConsumer's DLQ paths (a decode failure,
+        // and T3.1.5's attempts-exhausted path) call through, rather than
+        // either writing to this queue directly. No `@Processor` for this
+        // queue yet — draining EVENTS_DLQ_QUEUE is a later task's job, not
+        // this one (events-queue.ts's own header).
+        BullModule.registerQueue({ name: EVENTS_DLQ_QUEUE }),
+      ],
+      // T3.1.7 — HealthController serves `GET /health`, replacing main.ts's
+      // former hand-rolled `app.use('/health', ...)` middleware (T3.1.2)
+      // that always answered `200 ok`. See health.controller.ts's own
+      // header for the full design rationale.
+      controllers: [HealthController],
+      providers: [
+        EventsConsumer,
+        // T3.1.5 — a normal class provider, not exposed through
+        // `AppModuleConfig`: unlike `EVENT_SINK`/`EVENTS_CONSUMER_LOGGER`,
+        // no test needs to substitute a fake `DlqService` — every DLQ test
+        // (dlq.service.test.ts) either exercises the class directly
+        // against a real testcontainers Redis `Queue`, or boots THIS real
+        // wiring end to end, same "real BullMQ, no mocks" discipline as
+        // the rest of this module.
+        DlqService,
+        // T3.1.6 — the worker's real Postgres connection, constructed
+        // exactly once per booted app (Nest providers are singletons by
+        // default within a module), from the already-validated
+        // `databaseUrl`/`dbPoolMax` above. Nothing outside this factory
+        // ever calls `process.env` for it.
+        {
+          provide: DB_CLIENT,
+          useFactory: (): DbClient => {
+            // `exactOptionalPropertyTypes: true` (tsconfig.base.json)
+            // treats an explicit `max: undefined` property as distinct
+            // from an OMITTED `max` key — `DbClientOptions.max` is typed
+            // `max?: number`, not `max?: number | undefined`, so the
+            // object literal must genuinely leave the key out when
+            // `config.dbPoolMax` is unset, not merely set it to
+            // `undefined`. The conditional spread below is what makes
+            // "unset dbPoolMax" behave exactly like "key never
+            // mentioned", so createDbClient's own resolvePoolMax()
+            // still falls through to its `process.env.DB_POOL_MAX`
+            // fallback (this file's own header, `dbPoolMax`'s doc
+            // comment) rather than seeing a `max` key present at all.
+            const client = createDbClient({
+              connectionString: config.databaseUrl,
+              ...(config.dbPoolMax !== undefined ? { max: config.dbPoolMax } : {}),
+            });
+            // [defensive, T3.1.6] A long-lived worker pool must never let
+            // an IDLE pooled connection's backend-side error (a network
+            // blip, a Postgres restart) become an uncaught exception —
+            // `pg`'s Pool forwards a client's own 'error' event onto the
+            // Pool itself (installed `pg-pool` source), and an 'error'
+            // event with zero listeners throws synchronously in Node
+            // (EventEmitter's own documented behavior). The affected
+            // client is already removed from the pool by `pg-pool`
+            // itself before this fires — there is nothing to do here
+            // besides make sure the failure stays VISIBLE instead of
+            // silently swallowed or crashing the process. Deliberately
+            // separate from ShutdownService's own scope (shutdown.ts's
+            // header) — this guards the LIVE process, not shutdown.
+            client.pool.on('error', (error: Error) => {
+              console.error('Worker Postgres pool reported an idle-connection error', {
+                message: error.message,
+              });
+            });
+            return client;
+          },
+        },
+        // T3.1.6 — the shared `BatchAccumulator<CaptureEvent>`: exactly
+        // ONE instance, injected into BOTH `AccumulatingEventSink`
+        // (feeds it via `add()`) and `ShutdownService` (drains it via
+        // `flushNow()` on SIGTERM) through the same `BATCH_ACCUMULATOR`
+        // token — see events.consumer.ts's own header for why that
+        // sharing is load-bearing, not incidental. `config.flush`
+        // overrides the callback entirely (shutdown.test.ts's wedged-flush
+        // scenario); production falls back to the real
+        // `createFlushBatch({ db, r2Client, r2Bucket, dlqSink })` (T3.4.4,
+        // T3.4.6) against the DbClient above, a fresh `createR2Client()`
+        // built from this config's own `r2*` fields, and the module's own
+        // `DlqService` provider (injected below, T3.4.6) — none of the
+        // three hoisted to their own DI tokens the way `DB_CLIENT` is,
+        // since nothing else in this module needs to inject the R2 client
+        // on its own, and `DlqService` already has a normal class-provider
+        // token (itself) to inject by. Throwing when `flush` is absent AND
+        // the `r2*` fields are missing (rather than silently building a
+        // client against an empty endpoint/bucket) is deliberate — see
+        // `r2Endpoint`'s own doc comment above for why this branch is
+        // reachable at all even in a test that never really flushes.
+        {
+          provide: BATCH_ACCUMULATOR,
+          useFactory: (dbClient: DbClient, dlqService: DlqService): BatchAccumulator<CaptureEvent> => {
+            const flush = config.flush ?? buildProductionFlush(config, dbClient, dlqService);
+            return new BatchAccumulator<CaptureEvent>({
+              batchSize: config.batchSize,
+              batchIntervalMs: config.batchIntervalMs,
+              flush,
+            });
+          },
+          inject: [DB_CLIENT, DlqService],
+        },
+        {
+          provide: EVENT_SINK,
+          useFactory: (accumulator: BatchAccumulator<CaptureEvent>): EventSink =>
+            config.eventSink ?? new AccumulatingEventSink(accumulator),
+          inject: [BATCH_ACCUMULATOR],
+        },
+        { provide: EVENTS_CONSUMER_LOGGER, useValue: config.logger ?? consoleErrorLogger },
+        { provide: SHUTDOWN_TIMEOUT_MS, useValue: config.shutdownTimeoutMs },
+        { provide: SHUTDOWN_LOGGER, useValue: config.shutdownLogger ?? shutdownConsoleErrorLogger },
+        ShutdownService,
+        // T3.1.7 — HealthController's own staleness-threshold input.
+        // `config.batchIntervalMs` is already validated (env.EVENT_BATCH_
+        // INTERVAL_MS, passed through above to BATCH_ACCUMULATOR's own
+        // useFactory) — this is the SAME value, exposed under a second
+        // token because HealthController has no reason to depend on the
+        // accumulator's own construction options object to read it.
+        { provide: FLUSH_INTERVAL_MS, useValue: config.batchIntervalMs },
+      ],
+    };
+  }
+}

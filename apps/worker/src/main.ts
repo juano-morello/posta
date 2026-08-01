@@ -1,10 +1,9 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import type { Request, Response } from 'express';
 import { formatEnvFailures, loadEnv } from '@posta/contracts';
 import { AppModule } from './app.module';
-import { workerEnvSchema } from './env';
+import { warnIfConcurrencyCannotFillBatchSize, workerEnvSchema } from './env';
 
 // T0.3.8 — fail fast on invalid env (S0.3). Same contract as the API's
 // main.ts: validate process.env against workerEnvSchema before anything
@@ -17,15 +16,68 @@ if (!envResult.ok) {
 }
 const env = envResult.data;
 
-async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+// [T3.7.7] Immediately after loadEnv succeeds, and before AppModule.
+// forRoot() (below) does anything with env.EVENT_BATCH_SIZE — a loud,
+// NON-fatal warning when WORKER_CONCURRENCY cannot fill EVENT_BATCH_SIZE
+// (see env.ts's own doc comment on this function for the full mechanism
+// and why it must never fail boot).
+warnIfConcurrencyCannotFillBatchSize(env);
 
-  // The worker is a BullMQ consumer with no routed API of its own — this
-  // is the only endpoint it serves, so Kubernetes can probe liveness
-  // without the consumer needing a real router.
-  app.use('/health', (_req: Request, res: Response) => {
-    res.status(200).send('ok');
-  });
+async function bootstrap(): Promise<void> {
+  // T3.1.2 [E3, S3.1] — AppModule.forRoot() wires the BullMQ root
+  // connection (BullModule.forRoot, app.module.ts) from env.REDIS_URL,
+  // already validated above. See app.module.ts's own header for why this
+  // is a DynamicModule factory rather than a bare `@Module({})`: the
+  // module needs the already-validated REDIS_URL passed in, not a second
+  // read of process.env.
+  //
+  // [T3.1.6] databaseUrl/batchSize/batchIntervalMs/shutdownTimeoutMs are
+  // the SAME "validate once here, pass down" discipline as redisUrl —
+  // env.DATABASE_URL_WORKER (the writer role), env.EVENT_BATCH_SIZE/
+  // env.EVENT_BATCH_INTERVAL_MS (S3.3's batching knobs), and
+  // env.SHUTDOWN_TIMEOUT_MS (this task) are each read from process.env
+  // exactly once, right here, and nowhere deeper in the app. `dbPoolMax`
+  // and every `AppModuleConfig` override (`flush`/`eventSink`/`logger`/
+  // `shutdownLogger`) are deliberately left unset — production relies on
+  // `createDbClient`'s own `DB_POOL_MAX` env fallback and every other
+  // component's real default (app.module.ts's own header explains each).
+  //
+  // [T3.4.4] r2Endpoint/r2AccessKeyId/r2SecretAccessKey/r2Bucket — the
+  // SAME "validate once, pass down" discipline, extended to the four
+  // R2_* vars workerEnvSchema already validates (env.ts, T0.3.6).
+  // app.module.ts's own `buildProductionFlush` is what actually
+  // constructs `createR2Client()` from these; this file's only job is
+  // handing down the already-validated values, never re-reading
+  // `process.env` itself.
+  //
+  // [T3.7.5] r2AccountId — the same discipline, extended to
+  // env.R2_ACCOUNT_ID, which workerEnvSchema now validates as OPTIONAL
+  // (may be `undefined`, unlike the other four R2_* vars above): its own
+  // `.superRefine` guarantees at least one of R2_ENDPOINT / R2_ACCOUNT_ID
+  // is non-empty, not that this one specifically is set. createR2Client
+  // (packages/core/src/r2/client.ts, T3.7.4) reads it only to derive
+  // R2_ENDPOINT when that var is left empty — production's own shape.
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule.forRoot({
+      redisUrl: env.REDIS_URL,
+      databaseUrl: env.DATABASE_URL_WORKER,
+      batchSize: env.EVENT_BATCH_SIZE,
+      batchIntervalMs: env.EVENT_BATCH_INTERVAL_MS,
+      shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+      r2Endpoint: env.R2_ENDPOINT,
+      r2AccessKeyId: env.R2_ACCESS_KEY_ID,
+      r2SecretAccessKey: env.R2_SECRET_ACCESS_KEY,
+      r2Bucket: env.R2_BUCKET_EVENTS,
+      r2AccountId: env.R2_ACCOUNT_ID,
+    }),
+  );
+
+  // [T3.1.7] `GET /health` is now served by the real `HealthController`
+  // (health.controller.ts), registered through `AppModule.forRoot()`
+  // above — it reports queue depth, DLQ depth, and flush staleness
+  // instead of this file's former hand-rolled `app.use('/health', ...)`
+  // middleware, which always answered `200 ok` regardless of actual
+  // worker health. See that file's own header for the full rationale.
 
   // T0.7.8 (revised in review) — SIGTERM-clean shutdown, scoped to
   // SIGTERM only. See apps/api/src/main.ts for the full rationale; same

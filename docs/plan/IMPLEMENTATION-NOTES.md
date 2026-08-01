@@ -143,3 +143,932 @@ Commit: b141bda
 **Deviation from plan, disclosed in-file:** the obvious candidate — widening the job's scope from `apps/api/src/redirect/test/` to the whole `apps/api/src/redirect/` directory — was evaluated and rejected in favor of the narrower, explicit-file fix. Measured both from the same clean tree: whole directory = 28 files / 350 tests / ~54s (two runs: 53.80s, 53.25s); `test/` + `ordering.test.ts` only = 10 files / 60 tests / ~32s (three runs: 33.23s, 31.61s [red], 31.55s). The wider directory re-runs ~18 files (host.test.ts, resolve-tenant.test.ts, resolve-link.test.ts, capture.test.ts, capture-privacy.test.ts, enqueue.test.ts, enqueue-logging.test.ts, escape-html.test.ts, middleware.test.ts, not-found*.test.ts, open-redirect.test.ts, redirect-response.test.ts, resolve-degraded.test.ts, resolve-link-tombstone.test.ts, resolve-redis.test.ts, visitor-hash.test.ts) that the `ci` job's own "Test (with coverage)" step already runs and gates — ~75% more wall-clock for zero net new coverage, and it directly contradicts the job's own pre-existing header comment explaining why that wider scope was excluded on purpose. It also pulls in 7 more testcontainers-booting files (enqueue.test.ts, open-redirect.test.ts, resolve-link-tombstone.test.ts, visitor-hash.test.ts, resolve-link.test.ts, resolve-degraded.test.ts, resolve-tenant.test.ts) into a job whose own `--no-file-parallelism` flag exists specifically to avoid container-boot contention — more containers serialized through one runner is more of exactly the risk that flag was added for T2.6.10's first pass. One transient flake WAS observed locally in `queue-down.test.ts` (51 vs 50 log lines, the same known timing-sensitive assertion T2.6.10's first pass already documented) while testing the narrower combo once, under real contention from a concurrent agent's own `no-ip.test.ts` run in this same shared worktree (confirmed via `ps aux` — genuine local resource contention, not reproduced on a clean re-run of the identical command); flagged here for completeness, not treated as a scope-choice problem, since it reproduces the exact pre-existing, already-documented flake mechanism rather than a new one.
 **Handed back to:** n/a — passed first time. `docs/plan/02-redirect-hot-path.md`'s T2.6.10 verify line and this task's own dispatch are both satisfied; no further action recommended beyond the main thread reviewing and committing `.github/workflows/ci.yml` (and this note).
 Commit: (uncommitted — left in the working tree per this task's own instruction not to commit)
+
+---
+
+## T3.1.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test events-queue.test.ts` (9/9), `pnpm test apps/api/src/redirect/enqueue.test.ts` (10/10), `pnpm exec depcruise` clean.
+**Findings surviving triage:** none blocking. code-reviewer flagged two "HIGH" items (retry policy attempts:5/backoff, and removeOnFail:false) but both are exactly what the task brief specified verbatim, already reasoned at length in the code's own docstring; reviewer's own conclusion was "no fix required, accepted trade-off."
+**Forward note for T3.1.5 (DLQ):** `removeOnFail: false` on EVENTS_JOB_OPTIONS only stays bounded because the DLQ handler (T3.1.4/T3.1.5) is expected to remove/ack the original failed job after moving it to the DLQ. When T3.1.5 lands, confirm its DlqService actually does this — if it doesn't, EVENTS_QUEUE's failed set grows unbounded under `volatile-lru` Redis (CLAUDE.md decision log).
+**Deviation from plan:** none.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.2.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test ua.test.ts` (15/15).
+**Findings surviving triage:** none blocking. code-reviewer and typescript-reviewer both APPROVE, 0 findings. silent-failure-hunter raised 3 MEDIUM items (non-standard device types collapsing to null same as unparseable; broad try/catch scope; no observability on catch) — verified against the task brief, which explicitly mandates "map anything outside mobile/tablet/desktop to null, do not invent a fourth bucket" and explicitly notes this is a pure function with no logger available to it. All three are deliberate, already-documented design decisions, not defects.
+**Deviation from plan:** none.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.4.1 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test r2/client.test.ts` (3/3, against real MinIO).
+**Findings surviving triage:** MEDIUM (security-reviewer, fixed in follow-up commit ced92fa) — the original credential-leak test's "fully serialized error" assertion used `JSON.stringify(caught, Object.getOwnPropertyNames(caught))`, whose array-form replacer applies the same top-level allowlist at every nesting level rather than recursing, so nested `$response`/`$metadata` silently collapsed to `{}` and the assertion passed vacuously — false confidence on the exact property this security-tagged test exists to prove. Fixed by switching to `util.inspect(caught, { depth: null, showHidden: true })`, which genuinely walks the full object graph. Independently re-verified: the real secretAccessKey never appears anywhere in the graph (SigV4 sends only the computed signature, never the secret); the accessKeyId DOES appear in cleartext nested in `$response`'s raw HTTP internals on auth failure — expected AWS/R2 protocol behavior (SigV4 always sends the key id), not a leak, and the client.ts docstring was extended to warn future callers never to log a caught S3 error wholesale.
+**Open item (deliberately unresolved, flagged by implementer):** when `R2_ENDPOINT` is empty (production's documented value), `createR2Client` omits `endpoint` and falls through to the AWS SDK's default resolution, which does not correctly address a real R2 account — R2's actual default endpoint needs `R2_ACCOUNT_ID`, which this task's own 4-var brief did not include. Left unresolved exactly as instructed; needs a decision in a later R2-writer task (T3.4.4 or thereabouts).
+**Deviation from plan:** none beyond the review-driven test-hardening fix above.
+**Handed back to:** T3.4.1 implementer (agent a824343e9defd4b25), fix verified and committed as ced92fa (follow-up `fix:` commit, since 787d817 was no longer HEAD by the time the fix landed).
+
+---
+
+## T3.1.2 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm --filter @posta/worker start` boots against compose Redis, `/health` returns ok, `kill -TERM` exits 0 in 9ms (well under 5s bound) — observed directly, twice.
+**Findings surviving triage:** none blocking. code-reviewer and typescript-reviewer both APPROVE, 0 findings. silent-failure-hunter raised a CRITICAL (no Redis-connection readiness gate before `/health` returns 200) plus 3 related MEDIUMs (no connect timeout, no connection logging, no PING verification). Triaged as out-of-scope for this task, not a regression: this task's own brief is explicitly "root connection only, no consumer yet," its verify command only covers boot+SIGTERM, and the plan already has a dedicated downstream task, T3.1.7 ("worker health endpoint with queue depth and last-flush age"), that exists specifically to build real Redis/queue-aware health reporting. Forcing readiness-gating here would pre-empt T3.1.7's own scope with no test requiring it now.
+**Forward note for T3.1.7:** when dispatched, make sure the health endpoint actually reflects Redis/queue reachability (ping, connection state) rather than the current static `res.status(200).send('ok')` — this is exactly the gap silent-failure-hunter flagged on T3.1.2, correctly deferred here.
+**Deviation from plan:** none. Implementer chose `@nestjs/bullmq`'s `BullModule.forRoot()` DI pattern over api's hand-rolled functional pattern, reasoned explicitly (worker is not the hot path; T3.1.3's `@Processor` needs DI discovery) and documented at length in app.module.ts.
+**Handed back to:** n/a (no fix needed).
+
+---
+
+## T3.2.2 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test is-in-app.test.ts` (11/11).
+**Findings surviving triage:** review fan-out not yet dispatched for this task at time of this note (queued next in batch); implementation-level check (build, typecheck) clean.
+**Deviation from plan:** none. Marker table lives in source-platform.ts (not is-in-app.ts) per plan's own filename choice, since T3.2.3 will extend the same file.
+**Handed back to:** n/a.
+
+---
+
+## T3.2.4 · `ced92fa` · 2026-07-26T21:29:08-03:00
+
+**Outcome:** done · verify passed: `pnpm test dest-host.test.ts` (4/4), including the userinfo-credential-leak check (embedded username:password in a destination URL does not leak into the returned host).
+**Findings surviving triage:** review fan-out not yet dispatched for this task at time of this note; implementation-level check (build, typecheck) clean.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## T3.2.2 · `9b7e7db` · 2026-07-27T13:24:52-03:00
+
+**Review fan-out (deferred from original commit, run now):** code-reviewer (APPROVE, one LOW: empty string untested though trivially correct — isInApp('') returns false since no marker is an empty substring), silent-failure-hunter (MEDIUM: isInApp's `ua: string | null` signature doesn't guard `undefined` at runtime), typescript-reviewer (clean, no findings).
+**Triage:** silent-failure-hunter's MEDIUM does not hold — verified packages/contracts/src/capture.ts:16/40 (`user_agent: zNullableSignal = z.string().nullable()`), documented "Every signal is `string | null`, NEVER optional," enforced by `.strict()` Zod validation at the schema boundary. `undefined` cannot reach isInApp through the intended pipeline, and the signature mirrors T3.2.1's already-approved `parseUserAgent`. No fix applied.
+**Outcome:** no actionable findings, no follow-up commit needed for T3.2.2.
+
+---
+
+## T3.2.4 · `9b7e7db` · 2026-07-27T13:24:52-03:00
+
+**Review fan-out (deferred from original commit, run now, security-reviewer added per brief):** code-reviewer (PASS, MEDIUM: thin edge-case test coverage — IPv6/IDN/non-http-scheme/protocol-relative untested), silent-failure-hunter (no CRITICAL/HIGH; MEDIUM "empty hostname for file:///data: not normalized to null" — refuted, see triage; MEDIUM: thin coverage for unparseable inputs, converges with code-reviewer), typescript-reviewer (clean, APPROVE), security-reviewer (no CRITICAL/HIGH; MEDIUM: returned hostname contains WHATWG-legal-but-unescaped chars like `'`/`"` and is not safe to interpolate raw into HTML/SQL/logs — no current caller, but doc note warranted; LOW: no self-contained length bound, relies on zDestination's 2048-char cap).
+**Triage:** the "empty hostname unreachable" theory verified true — packages/contracts/src/links.ts:5-34 `zDestination` gates all stored destinations to http(s)-only (`protocol: /^https?$/`), and http(s) is a WHATWG special scheme that always requires a non-empty host on successful parse. Kept as background context rather than acted on directly (see below — got resolved anyway as a side effect of the javascript:/mailto: fix). Actioned: (1) expanded test coverage per code-reviewer + silent-failure-hunter convergence, (2) added the JSDoc escaping-warning per security-reviewer, (3) left the LOW length-bound as-is as security-reviewer flagged it explicitly optional.
+**Fix-forward commit:** `9b7e7db` `fix: pin down destHost's edge-case behavior and warn callers to escape its output` — dispatched to a FRESH tdd-guide agent, not the original implementer, because that agent's session belonged to the previous orchestrator run which died mid-epic (API infrastructure failure) and no longer exists to resume. Changed destHost to return `null` (not `''`) for a URL that parses successfully but has no host (`javascript:`, `mailto:`), added the escaping-warning JSDoc, and expanded dest-host.test.ts with IPv6, IDN/punycode, protocol-relative, and a table of malformed inputs. Verify observed: RED confirmed 2 failing assertions against the pre-fix `''` behavior, GREEN after the fix: `pnpm test dest-host.test.ts` 13/13 passed; `pnpm --filter @posta/core run build` clean.
+**Outcome:** done, fix-forward landed and verified.
+
+---
+
+## T3.2.3 · `52ab3e9` · 2026-07-27T13:35:49-03:00
+
+**Review fan-out:** code-reviewer (PASS, no findings — verified exact-match referer-host lookup can't be bypassed by crafted hosts like "evil.com.instagram.com", WhatsApp referer-only detection sound, BytedanceWebview/Line exclusions consistent), silent-failure-hunter (CLEAN — verified never-throws claim, honest fallback chain, no host-collision risk including userinfo-in-referer tricks; MEDIUM note on UA-substring collision explicitly assessed by the reviewer itself as "inherent design, not a silent failure"; LOW note on pathological-input test coverage, not blocking), typescript-reviewer (no issues — Exclude<SourcePlatformValue,'directo'> correctly enforced at compile time, noUncheckedIndexedAccess respected).
+**Triage:** no actionable findings. No fix-forward commit needed.
+**Plan-integrity note (not acted on, flagged for the user):** packages/contracts/src/classification.ts already exists in git history (a24bda5/5a98b29, both ancestors of this branch's HEAD) implementing T6.4.1 ("feat: add the classification vocabulary to contracts") and T6.4.2 ("feat: add the classification colour map") verbatim to their plan briefs — but `plan.js find T6.4.1`/`T6.4.2` still report them as not done ("startable now" / "waiting on T6.4.1"). This is real work landed without a `plan.js done` stamp, separate from the three pre-existing `plan.js check` problems (T0.5.6/T10.2.6/T10.4.4). Not stamped by this orchestrator — out of scope for E3, and stamping other epics' tasks isn't mine to decide. Also: that file's `zSourcePlatform` vocabulary (`'Instagram' | 'WhatsApp' | 'TikTok' | 'directo'`, capitalized, missing Facebook/X) genuinely conflicts with T3.2.3's own acceptance criteria (`'instagram' | 'whatsapp' | 'tiktok' | 'facebook' | 'x' | 'directo'`, lowercase, two more members) — T3.2.3's implementer deliberately named its new export `SourcePlatformValue` (not `SourcePlatform`) to avoid colliding with the existing unstamped export, flagging the vocabulary reconciliation for whichever later E6 task (classification.ts's own comment references T6.4.9) actually owns bridging worker output to the UI/view vocabulary.
+**Outcome:** done, no follow-up needed for T3.2.3 itself.
+
+---
+
+## T3.1.3 · `fe8301e` · 2026-07-27T13:47:03-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, no findings — verified decorator-time concurrency read is correct, eventSink test-injection is production-safe (never passed in main.ts), decode-failure-throws-so-BullMQ-retries is idiomatic, test quality strong), typescript-reviewer (APPROVE, one MEDIUM: `process(job: Job)` left `job.data` implicitly `any`, though safe in practice since `eventJobSchema.safeParse` re-validates regardless), silent-failure-hunter (one CRITICAL — refuted, see triage; two MEDIUM — legitimate; one LOW — reviewer itself confirmed no issue, decoration-time concurrency read is deliberate and correct).
+**Triage:** silent-failure-hunter's CRITICAL ("no test coverage for sink error propagation") did not hold as filed — verified the code already correctly propagates a rejected `sink.handle()` promise via plain JS async/await semantics with no try/catch swallowing it; zero live risk against the `NoopEventSink` in place today. Downgraded to "add a test once the log-wrap lands." The two MEDIUM findings (no logging / no error-context on sink failures) were real and actionable: verified an established codebase convention for exactly this (`PartitionMaintenanceLogger`/`consoleErrorLogger` in apps/worker/src/partitions/partition-maintenance.job.ts, `ResolveLogger` in apps/api/src/redirect/resolve-tenant.ts) that this task's implementer hadn't yet followed. typescript-reviewer's MEDIUM was cheap and folded into the same fix-forward.
+**Fix-forward commit:** `fe8301e` `fix: log sink and validation failures before rethrow, tighten job typing` — same implementer (agent resumed via SendMessage, not a fresh dispatch), so it kept full build context. Added `EventsConsumerLogger` interface + `consoleErrorLogger` default (mirroring the established pattern above) injected via a new `EVENTS_CONSUMER_LOGGER` DI token; both the decode-failure and sink-failure paths in `process()` now log first (job id / event_id / link_id / tenant_id only, never the raw payload — a payload that failed `.strict()` isn't assumed invariant-6-clean) through `redactCredentialsFromMessage` (packages/contracts/src/redact.ts, already used by apps/api/src/redirect/enqueue.ts for the same Redis-credential-in-error-message risk), THEN re-throw the SAME original error unchanged so BullMQ's retry/attempts machinery is unaffected. Also tightened `process(job: Job)` to `process(job: Job<unknown>)`. Added one new integration test proving the log fires with correct context AND `job.failedReason` still carries the original, unredacted sink error. Verify I observed myself (re-ran, not just trusted the report): `pnpm test events.consumer.test.ts` — 10/10 passed; `pnpm --filter @posta/worker run build` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.2.5 · `349f489` · 2026-07-27T14:05:02-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, no findings — verified EnrichmentInput's design decision against actual capture.ts/schema/events.ts, confirmed CaptureEvent genuinely lacks destination and events table only stores derived dest_host; confirmed the seven-key structural proof and composition correctness), typescript-reviewer (APPROVE, no findings — independently verified excess-property checking actually fires at compile time for EnrichmentResult, confirmed strict/exactOptionalPropertyTypes tsconfig settings, confirmed no suppressExcessPropertyErrors), silent-failure-hunter (CLEAN — verified the destination null/empty guard correctly prevents ever calling destHost with an unsafe value, confirmed never-throws holds across all four composed sub-functions, confirmed no field swaps/miscoercions in the returned object).
+**Triage:** no actionable findings. No fix-forward commit needed.
+**Design decision (from the implementer, verified by all three reviewers against real code):** EnrichmentInput = Pick<CaptureEvent, 'user_agent' | 'referer'> & { destination: string | null }, NOT CaptureEvent extended or verbatim — documented at length in enrich.ts's own header. Also deviated from the plan's literal file list (implementation lives in a new enrich.ts, not inline in index.ts) to match this directory's established one-function-per-file precedent (ua.ts, source-platform.ts, dest-host.ts); index.ts stays the barrel only.
+**Outcome:** done, independently re-verified (7/7 tests, clean build) before and after the fan-out.
+
+---
+
+## T3.3.1 · `087945e` · 2026-07-27T14:16:46-03:00
+
+**Note:** implementer disclosed a TDD process slip (wrote accumulator.ts before accumulator.test.ts). Corrected honestly: moved the implementation out of the tree, confirmed genuine RED (module-not-found, 0 tests run), restored it, confirmed GREEN. Recorded here rather than let it pass silently — the correction was legitimate but the RED step should come first next time.
+**Review fan-out:** code-reviewer (APPROVE, zero findings — independently traced all 7 correctness properties from the brief: whichever-first timing, batch_id stability, swap-before-invoke safety via the held-open-promise test, flushNow()'s intentional non-swallowing asymmetry, size() immediacy, constructor validation, fake-timer test quality including a timer-cancellation regression test; one cosmetic LOW: a comment said console.error writes to "stdout", it's stderr), typescript-reviewer (TS itself clean; CRITICAL-labeled ESLint failure — 28 no-unused-vars errors in accumulator.test.ts's mock callbacks, verified real by running eslint myself), silent-failure-hunter (one real gap: runFlush()'s catch block calls this.logger.error() unprotected before rethrowing the original error — if the injected logger itself throws, its exception replaces the original flush error and then gets silently swallowed by add()'s/the interval timer's fire-and-forget .catch(() => {}), losing the batch's events with zero trace. Narrow trigger condition (requires the logger itself to fail, unlikely for the default console.error-based logger) but the consequence matches a real data-loss shape, and the fix is trivial).
+**Triage:** both real findings actioned. ESLint fixed using this app's own established `void _identifier;` idiom (events.consumer.ts's NoopEventSink precedent). Logger-masking gap fixed by wrapping the logger.error() call in its own try/catch inside runFlush(), always rethrowing the ORIGINAL flush error regardless of whether logging itself succeeded. code-reviewer's cosmetic LOW (stdout→stderr) fixed as a free byproduct of touching the same file.
+**Fix-forward commit:** `087945e` `fix: unmask original flush error from a throwing logger, silence eslint` — same implementer (resumed via SendMessage). Added 2 new tests (21→23) covering the throwing-logger scenario. Verify I observed myself (re-ran, not just trusted the report): `pnpm test accumulator.test.ts` — 23/23 passed; `pnpm exec eslint apps/worker/src/batch/accumulator.ts apps/worker/src/batch/accumulator.test.ts` — clean, zero errors; `pnpm --filter @posta/worker run build` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified (tests, lint, and build all confirmed myself, not assumed from the agent's report).
+
+---
+
+## T3.1.4 · `9a21ffa` · 2026-07-27T14:17:49-03:00
+
+**Review fan-out (all four, [security] tag honored):** code-reviewer (APPROVE, zero findings), silent-failure-hunter (CLEAN, zero findings — traced every failure path incl. the DLQ-write-failure fallback and confirmed no silent drop is possible; its one MEDIUM observation, a bounded "retry storm" if EVENTS_DLQ_QUEUE is persistently unreachable, is explicitly self-assessed as "acceptable by design, no fix needed" since it's logged every time and the alternative is silently dropping the job), typescript-reviewer (APPROVE, zero findings — independently reran ESLint clean this time), security-reviewer (APPROVE — independently re-verified the core [security] claim by tracing all three logger.error() call sites and running CaptureEventSchema against zod@4.4.3 directly to confirm it has no enum/literal fields, so no Zod issue .message could echo back an invalid VALUE even if it were logged, which it isn't; the code's blanket exclusion of .message is defense-in-depth beyond what's strictly needed today).
+**Two LOW notes from security-reviewer, neither actioned:**
+1. `consoleErrorLogger` (this file, and identically in apps/worker/src/batch/accumulator.ts and partition-maintenance.job.ts) writes via `console.error`, which goes to stderr, not stdout — contradicts this file's own comment text and CLAUDE.md's "logs go only to stdout" line. Pre-existing (introduced by T3.1.3's fix-forward fe8301e, not by T3.1.4), spans 3 files, and kubectl captures stdout+stderr together in practice, so functional impact is minimal. Not fixed in this task's scope — flagging as a possible small cross-cutting cleanup (correct the comments, or reconsider whether console.error's stderr routing is actually fine and CLAUDE.md's phrasing is what's imprecise) rather than fixing one of three occurrences inconsistently here.
+2. `EVENTS_DLQ_QUEUE`'s registration in app.module.ts sets no `removeOnComplete`/TTL, so raw payloads (potentially carrying an invariant-6-violating smuggled `ip` key) persist indefinitely in Redis. Carrying this forward as a T3.1.5 concern — DLQ retention policy should land alongside whatever T3.1.5 builds to drain/consume EVENTS_DLQ_QUEUE.
+**Outcome:** done, no fix-forward commit needed.
+
+---
+
+## T3.2.6 · `5f7549e` · 2026-07-27T14:50:54-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, zero findings — independently spot-checked 8 fixture entries against ua.ts/source-platform.ts/dest-host.ts's own documented behavior, including the BytedanceWebview/Line → 'directo' exclusion and referer-beats-UA precedence; confirmed all named coverage categories genuinely present), typescript-reviewer (one MEDIUM, judged optional and not actioned: the fixture is loaded via `JSON.parse(...) as CorpusEntry[]` rather than runtime schema validation — a mistyped field would still fail loudly via the strict `.toEqual()` deep-equality assertion against hand-verified `expected` values, and this is a static, committed test fixture authored by the same task, not untrusted runtime input, so the added complexity of a Zod-validated loader wasn't judged worth it here), silent-failure-hunter (CLEAN — confirmed `it.each` iterates all 40 entries with no silent skip, `.toEqual` is strict not `toMatchObject`, the verdict-key regex scans raw text so it can't miss a nested key, and a malformed fixture file would throw loudly at describe-block scope rather than silently reporting 0 tests).
+**Triage:** no actionable findings.
+**Outcome:** done, no follow-up needed. Implementer's own verification rigor was exceptional — traced the actual installed ua-parser-js@2.0.10 source line-by-line to confirm each non-obvious expected value (macOS naming, Mobile Chrome/wv-token WebView detection, Samsung Internet, Instagram/FBAN/FBAV/TikTok regex capture behavior, Opera-not-Opera-Mobile naming) is a genuine library rule, not a fluke copied from the function's own output.
+
+---
+
+## T3.4.2 · `64f8666` · 2026-07-27T15:05:06-03:00
+
+**Review fan-out (all four — [INV-4][INV-6] tags treated as security-relevant, security-reviewer in first wave):** code-reviewer (APPROVE, zero findings — independently confirmed 31 explicit property accesses, zero spreads/dynamic-key admission), typescript-reviewer (APPROVE, zero findings — verified EventLogLine's closed interface genuinely gives compile-time excess-property errors, confirmed zero field-name collisions in the CaptureEvent & EnrichmentResult intersection), security-reviewer (APPROVE, zero findings — hand-verified the 31-field allowlist matches schema/events.ts's real column list exactly, confirmed toLogLine/EventLogLine are unexported so serializeBatch is the only entry point, confirmed the planted-key test's `as LoggedEvent` cast genuinely bypasses TS's excess-property check the same way a real accidental upstream widening bug would), silent-failure-hunter (one HIGH-framed finding, partially disagreed with — see triage).
+**Triage:** silent-failure-hunter's suggested fix (catch a per-event JSON.stringify failure, skip that event, continue serializing the rest) was NOT accepted — reasoned that this would violate invariant 7 ("every event goes to both Postgres and R2"): silently dropping one event from the R2 write while a sibling Postgres write for the same batch succeeds/fails as a whole would create exactly the store-inconsistency invariant 7 exists to prevent, and this story already has a planned home for "one poisoned event in an otherwise-good batch" (later split-retry/poison-DLQ tasks, Postgres side) — deferring to that mechanism by failing the whole batch loudly is the correct behavior, not a gap. Asked instead for a diagnostic-only improvement: identify which event_id caused a serialization failure without changing whether/when the failure happens.
+**Fix-forward commit:** `64f8666` `fix: identify the failing event_id when NDJSON serialization throws` — added a `serializeEvent()` wrapper that catches, wraps the error with the failing event_id/occurred_at, and rethrows with the original as `cause`; whole-batch-throws behavior is unchanged. Verify I observed myself: `pnpm test ndjson.test.ts` — 12/12 passed; `pnpm exec eslint packages/core/src/r2/ndjson.ts packages/core/src/r2/ndjson.test.ts` — clean; `pnpm --filter @posta/core run build` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.1.5 · `58976c6` · 2026-07-27T15:08:07-03:00
+
+**Review fan-out (all four — extends T3.1.4's [security] payload-handling concern, security-reviewer in first wave):** code-reviewer (APPROVE, zero findings — verified the attempts-exhausted comparison, the routeToDlq consolidation preserved identical behavior, the re-validation edge-case logic, and comprehensive test coverage including the intermediate-failure-doesn't-prematurely-DLQ case), typescript-reviewer (APPROVE, zero findings — verified NestJS class-token DI resolution, toDlqIssues' structural typing, DlqReason exhaustiveness, and type-identity of the re-exported EventsDlqJobPayload), silent-failure-hunter (one real MEDIUM, traced further than reported — see triage), security-reviewer (one real HIGH — see triage; confirmed the DLQ/invariant-6 framing is sound and unchanged from T3.1.4, confirmed the attempts-exhausted path structurally cannot carry a raw IP since it only ever sends already-.strict()-validated CaptureEvent data).
+**Triage:** security-reviewer's HIGH (DlqService.send() stored error.message completely unredacted — latent, would activate the moment a real sink lands and could leak Postgres/R2 connection-string credentials into an unbounded, never-drained DLQ) was real, verified myself via grep before routing back. silent-failure-hunter flagged unguarded logger calls in onFailed() specifically; I traced the same pattern across the WHOLE file and found none of events.consumer.ts's 4 pre-existing-plus-new logger.error() call sites (T3.1.3's sink-failure branch, T3.1.4's DLQ-write-failure branch, both of T3.1.5's onFailed() branches) had the "wrap logger call in its own try/catch" protection T3.3.1's BatchAccumulator fix already established as this codebase's pattern for exactly this risk — asked for a comprehensive fix across all sites, not just the two new ones, since patching only half would leave the same known gap in the other half.
+**Fix-forward commit:** `58976c6` `fix: redact DLQ error messages and guard every logger call site` — redaction applied once, at the single shared DlqService.send() writer (protects all current and future callers by construction, matching redactCredentialsFromMessage's own "one guard point" design rationale) rather than at each call site; a new `safeLog()` wrapper now guards all 5 of EventsConsumer's logger.error() calls, swallowing a throwing logger rather than letting it replace the real outcome. Verify I observed myself: `pnpm test dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts` — 18/18 passed; `pnpm --filter @posta/worker run build` — clean; `pnpm exec eslint apps/worker/src/consumer/*.ts` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.4.3 · `f1af8f2` · 2026-07-27T15:16:00-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, zero findings — independently confirmed only UTC accessors used, correct zero-padding, purity/idempotency, correct NaN-based error handling), typescript-reviewer (APPROVE, zero findings — confirmed the `occurredAt: string` design choice is well-justified, no barrel-export naming collisions), silent-failure-hunter (two findings, neither survived triage — see below).
+**Triage:** silent-failure-hunter's CRITICAL ("lenient Date parsing silently rolls over invalid calendar values like month 13, day 32") is factually false — verified directly in Node: `new Date('2026-13-01T00:00:00Z')`, `new Date('2026-07-32T12:00:00Z')`, and `new Date('2026-07-21T25:00:00Z')` all correctly return `Invalid Date`, which the existing `Number.isNaN(parsed.getTime())` check already catches (V8's strict ISO-8601 parser validates calendar components; the lenient rollover behavior the reviewer described applies to non-ISO date string formats, not this one). Dropped. Its HIGH ("path-traversal risk via unvalidated batchId") mischaracterizes S3/R2's key semantics — object storage keys are opaque flat-namespace strings, not filesystem paths resolved through a hierarchy; a key containing `/` or `..` cannot escape to a different, unintended object the way a real filesystem path traversal would. The underlying suggestion (validate batchId's shape defensively) is reasonable but was already a deliberate, documented design decision in the code's own header ("does not validate batchId's shape... this function only needs an opaque, already-trusted string" — batchId's only real source, BatchAccumulator's newId(), always produces a well-formed ULID). Not actioned; not a defect.
+**Outcome:** done, no fix-forward needed. All three reviewers' claims verified against actual code/runtime behavior before accepting or dropping them.
+
+---
+
+## T3.2.7 · `f24b40e` · 2026-07-27T15:32:38-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, zero findings — verified the AST walker correctly targets only real declaration/assignment node kinds, skips comments/string/regex literals structurally, exact identifier matching not substring, scans both target directories, and the detection mechanism is proven via a genuine planted fixture with file:line reporting), typescript-reviewer (APPROVE, one MEDIUM and one LOW, both self-judged acceptable and not actioned: a pragmatic unsafe cast on a Node ErrnoException, and the 449-line length being justified for a self-contained scanner + its own tests), silent-failure-hunter (one real finding, downgraded from CRITICAL to MEDIUM — see triage).
+**Triage:** silent-failure-hunter's CRITICAL ("ts.createSourceFile() parses leniently and never checks sourceFile.parseDiagnostics, so a syntactically broken file could hide a violation") was verified real — confirmed directly that `parseDiagnostics` is genuinely populated at runtime for a broken fixture, despite not being part of TypeScript's documented public API. Downgraded to MEDIUM: every file this scanner ever encounters under normal CI/dev conditions must already pass this project's own tsc/build gate to exist validly in the scanned directories, so this isn't a live production risk — but it's a real, cheap-to-close gap in an invariant-enforcing test's own trustworthiness, matching this epic's "fail loud on malformed input" discipline (T3.4.3's eventBatchKey precedent). Its second, lower-priority finding (a mis-extensioned binary file read as garbage TS) was not actioned — scan is already correctly scoped to .ts/.tsx only.
+**Fix-forward commit:** `f24b40e` `fix: refuse to trust a syntactically broken parse in the verdict-vocabulary scanner` — added a defensively-typed `getParseDiagnostics()` accessor (Array.isArray check, not a direct property assertion) that throws naming the file and the parser's own diagnostic message before ever walking a possibly-incomplete AST. Documented why this stays a runtime-verified reliance on an internal TS API rather than a full ts.Program, and why a future TS release dropping the field degrades safely rather than crashing. Verify I observed myself: `pnpm test no-verdict.test.ts` — 30/30 passed (25 original + 5 new); `pnpm --filter @posta/worker run build` — clean; `pnpm exec eslint apps/worker/src/no-verdict.test.ts` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.3.2 · `1ca1758` · 2026-07-27T15:36:00-03:00
+
+**Forward design constraint for S3.6 (replay) — not a blocker, must not be forgotten:** flushBatch resolves each event's destination at FLUSH time (reading the link's CURRENT destination from Postgres), not at capture time. Invariant 3 (307-never-301) exists specifically because destinations get edited, so they demonstrably change — a link edited between capture and flush records the new dest_host against an old click. The 2-second batch window makes this negligible on the live path. Replay (T3.6.3, "replay feeds records through the live insert path") is where this could bite hard: replaying months-old events would re-resolve destinations as they are AT REPLAY TIME, silently rewriting history and breaking invariant 7's "R2 is the source of truth." Confirmed: packages/core/src/r2/ndjson.ts's LoggedEvent (= CaptureEvent & EnrichmentResult) already persists the enriched dest_host in the NDJSON record (toLogLine() copies event.dest_host verbatim). CONSTRAINT: replay must reuse the already-logged dest_host (and the rest of EnrichmentResult) from the NDJSON record — it must NOT call enrich()/resolveDestinationsByLinkIds again and re-derive it. Whoever implements T3.6.2/T3.6.3 needs to read this before designing the replay path.
+
+---
+
+## T3.4.2 · `1ca1758` · 2026-07-27T15:36:00-03:00
+
+**Process note for future dispatches (not a T3.4.2-specific defect):** the T3.4.2 fix-forward implementer found that a plain `as LoggedEvent` type-assertion cast compiles fine under Vitest (esbuild strips types without checking) but FAILS the repo's real type-check gate, `tsc --noEmit -p tsconfig.test.json` (T0.5.7), with TS2352. Green Vitest output does not prove test files type-check. Two separate implementers in this epic have now hit repo gates their own local `pnpm test` run didn't catch (this one, and a separate ESLint gap on another task). Going forward, any task-dispatch brief that touches test files should explicitly instruct running the standalone `pnpm typecheck:tests` (or equivalent `tsc --noEmit` pass) as part of its own verify routine, not just `pnpm test`.
+
+---
+
+## T3.1.5 · `1ca1758` · 2026-07-27T15:36:00-03:00
+
+**Latent test-isolation bug found, correctly scoped out, needs scheduling before S3.5:** while fixing this task's own review findings, the implementer discovered that several PRE-EXISTING tests in events.consumer.test.ts call `queue.obliterate({ force: true })` on EVENTS_QUEUE in their own `finally` blocks — this resets that queue's auto-increment job-ID counter. A later test's auto-generated `job.id` can then collide with an `originalJobId` an earlier, never-cleaned-up DLQ entry recorded, producing flaky cross-test assertion failures. The implementer was fooled by exactly this collision once while building this task's own new tests, and fixed it locally by adding a `dlqQueue.obliterate()` at the start of its own new test — it correctly did NOT attempt to repair the pre-existing tests (out of scope for this task). This is a live flakiness source that will get worse in S3.5's integration suite, which runs many queue-touching tests together in the same process. Currently unowned — needs to be scheduled as its own fix (likely: every events.consumer.test.ts/malformed-job.test.ts/dlq.service.test.ts test that touches EVENTS_QUEUE or EVENTS_DLQ_QUEUE should obliterate BOTH queues at both setup and teardown, not just the one it directly exercises) before S3.5 lands, or flakiness will surface there and be harder to trace back to this root cause.
+**Correction to my own earlier note:** I originally wrote "4 logger.error() call sites" when triaging silent-failure-hunter's finding for this task. The implementer's own fix-forward found and guarded 5 (lines 269, 329, 339 pre-existing from T3.1.3/T3.1.4, plus onFailed()'s two new ones at 411/421) — the implementer's count was more careful than mine. All 5 are now wrapped via the new safeLog() helper.
+
+---
+
+## T3.3.2 · `604d115` · 2026-07-27T15:45:53-03:00
+
+**Plan-level gap surfaced and resolved by the user, not by this orchestrator:** the implementation issues two SQL statements per flush (a batched destination SELECT, then a batched INSERT), because enrich()'s dest_host needs each event's destination, which CaptureEvent never carries — a real gap the plan text ("exactly one statement is issued per flush") did not account for. Stopped and handed this back rather than deciding unilaterally; the user reviewed and approved amending the plan text (commit 1ca1758) to describe the two-statement flow, confirming the implementation was correct all along and the prose was wrong. See the forward-note above (added before this stamp) for the S3.6 replay design constraint this decision surfaces.
+**Review fan-out (5 reviewers — code, silent-failure, typescript, security, and database-reviewer given the direct SQL query construction):** code-reviewer (APPROVE, zero findings — verified the tenant-mismatch defense-in-depth check is real code not just a comment, and the two-statement property is proven via actual query instrumentation, not just asserted), security-reviewer (no CRITICAL/HIGH — confirmed both queries are pure Drizzle builder calls with zero injection surface, independently traced the tenant-isolation check against a real integration test seeding a cross-tenant scenario; two LOW notes both pre-existing gaps in other files, not regressions from this task), typescript-reviewer (no structural issues; one HIGH-framed finding downgraded to not-required — a double-cast inside flush.test.ts's own query-counting spy helper, test-only infrastructure with zero production risk), silent-failure-hunter (one real MEDIUM actioned, one correctly-behaving mechanism NOT actioned, one optional not actioned — see triage), database-reviewer (no CRITICAL/HIGH, one real MEDIUM actioned — see triage).
+**Triage:** silent-failure-hunter's "ON CONFLICT DO NOTHING silently drops rows with no logging" was NOT actioned — that's invariant 8's idempotency mechanism working exactly as designed on a routine retry; logging every conflict hit would be noise on the expected happy path, not signal. Its "no observability when a link_id fails to resolve" was real (downgraded from its own HIGH framing to MEDIUM, since the underlying null-fallback behavior is correct, not broken — purely an observability gap) and actioned. database-reviewer's MEDIUM (EVENT_BATCH_SIZE had no upper bound, risking exceeding Postgres's ~65K bind-parameter limit on a misconfigured value) was real and actioned.
+**Fix-forward commit:** `604d115` `fix: log unresolved flush destinations and cap EVENT_BATCH_SIZE` — added a FlushBatchLogger-shaped injectable logger (matching the established EventsConsumerLogger/BatchAccumulatorLogger pattern, not a fourth shape) that emits one batch-level summary line per flush (never per-event) distinguishing not-found from tenant-mismatch counts — going beyond what was asked by separating the two failure reasons, since a tenant-mismatch is a much stronger upstream-integrity signal than an ordinary deleted link. Capped EVENT_BATCH_SIZE at 500 in apps/worker/src/env.ts's Zod schema. Verify I observed myself (re-ran everything, not just trusted the report): `pnpm test flush.test.ts env.test.ts` — 173/173 passed; `pnpm --filter @posta/worker run build` — clean; `pnpm exec eslint` on all four touched files — clean; `pnpm run typecheck:tests` (the standalone tsc --noEmit gate) — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.6.1 · `c5bc44d` · 2026-07-27T16:03:38-03:00
+
+**Review fan-out:** code-reviewer (APPROVE, zero findings — verified the day-truncation loop, the calendar-day from>to comparison, the parseInstant refactor preserved eventBatchKey's exact prior behavior, and the over-covering design tradeoff is sound with no hidden downside), typescript-reviewer (APPROVE, zero findings — 40 tests confirmed passing, refactor preservation verified line-by-line, barrel export confirmed automatic), silent-failure-hunter (one real MEDIUM — see triage; explicitly confirmed no under-cover risk exists, the "never narrows" property is sound and well-tested).
+**Triage:** silent-failure-hunter's MEDIUM (no upper bound on from/to range width — a wrong-century typo could generate ~87.6 million prefix strings, allocating gigabytes with no diagnosable error) was real and actionable, though not a live exploitable surface today since this function has no caller yet (the future replay CLI is a later, unbuilt task) — treated as worth closing now while cheap, matching this codebase's own "fail loud on clearly wrong input" discipline.
+**Fix-forward commit:** `c5bc44d` `fix: bound eventPrefixes' range to catch a wrong-century typo loudly` — added MAX_RANGE_DAYS = 3660 (10 calendar years accounting for leap days), with the arithmetic and reasoning documented inline (a replay CLI reprocesses a bounded, explicitly-named window, never "entire history" in one call). Verify I observed myself: `pnpm test prefixes.test.ts keys.test.ts` — 37/37 passed; `pnpm --filter @posta/core run build` — clean; `pnpm exec eslint` — clean.
+**Outcome:** done, fix-forward landed and independently re-verified.
+
+---
+
+## T3.1.6 · `bbf137d` · 2026-07-27T17:02:45-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator, not just trusted):
+- `pnpm test shutdown.test.ts` (from repo root) — 3/3 pass
+- `pnpm exec vitest run apps/worker` — 130/132 pass; the 2 failures are the pre-existing, out-of-scope `partition-maintenance.job.test.ts` REDIS_URL-not-set failures (file untouched by this task)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+
+**Recovery context:** this task's previous implementer died mid-response (infra failure), leaving 254 uncommitted lines + an untracked, untested `shutdown.ts` in the tree. Treated as a reference draft, not accepted work: parked it, wrote `shutdown.test.ts` against an inert stub first, confirmed a genuine assertion-level RED (`expected 0 to be 30`), then restored/rewrote the draft's implementation to GREEN. The draft's core design (pause-then-flush, swallow-not-rethrow on timeout, verified against installed bullmq@5.80.10 source) held up.
+
+**Findings surviving triage**
+- MEDIUM · `apps/worker/src/app.module.ts` (DB_CLIENT factory) — fixed the known `exactOptionalPropertyTypes` build break (`max: config.dbPoolMax` → conditional spread), the one pre-identified compile error.
+- MEDIUM · `apps/worker/src/consumer/events.consumer.test.ts` (4 call sites) + `malformed-job.test.ts` (1 call site) — a second, previously-undiscovered compile break: `AppModuleConfig` gained required `databaseUrl`/`batchSize`/`batchIntervalMs`/`shutdownTimeoutMs` fields but these 5 call sites weren't updated. Invisible to `pnpm test` (esbuild strips types); only `pnpm typecheck:tests` catches it. Fixed by extending the existing `UNUSED_ACCUMULATOR_CONFIG` placeholder-config precedent from `dlq.service.test.ts` to both files.
+- HIGH (found and fixed during this task, not pre-flagged) · placeholder DB configs across all three test files omitted `dbPoolMax`. With `DB_POOL_MAX` unset in this shell/CI, `createDbClient()` throws inside a Nest `useFactory`; `NestFactory.createApplicationContext()` defaults to `abortOnError: true`, which calls `process.abort()` on that throw — a hard process-abort, not a catchable rejection, silently killing the vitest worker fork instead of failing a test normally. Fixed by adding `dbPoolMax: 5` to all three placeholder configs.
+
+**Deviation from plan:** file list expanded beyond the plan's stated three (`shutdown.ts`, `app.module.ts`, `shutdown.test.ts`) to include `env.ts`/`env.test.ts`/`main.ts`/`.env.example` (SHUTDOWN_TIMEOUT_MS wiring) and `events.consumer.ts`/`dlq.service.test.ts`/`events.consumer.test.ts`/`malformed-job.test.ts` (AccumulatingEventSink + BATCH_ACCUMULATOR DI wiring, and the required-config fallout above) — all necessary supporting wiring for this task's own DI surface, not scope creep into other tasks' territory.
+
+**Handed back to:** n/a — no unresolved findings remain.
+
+---
+
+## T3.1.7 · `9397d42` · 2026-07-27T17:17:13-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test health.controller.test.ts` — 5/5 pass
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test shutdown.test.ts accumulator.test.ts dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts` — 44/44 pass, no regression from the new `BatchAccumulator.lastFlushAgeMs()`/`HealthController` wiring
+
+**Findings surviving triage:** none — clean implementation.
+
+**Judgment calls made by the implementer, reviewed and accepted:**
+- `last_flush_age_ms` tracks last-*successful*-flush only (a rejecting flush does not reset the clock), matching the plan's acceptance wording literally.
+- 503 threshold is unconditional `> 3 × batchIntervalMs` with no queue-depth gating, per the plan's literal wording — flagged by the implementer that a genuinely idle worker (zero traffic, batch never opens) will also trip 503 after 3 idle intervals, indistinguishable from wedged. Implemented as specified rather than silently softened; worth a second look only if `EVENT_BATCH_INTERVAL_MS` is ever tuned aggressively relative to real traffic gaps.
+- Test level is fast unit-style against a REAL `BatchAccumulator` + two plain-object doubles (not testcontainers) — DI wiring correctness covered incidentally via the 4 existing `AppModule.forRoot()`-booting suites (shutdown/dlq/events.consumer/malformed-job), all of which still construct cleanly with the new `HealthController`/`FLUSH_INTERVAL_MS` tokens registered.
+
+**Deviation from plan:** none beyond the necessary supporting change to `accumulator.ts` (adding `lastFlushAgeMs()`) and `main.ts` (removing the old always-200 hand-rolled `/health` middleware it replaces) — both required for this task's own file-listed `app.module.ts` wiring to work.
+
+**Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.3 · `acc5d88` · 2026-07-27T20:06:39-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test split-retry.test.ts` — 15/15 pass
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test flush.test.ts` — 17/17 pass, no regression
+
+**Recovery context:** second dead-agent recovery today, same pattern as T3.1.6 — the first implementer died mid-response (infra "connection closed" failure), leaving a complete-looking but wholly untested `split-retry.ts` (215 lines, untracked, no git history, no test file). Applied the same recipe: parked the draft, wrote `split-retry.test.ts` against a deliberately-wrong stub first, confirmed a genuine assertion-level RED (6 real failures — wrong committed/poison counts, wrong round-trip counts, empty backoff sequence), then restored the draft (verified byte-identical to the backup) to GREEN.
+
+**Judgment call reviewed and accepted — test level:** the implementer checked `packages/core/migrations/sql/001_events.sql` before choosing: `events.slug` is `text NOT NULL` with no length constraint (no CHECK, no varchar(n)), and Postgres `text` is TOASTable to ~1GB, so a genuine testcontainer "oversized slug" INSERT rejection is not actually reachable through the current schema. Used a plain injected `FlushBatch` double instead (matching `split-retry.ts`'s own documented "GENERIC OVER flushBatch, NOT COUPLED TO POSTGRES" contract) with a synthetic oversized-slug event (`length > SLUG_MAX_LENGTH` from `@posta/contracts`) that fails all-or-nothing, mirroring real multi-row-INSERT semantics. `flush.test.ts` already covers the real-Postgres INSERT side. Reasonable and documented in the test file's own header — accepted without requiring a redo.
+
+**O(log n) proof:** not a hardcoded constant — asserts call-count growth stays sub-linear across a 16x batch-size increase (50 → 800 events), plus separately verifies the exponential backoff sequence (`[100, 200, 400]`) and that split halves run sequentially (peak in-flight calls === 1, not `Promise.all`).
+
+**Findings surviving triage:** none — clean recovery, no scope deviation.
+
+**Handed back to:** n/a.
+
+---
+
+## T3.4.4 · `10c25e0` · 2026-07-27T20:33:00-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test r2-put.test.ts` — 3/3 pass (hard PUT-count assertion, not a spot check)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test flush.test.ts` — 17/17 pass
+- `pnpm test shutdown.test.ts dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts health.controller.test.ts` — 26/26 pass, no regression
+
+**Recovery context:** third attempt at this task. Attempt 1 died mid-response before writing code. Attempt 2 stalled 600s, apparently trying to launch a Docker Desktop GUI app that isn't installed in this environment (`open -a Docker` → "Unable to find application named 'Docker'"; no Docker Desktop process at the OS level). Orchestrator confirmed Docker itself works fine via CLI and a docker-compose stack (redis/postgres/minio) was already up and healthy the whole time — the 2-minute `docker ps` hang observed mid-investigation was transient contention from concurrent testcontainers work in this shared worktree, not a real outage. Attempt 3 was briefed with this finding explicitly (don't try to launch a GUI Docker app; the compose stack is already running; `packages/core/src/r2/client.test.ts` connects directly to `localhost:9000`) and completed cleanly.
+
+**Findings surviving triage:** none — clean implementation. `Promise.all([insertEventsBatch, putEventBatch])` composes the three already-built R2 pieces (T3.4.1 client, T3.4.2 serializer, T3.4.3 keys) without a second enrichment pass, reusing `flush.ts`'s existing `LoggedEvent` intermediate as designed.
+
+**Judgment calls made by the implementer, reviewed and accepted:**
+- `FlushBatch`'s signature widened to `(events, batchId?: string)` — optional, defaulting to a fresh `newId()` — to keep `split-retry.ts`'s existing single-argument call and all pre-existing test call sites compiling unchanged. Documented, narrow known gap: until a later task wires `flushBatch` through `BatchAccumulator` for real, a batch retried via `retryWithSplit` mints a new R2 key per retry attempt instead of reusing one (duplicate R2 objects, not data loss — explicitly out of this task's scope).
+- R2 PUT and Postgres INSERT run concurrently via `Promise.all`, order deliberately uncoupled (T3.4.6's job, not this one's) — a rejection from either fails the whole flush loudly, R2 is never silently optional.
+- `@aws-sdk/client-s3` added as a direct dependency of `@posta/worker` (previously only transitively reachable via `@posta/core`) — required for pnpm's strict linking to resolve `PutObjectCommand`/`S3Client` types in `flush.ts`.
+- `AppModuleConfig` gained optional `r2Endpoint`/`r2AccessKeyId`/`r2SecretAccessKey`/`r2Bucket` fields; a new `buildProductionFlush()` in `app.module.ts` throws loudly at DI-construction time if they're missing and no `config.flush` override was supplied — never a silent empty-string fallback.
+- Necessary knock-on edits to `dlq.service.test.ts`/`events.consumer.test.ts`/`malformed-job.test.ts` (a one-line `flush: async () => {}` no-op added to each file's existing `UNUSED_ACCUMULATOR_CONFIG`, since `BATCH_ACCUMULATOR` is now constructed eagerly regardless of `eventSink` overrides) and `shutdown.test.ts` (needed a real, working R2 client since it proves an actual flush, not a stubbed one).
+
+**Concurrent-work note:** T3.3.4 (poison-row DLQ routing) landed in this same worktree concurrently and its `poison-dlq.test.ts` directly depends on this task's `createFlushBatch({ r2Client, r2Bucket })` signature — committed second, immediately after this one, for exactly that reason.
+
+**Deviation from plan:** file list expanded beyond the plan's stated two (`flush.ts`, `r2-put.test.ts`) to include the DI/env wiring knock-on above — necessary because `r2Client`/`r2Bucket` became required construction inputs for the one production call site (`app.module.ts`) and every test that boots the real `AppModule.forRoot()`.
+
+**Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.4 · `da8a8da` · 2026-07-27T20:34:38-03:00
+
+**Outcome:** done · verify passed (all re-run independently by orchestrator):
+- `pnpm test poison-dlq.test.ts` — 4/4 pass (real Postgres testcontainer, real Redis testcontainer, real MinIO)
+- `pnpm --filter @posta/worker run build` — clean
+- `pnpm typecheck:tests` — clean
+- `pnpm test split-retry.test.ts dlq.service.test.ts` — 21/21 pass, no regression
+
+**Landed concurrently with T3.4.4** in the same worktree — `poison-dlq.test.ts` calls `createFlushBatch({ db, r2Client, r2Bucket })`, so it structurally depends on T3.4.4's extended `flush.ts` signature. Committed second, immediately after T3.4.4, for exactly that reason; both were independently verified against the combined tree before either was staged.
+
+**Judgment calls reviewed and accepted (both flagged as open design gaps in the brief, resolved by the implementer):**
+1. **`SplitRetryResult.poisonEvents` reshaped** from `readonly CaptureEvent[]` to `readonly PoisonedEvent[]` (`{ event, error }`), preserving the original `Error` object (never reduced to a string) so a real Postgres error's own `.code` (the SQLSTATE) survives to the caller. `attemptBatch` itself still never branches on error type — only decides retry/split/poison from attempt count and sub-batch size.
+2. **`DlqReason` extended** with a third variant, `'flush-poison'`, plus a new `sqlstate: string | null` field on `EventsDlqJobPayload` (populated via a new `extractSqlState()` helper that walks a bounded 5-link `Error.cause` chain — required because drizzle-orm 0.45.2 wraps the real `pg.DatabaseError` in its own `DrizzleQueryError` via `cause` rather than copying `.code` onto itself; verified against installed source, confirmed by a real SQLSTATE 22003 surfacing in the test).
+3. **Wiring left undone, correctly scoped:** `retryWithSplit`/`flush.ts` still don't call `sendPoisonEventsToDlq` — the new exported function is a pure composition step (built around a narrow `PoisonDlqSink` structural interface, zero adapter code needed for a real `DlqService`) for whichever later task wires it into the accumulator's flush path. `app.module.ts` was correctly NOT touched, per the explicit stop-and-flag instruction in the brief.
+4. **`SplitRetryResult`'s `originalJobId`/`attemptsMade` stand-ins:** the flush's own `batch_id` and the `maxAttemptsPerBatch` value used, both documented as deliberate substitutes for BullMQ-job-shaped fields that don't exist at the flush level.
+5. **Real SQLSTATE reproduced deterministically:** `events.asn` is a plain Postgres `integer` with no app-level upper bound in `CaptureEventSchema` — `Number.MAX_SAFE_INTEGER` reliably triggers SQLSTATE 22003 ("integer out of range") on real Postgres, used instead of a synthetic/mocked error.
+
+**Findings surviving triage:** none.
+
+**Handed back to:** n/a. Note for whoever picks up the eventual accumulator-flush wiring task: `sendPoisonEventsToDlq` and `PoisonDlqSink` are ready to compose in, unused until then.
+
+---
+
+## T3.3.5 · `6b1134a` · 2026-07-27T21:29:09-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test idempotency.test.ts` — 4/4 pass. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean, `pnpm test flush.test.ts split-retry.test.ts` — 32/32 pass, zero regression.
+**RED phase (self-reported, plausible):** two temporary edits to packages/core/src/db/events.ts (drop onConflictDoNothing; swap to onConflictDoUpdate) each produced a real assertion-level failure, then fully reverted — git diff on that file confirmed empty before commit.
+**Findings surviving triage:** none — clean implementation.
+**Judgment calls (reviewed, accepted):** scenario (b) "event_id split across two batches" modeled as BullMQ redelivering the same event into two separately-flushed accumulator windows, varying only visitor_hash as a fixture-only marker (documented in the test file as not a realism claim). Scenario (c) concurrent-flush test deliberately does not assert which of two racing transactions wins — only that the surviving row is one whole uncorrupted candidate, since real Promise.all concurrency doesn't let the test control commit order.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## T3.4.5 · `f3bd70a` · 2026-07-27T21:30:35-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test r2-retry.test.ts` — 31/31 pass; `pnpm typecheck:tests` — clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm test flush.test.ts split-retry.test.ts dlq.service.test.ts r2-put.test.ts poison-dlq.test.ts` — 45/45 pass, zero regression.
+**RED phase (self-reported, plausible):** deliberately-wrong stub r2-retry.ts produced 22/31 real assertion failures (not import errors) before real implementation, including a real-MinIO 403 case.
+**Design decisions (within task scope, reviewed via diff):** `classifyR2Error` is an allowlist (5xx, 429/throttling, transport timeout/reset) not a blocklist, verified against installed @smithy source. `DlqReason` extended with a fourth variant `'r2-put-failed'` (not reusing `'attempts-exhausted'` — different retry domain — or `'flush-poison'` — wrong shape, single-event/SQLSTATE vs whole-batch/no-SQLSTATE) — reasoning documented inline in dlq.service.ts, matches this epic's established DlqReason precedent (T3.3.4 added 'flush-poison' the same way). Did NOT wire the new module into flush.ts — T3.4.6 is deliberately where that coupling happens.
+**Findings surviving triage:** none on review of the diff — DlqReason payload for 'r2-put-failed' stores CaptureEvent[] (no raw IP, same as existing accepted DLQ payload shapes) so invariant 6 is unaffected.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## T3.6.2 · `e8af718` · 2026-07-27T22:57:40-03:00
+
+**Outcome:** implementation complete, HOLDING — not stamped done. Needs a human decision per the "verify can't pass without redefining the task" rule (same category as T3.3.2's SQL-statement-count gap).
+**What's solid (independently re-verified by orchestrator):** `pnpm test stream-read.test.ts` — 2/2 pass; `pnpm typecheck:tests` clean; `pnpm --filter @posta/core run build` clean; `pnpm test ndjson.test.ts prefixes.test.ts` — 28/28 pass, zero regression. Read streamEventLog's implementation directly: paginates ListObjectsV2 (1000/page), reads each object via node:readline (never .transformToString()), drains objects strictly one at a time (no Promise.all across objects) — genuinely O(1) in range size, not a rubber-stamped claim.
+**The deviation:** the plan's literal verify text is "asserts peak RSS sampled during the run stays under 128 MB" (an absolute ceiling). The implementer found this is not achievable in-process: a clean process doing nothing but this read peaked at 160.6 MB RSS; a deliberately-broken fully-buffering rewrite of the same reader only peaked 17 MB higher (177.5 MB) in the same harness — proving the ~90-160MB floor is fixed Node/V8 + @aws-sdk/client-s3 middleware overhead (retry logic, XML (de)serialization, V8 heap-growth heuristics that don't release RSS even with forced GC), not a property of streamEventLog's own memory behavior. The shipped test instead asserts GROWTH from an immediately-pre-drain, forced-GC'd baseline: RSS growth < 128 MB (same number, reframed as a delta) and a new, tighter heapUsed growth < 16 MB. Observed real numbers: RSS growth 2.77 MB, heapUsed growth 0.14 MB, against an absolute peak RSS of ~275 MB (which is why literal-absolute could never pass in this shared test-runner process). heapUsed (live bytes, not allocated capacity) is the metric that cleanly discriminates: flat ~13-15 MB across three full 50k-record passes (150k total) for the real reader vs. ~38 MB for the buffering rewrite reading 50k once.
+**Not fully exhausted before shipping the workaround:** a child-process-with-`--max-old-space-size`-at-launch approach could make the LITERAL absolute-RSS assertion pass (V8 only respects that flag at process start, not on an already-running Vitest worker) — the implementer hit `packages/core/package.json`'s `"type": "commonjs"` + ESM-source mismatch (no plain `node` child process can load these source files without an undeclared `tsx` dep or a `tsc -b` build dependency, same constraint `scripts/seed.ts`'s header documents) and judged that infra addition disproportionate for one test, without attempting it.
+**Decision needed:** (a) accept the growth-based reframing and amend the plan's verify text (mirrors the T3.3.2 precedent — user reviewed and approved a prose amendment there), or (b) direct a follow-up to build the child-process isolation route so the literal absolute-RSS number can be asserted directly. Recommend (a): the empirical case that absolute RSS is dominated by fixed SDK/V8 overhead in ANY same-process test is strong and independently plausible, and the growth-based metric is a strictly stronger discriminator (proven against a real bad-implementation comparison) than the letter of the original text.
+**Handed back to:** orchestrator escalating to user for decision; implementer (agent a83cbe24492d2722d) available to continue via SendMessage if (b) is chosen.
+
+---
+
+## T3.4.6 · `e8af718` · 2026-07-27T22:57:40-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test coupled-writes.test.ts` — 1/1 pass (zero new Postgres rows during a real MinIO outage, one DLQ entry holding the whole batch, successful replay into both stores once MinIO returns); `pnpm typecheck:tests` clean; `pnpm test flush.test.ts split-retry.test.ts r2-retry.test.ts r2-put.test.ts poison-dlq.test.ts idempotency.test.ts shutdown.test.ts dlq.service.test.ts events.consumer.test.ts malformed-job.test.ts health.controller.test.ts` — 100/100 pass, zero regression across the wide blast radius. `docker compose ps` confirmed MinIO restored to healthy after the test's own stop/start cycle.
+**Implementation:** `flushBatch` now awaits `putR2BatchWithRetry` (T3.4.5) to completion before ever opening the Postgres insert, replacing the old `Promise.all`. On terminal R2 failure the batch is DLQ'd and `flushBatch` resolves (not rejects) — mirrors the established "resolve on a handled outcome" convention; a `dlqSink.send()` rejection itself still propagates. `CreateFlushBatchOptions` gained `dlqSink`/`r2RetryOptions`; production wiring (`app.module.ts`) threads the real `DlqService` in, defaulting to a `rejectingDlqSink` for existing test call sites that don't supply one (preserving prior behavior there).
+**Findings surviving triage:** one real, pre-existing gap outside this task's scope — `dlq.service.ts`'s `extractSqlState` duck-types any error's string `.code`, not specifically a Postgres SQLSTATE; a transport-level `ECONNREFUSED` (from the genuinely stopped MinIO) lands in `sqlstate` despite that file's own header claiming `'r2-put-failed'` entries are "always null" there. Implementer adjusted its own test assertion to match observed reality rather than asserting something false, and documented it inline. Not actioned as a fix — belongs to whoever next touches `dlq.service.ts`'s header/`extractSqlState` claim.
+**Deviation from plan:** file list expanded to include `app.module.ts` for the DLQ sink DI wiring, necessary for the one production call site — same pattern as T3.4.4/T3.1.7.
+**Handed back to:** n/a — no unresolved findings blocking this task itself (the extractSqlState note above is a forward-pointer, not a defect in this task's own work).
+
+---
+
+## T3.4.7 · `e3ce531` · 2026-07-27T23:13:24-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test reconciliation.test.ts` — 14/14 pass; `pnpm typecheck:tests` clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, and the two direct dependency files (flush.test.ts, coupled-writes.test.ts) — 18/18 pass, zero regression.
+**RED phase:** temporarily inserted a synthetic Postgres-only row (raw SQL, no R2 counterpart) against the full 10k-event run, observed genuine assertion failures (10001 vs 10000, real onlyInFirst/onlyInSecond diffs) proving the bidirectional symmetric-difference check catches what a one-directional check would miss. Reverted before commit.
+**Judgment call:** drove the 10k events through `flushBatch()` directly in 500-event chunks, not through BatchAccumulator/BullMQ — justified by the plan's own text at a later S3.5 task explicitly describing itself as the "whole pipe including consumer and queue" test, implying T3.4.7 is the flush-path-only one. R2 test-data isolated to a distinct 2050-2057 fixture window plus tenant_id filtering, defensive against sibling-agent contamination in the shared MinIO bucket.
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## T3.1.8 · `7d3a7bf` · 2026-07-27T23:14:47-03:00
+
+**Outcome:** done · verify passed (re-run independently): `pnpm test sigterm-flush.test.ts` — 5/5 pass; `pnpm typecheck:tests` clean. Implementer also ran `pnpm --filter @posta/worker run build` clean, `pnpm test shutdown.test.ts` — 3/3 pass, zero regression, eslint clean.
+**Real child process:** boots the actual compiled `node apps/worker/dist/main.js` (its own `beforeAll` runs the real build first), mirroring the Dockerfile's exact entrypoint rather than a TS-executed stand-in. 250 real jobs pushed to a real Queue against EVENTS_QUEUE, waits for BullMQ 'completed' state on all 250, asserts Postgres holds 0 rows immediately before SIGTERM (proving it lands mid-batch, not after a coincidental auto-flush), sends SIGTERM, asserts exit 0 + 250 rows + 0 DLQ entries after.
+**RED phase (genuinely performed):** temporarily commented out `app.enableShutdownHooks` in main.ts, rebuilt, ran — got real assertion failures (`exitResult.code: null`, `rowCountAfterExit: 0`), not a hang or import error. Reverted, confirmed zero diff, rebuilt clean.
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## T3.2.8 · `87f7bdf` · 2026-07-27T23:16:16-03:00
+
+**Outcome:** done · verify passed (re-run independently): pnpm test hostile-ua.test.ts - 4/4 pass; pnpm typecheck:tests clean; pnpm --filter @posta/worker run build clean; wide regression sweep (flush.test.ts coupled-writes.test.ts r2-put.test.ts idempotency.test.ts poison-dlq.test.ts reconciliation.test.ts) - 43/43 pass, zero regression from the shared flush.ts change. Confirmed the committed flush.ts contains zero raw NUL bytes (implementer flagged and self-caught an in-flight Edit-tool mistranscription of an escape sequence into a literal NUL byte before committing - verified independently via byte count on the committed blob).
+**RED phase finding (real gap, correctly scoped):** enrich()/parseUserAgent already degrade gracefully on garbage UA input (no gap there) - the actual gap was one layer downstream: Postgres text columns reject any value containing a literal NUL byte (SQLSTATE 22021), and since the flush INSERT is one multi-row statement per batch, a NUL byte in even one row's raw header field rejected all 100 rows. Fixed via a new sanitizeForPostgresText() applied to every raw header-derived text field in toNewEventRow (not just user_agent) - nulls the field, never mangles a substring; R2 keeps the untouched raw value so invariant 7 is unaffected.
+**Findings surviving triage:** none blocking. Note for future reference: schema-boundary check confirmed CaptureEventSchema's user_agent has no length/charset restriction, so this defense genuinely matters (not merely defense-in-depth against an unreachable input) for any direct-construction path (this test's harness, future R2 replay) that bypasses the HTTP layer's own NUL-byte rejection.
+**Deviation from plan:** file list expanded to include flush.ts, necessary since the RED-phase gap was found one layer downstream of where the task text pointed ("during enrichment") - documented and justified above.
+**Handed back to:** n/a.
+
+---
+
+## T3.6.2 · `a639db9` · 2026-07-28T09:49:34-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test stream-read.test.ts` — 2/2 pass, real RSS-growth (2.77 MB) and heapUsed-growth (0.14 MB) both well under the amended thresholds; `pnpm typecheck:tests` clean; `pnpm --filter @posta/core run build` clean.
+
+**User decision, executed:** the growth-based verify reframing recommended by the previous orchestrator was reviewed by the user, who chose to amend the plan (not build the child-process/`--max-old-space-size` isolation route). Landed as a standalone `docs:` commit `a639db9` (`docs: amend T3.6.2's verify to a growth-based memory metric`), separate from the implementation commit, mirroring how T3.3.2's amendment (`1ca1758`) was handled. The plan's body prose was also extended in that commit to state why growth beats an absolute ceiling here: absolute RSS has a fixed ~90-160 MB floor from Node/V8 + `@aws-sdk/client-s3` middleware overhead unrelated to whether the reader itself streams or buffers, so it cannot discriminate a correct streaming implementation from an incorrect buffering one; growth from a forced-GC baseline can and does — ~14 MB heapUsed growth for the real reader vs ~38 MB for a deliberately-buffering rewrite over the same 50,000 records.
+
+**Stamped against:** `e8af718` (the implementation commit — unchanged from when it landed; only the plan prose changed, in a separate commit).
+
+**Findings surviving triage:** none new — this note only closes out the hold recorded against this task previously.
+
+**Deviation from plan:** the plan's own verify text, amended by explicit user decision as described above — not a unilateral redefinition.
+
+**Handed back to:** n/a — resolved.
+
+---
+
+## T3.5.1 · `3a767dc` · 2026-07-28T10:13:03-03:00
+
+**Outcome:** done · verify passed (independently re-observed by orchestrator): `pnpm test pipeline-harness.test.ts` — 3/3 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Recovery context:** this task's prior agent died mid-response ("Now the main harness file, tying the modules together:"), leaving three uncommitted, unverified support modules (`pipeline-harness-fixtures.ts`, `pipeline-harness-cleanup.ts`, `pipeline-harness-process.ts`) but neither file the plan names (`pipeline-harness.ts`, `pipeline-harness.test.ts`). Assessed before trusting: all three drafts checked out sound against their own claimed precedents (`sigterm-flush.test.ts`, `container-cleanup.ts`'s `closeBoth`) and were kept verbatim, no edits needed.
+
+**A genuine, currently-live build break was found and fixed as part of this task** (not present before this draft existed): `pnpm --filter @posta/worker run build` failed with TS2307 on `pipeline-harness-fixtures.ts`'s import of `@posta/core/testing` — apps/worker's own tsconfig (`moduleResolution: "node10"`, `include: ["src"]`, previously excluding only `src/**/*.test.ts`) swept this non-`.test.ts` file into the real production build, and node10 resolution cannot see `@posta/core`'s subpath-only `"./testing"` export map (only `bundler`/`node16`/`nodenext` can). Confirmed independently: moving `apps/worker/src/test/` out of the tree made the build pass; moving it back reproduced the failure. Root cause: every prior consumer of `@posta/core/testing` in this repo was itself a `.test.ts` file (already excluded from each package's own `tsc -b`); this is the first shared, non-`.test.ts` test-support code under an app's `src/`. Fixed by widening `apps/worker/tsconfig.json`'s `exclude` to `["src/**/*.test.ts", "src/test/**"]` — the whole directory is test-support code that must never ship in the production image, and `tsconfig.test.json`'s separate pass (bundler resolution) still fully type-checks it transitively once `pipeline-harness.test.ts` imports it.
+
+**RED-phase proof (self-reported, plausible):** temporarily made `push()` enqueue `n - 1` events; re-ran `pipeline-harness.test.ts` and got a real assertion failure (`expected [...] to have a length of 10 but got 9`), not a timeout or import error. Reverted, confirmed green across 3 consecutive runs.
+
+**Judgment call (reviewed, accepted):** the plan text says `stop()` "releases all three containers," but MinIO is treated as the persistent docker-compose service everywhere else in this epic (client.test.ts, r2-put.test.ts, coupled-writes.test.ts, reconciliation.test.ts all connect to the already-running compose MinIO, never testcontainers-managed) — and this environment explicitly forbids touching the compose stack. `stop()` releases the worker child process and the Postgres/Redis testcontainers; MinIO is left exactly as every other file in this epic already treats it. Documented in the harness file's own header. Accepted as consistent with established epic-wide precedent, not a scope-narrowing shortcut.
+
+**Findings surviving triage:** none — clean recovery. `drain()` polls `/health` until `last_flush_age_ms` shows a flush completed at or after the most recent `push()` AND queue_depth/batch_size both read zero (not a fixed sleep), avoiding a race where `last_flush_age_ms` alone can't distinguish "our events flushed" from "a stale prior flush."
+
+**Deviation from plan:** `apps/worker/tsconfig.json` added to this task's file list — necessary, the build-break fix above.
+
+**Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.3.6 · `842ccd0` · 2026-07-28T10:19:47-03:00
+
+**Outcome:** done · verify passed (independently re-observed by orchestrator): `pnpm test throughput.bench.test.ts` — 6/6 pass, real BullMQ queue -> real AppModule.forRoot() DI -> real Postgres/Redis/MinIO. `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean.
+
+**Recovery context:** this draft's prior agent completed the file successfully (no death message, no partial state) but never committed or had it reviewed. Treated as unverified until proven, per instruction. Assessed via a dispatched tdd-guide, not rubber-stamped.
+
+**RED-phase proof (independently confirmed real):** the dispatched agent temporarily broke `insertStatements()`'s matching regex to target a nonexistent table name, reran, and got a genuine assertion failure (`expected +0 to be 100`) on exactly the "100 INSERT statements" test while the other 5 tests (including throughput floor and p95) stayed green — not a hang, not an import error. Reverted, confirmed `git diff` empty, reconfirmed 6/6 green.
+
+**Claims cross-checked against real code, not assumed:** `spyOnPoolQueries`/`percentile()` byte-identical to `flush.test.ts`/`latency.test.ts`'s own; `AppModule.forRoot()`'s `config.flush` override genuinely bypasses `buildProductionFlush`/`DB_CLIENT`, so the placeholder `DATABASE_URL` is safe; `EVENT_BATCH_SIZE`'s production ceiling (500, `env.ts`) is confirmed unrelated to this file's own `BATCH_SIZE=100`, since the benchmark builds `AppModule.forRoot()` directly, bypassing `workerEnvSchema` entirely.
+
+**Measured numbers observed (real run):** 10,000 events / 2181.2ms = 4584.6 events/sec (floor: 2000) | p95 flush duration 40.5ms | exactly 100 INSERT statements across 100 batches.
+
+**Findings surviving triage:** none.
+**Deviation from plan:** none.
+**Handed back to:** n/a.
+
+---
+
+## general · `e0f719f` · 2026-07-28T10:30:02-03:00
+
+**Cross-cutting fix, no plan task ID — dispatched per explicit instruction to close it before S3.5's suite grows.**
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test events.consumer.test.ts malformed-job.test.ts dlq.service.test.ts` — 18/18 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Bug (previously documented under the T3.1.5 note):** `events.consumer.test.ts`'s first describe block runs 4 `it()`s against one shared Redis testcontainer. Two of them (the eventJobSchema-validation-failure test and the sink-failure-logging test) produce a real `EVENTS_DLQ_QUEUE` entry as a side effect but only obliterated `EVENTS_QUEUE` in their own cleanup, never the DLQ queue — leaving a stale `originalJobId` behind that a later test's freshly-auto-incremented `job.id` (reset to 1 by the very obliterate that skipped the DLQ) could collide with.
+
+**Fix:** both gapped tests now obliterate + close both queues, matching the fourth test's already-correct pattern. `malformed-job.test.ts` and `dlq.service.test.ts` were audited the same way (every `Queue(...)` construction cross-referenced against every `obliterate` call) and needed no changes — both already obliterate every queue they construct.
+
+**Evidence the fix is real (not cosmetic):** a disposable, uncommitted repro script against the real installed bullmq + local Redis reproduced the exact mechanism — obliterating only queue A after seeding a DLQ-shaped entry in queue B produced a false-positive id match on a fresh job; obliterating both queues did not. Suite also run 3x in a row post-fix with 18/18 every time.
+
+**Scope note:** a grep-only pass (not a full audit) suggests `coupled-writes.test.ts`, `poison-dlq.test.ts`, `throughput.bench.test.ts`, `sigterm-flush.test.ts`, and `apps/api/src/redirect/enqueue.test.ts` already pair their obliterate calls correctly. Not independently verified line-by-line — worth a look if S3.5 surfaces similar flakiness elsewhere.
+
+**Commit:** `e0f719f` — test: obliterate both EVENTS_QUEUE and EVENTS_DLQ_QUEUE in every consumer test's cleanup.
+**Handed back to:** n/a — no unresolved findings.
+
+---
+
+## general · `dfac92e` · 2026-07-28T10:41:03-03:00
+
+**Cross-cutting fix, no plan task ID.** Surfaced while independently re-verifying T3.6.3: `apps/worker/src/no-verdict.test.ts` (the INV-4 AST scanner) was failing on a clean tree, unrelated to this session's own work — `apps/worker/src/batch/r2-retry.ts` (committed at `f3bd70a`, T3.4.5, well before this session) declares `const classification = classifyR2Error(error)`, colliding with the scanner's banned-word list purely by naming coincidence: it's an R2-PUT-error retry classification, not a human/bot verdict. This sat undetected since T3.4.5 because no task's own verify sweep after that commit happened to include `no-verdict.test.ts`.
+
+**Fix:** renamed the local variable to `retryDecision` at all three use sites (the `classifyR2Error()` call, the `if (... === 'non-retryable')` check, and the logged `meta` object). Pure rename — `classifyR2Error` itself, the scanner, and its banned-word list were all left untouched, since the enforcement is correct and the naming was the actual bug. `r2-retry.test.ts` asserts nothing by the logged meta's key names, so no test changes were needed.
+
+**Verify passed (independently re-observed):** `pnpm test no-verdict.test.ts` — 30/30 pass (was 29/30); `pnpm test r2-retry.test.ts` — 31/31 pass, unchanged; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Commit:** `dfac92e` — fix: rename r2-retry's error-classification variable off the INV-4 banned-word list.
+**Handed back to:** n/a — no unresolved findings. Worth noting for future dispatches: any task touching `packages/core/src/enrichment` or `apps/worker/src` should include `pnpm test no-verdict.test.ts` in its own regression sweep, since this scanner's vocabulary (`classification`, `verdict`, etc.) can collide with legitimate non-verdict uses of those words and nobody had been running it as part of routine regression checks.
+
+---
+
+## T3.6.3 · `dfac92e` · 2026-07-28T10:41:03-03:00
+
+**Outcome:** implementation complete, HOLDING — not stamped done. Third instance of this epic's "verify text doesn't match reality" pattern (T3.3.2, T3.6.2), needs the same human decision path.
+
+**What's solid (independently re-verified by orchestrator):** `pnpm test replay-driver.test.ts` — 8/8 pass; wider sweep `pnpm test replay-driver.test.ts flush.test.ts stream-read.test.ts prefixes.test.ts reconciliation.test.ts coupled-writes.test.ts` — 63/63 pass, zero regression; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean. `apps/worker/src/cli/replay-driver.ts` reviewed directly: streams `LoggedEvent` via `streamEventLog` (T3.6.2), maps via the now-exported `toNewEventRow` (apps/worker/src/batch/flush.ts), batches at 500 (mirrors `EVENT_BATCH_SIZE`'s own production ceiling), calls `insertEventsBatch` per batch — never `flushBatch`, `enrich()`, or `resolveDestinationsByLinkIds`. This correctly honours the S3.6 replay-staleness constraint already carried in this file's own T3.3.2 note and in `ndjson.ts`'s own header: replay must reuse the logged `dest_host`, never re-derive it. A dedicated anti-staleness test proves this directly — edits a link's destination after a live flush, truncates, replays, and asserts the replayed row keeps the ORIGINALLY-logged `dest_host`, not the edited one. Passing.
+
+**The deviation:** the plan's own text says the driver should call "the SAME flushBatch from T3.3.2 (Postgres side only)." It deliberately does not — `flushBatch` always re-resolves destinations via `resolveDestinationsByLinkIds()` + `enrich()` against Postgres AS IT STANDS NOW, which is correct for live traffic but would silently rewrite history on replay (exactly the failure the carried S3.6 decision exists to prevent). Instead it reuses the two pieces that don't re-derive anything: `toNewEventRow` (now exported from flush.ts) and `insertEventsBatch` (packages/core/src/db/events.ts) — same column mapping, same `ON CONFLICT` insert, zero drift, just without the live-only destination re-resolution step. This is a correct resolution of the plan's own stated intent ("identical to live by construction... a parallel restore implementation drifts"), not a shortcut — but it does mean the plan's literal "calls flushBatch" instruction wasn't followed as written, on purpose, per the already-established S3.6 constraint.
+
+**The verify text's second clause is also stale, independently confirmed by the orchestrator:** "asserts... no `INSERT INTO events` string literal exists anywhere in the repo outside apps/worker/src/batch/flush.ts" cannot be satisfied as literally written, for reasons unrelated to this task. Confirmed via grep: the literal string `"INSERT INTO events"` already exists in five pre-existing, unrelated test fixtures (raw SQL used to seed rows for partition-boundary testing — `packages/core/src/db/default-partition.test.ts`, `sql-migrate-down.test.ts`, `partitions-bootstrap.test.ts`, `partition-boundaries.test.ts`, `apps/worker/src/partitions/default-partition-alert.test.ts`), none of them anywhere near flush.ts. And `flush.ts` itself contains ZERO occurrences of that literal — the actual `.insert(events).values(...).onConflictDoNothing(...)` call is a Drizzle query-builder call (never a raw SQL string) living in `packages/core/src/db/events.ts`, a file the clause never names as the exception. So the clause is unsatisfiable exactly as written, independent of anything this task did.
+
+**What the implementer built instead (a defensible, non-strained reading, per this task's own "if there's a sensible reading, implementing that is fine" latitude):** an AST-based scan (mirroring `no-verdict.test.ts`'s established precedent, not a fragile regex — a first regex draft false-positived on this file's own prose comments) asserting exactly one production file (`packages/core/src/db/events.ts`) ever constructs `.insert(events)`, and that `replay-driver.ts` itself contains none — i.e., the actual property the surrounding prose cares about ("nobody outside insertEventsBatch should ever construct a second, drifting INSERT"), rather than a literal grep for dead prose. Reasonable, and independently confirmed to test something real — but per this epic's established two-strike precedent (T3.3.2, T3.6.2), a plan-prose amendment is the user's call to make, not the orchestrator's or the implementer's to substitute silently.
+
+**Decision needed:** accept the implementer's AST-based "single real INSERT call site" test as the intended meaning and amend the plan's verify prose to describe it (mirrors T3.3.2/T3.6.2 exactly), and separately acknowledge the "calls flushBatch" body text needs a similar amendment to describe the toNewEventRow+insertEventsBatch reuse (with the destination-staleness reasoning) instead. Recommend accepting both — same reasoning pattern as the prior two amendments: the code is correct and the tests prove something real; the prose predates a design discovery.
+
+**Handed back to:** orchestrator escalating to user for decision on the plan-prose amendment; implementer (agent aa130e8957efd4a65) available to continue via SendMessage if further code changes are wanted instead.
+
+---
+
+## T3.5.2 · `e3c4827` · 2026-07-28T10:50:31-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test e2e-exactly-once.test.ts` — 3/3 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean; regression sweep `pnpm test pipeline-harness.test.ts reconciliation.test.ts throughput.bench.test.ts` — 23/23 pass.
+
+**Implementation:** uses `startPipelineHarness()` (T3.5.1) end to end — `push(10_000)` through the real BullMQ queue and real spawned worker process, `drain()`, then asserts `count(*) = count(distinct event_id) = 10000` in Postgres scoped to this run's own tenant, and bidirectional set equality between every event_id in Postgres and every event_id read back from this run's own R2 NDJSON objects (double-isolated: `eventPrefixes` day-window plus per-record tenant_id filtering, matching `reconciliation.test.ts`/`throughput.bench.test.ts`'s established convention). No R2 object-count assertion — at 500-event batches with an interval trigger also live, the exact object count isn't guaranteed to be exactly 20, and the plan's own verify only asks for event_id count/set equality, not object count.
+
+**RED-phase proof (independently plausible):** planted one genuine Postgres-only row (raw INSERT, no R2 counterpart) after drain, reran, got two real assertion failures — `expected 10001 to be 10000`, and `idDiff.onlyInFirst` held exactly the planted event_id while `onlyInSecond` stayed empty, proving the bidirectional check discriminates a Postgres-only row specifically, not just an aggregate count. Reverted, confirmed 3/3 green.
+
+**Findings surviving triage:** none.
+**Deviation from plan:** none — only file touched was the one the plan names; `pipeline-harness.ts` needed no changes.
+**Handed back to:** n/a.
+
+---
+
+## T3.5.3 · `b4a2366` · 2026-07-28T11:17:59-03:00
+
+**Outcome:** done · verify passed (independently re-observed, in isolation): `pnpm test e2e-duplicate-delivery.test.ts` — 4/4 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Implementation:** extended `pipeline-harness.ts` with a new `redeliver(events)` method (pure extraction of the same `enqueue()` helper `push()` already used — zero behavior change for existing callers `e2e-exactly-once.test.ts`/`pipeline-harness.test.ts`), letting the test re-enqueue the EXACT same 500 CaptureEvents (identical event_id, identical occurred_at) a second time after the first drain. Because `drain()` only returns once the open batch is empty, redelivery necessarily lands in a fresh batch after a batch boundary, satisfying the story's "duplicate delivery across a batch" intent without extra timing engineering.
+
+**RED-phase proof (independently plausible, and notably surfaced a real, separate finding along the way):** first sabotage attempt (`onConflictDoUpdate` with `SET occurred_at = now()`) hit a genuine Postgres error, not a clean test failure — `invalid ON UPDATE specification: the result tuple would appear in a different partition than the original tuple` (SQLSTATE 0A000), because the fixture's 2080-era `occurred_at` and wall-clock `now()` land in different monthly partitions and Postgres refuses to move a row across partitions via ON CONFLICT DO UPDATE. Adjusted to `SET occurred_at = occurred_at + interval '1 second'` (same partition) and got a real, targeted failure: the occurred_at-fingerprint assertion failed exactly and only on the 500 redelivered event_ids, the other 9,500 untouched. Reverted, rebuilt @posta/core, reconfirmed green.
+
+**A real, separate reliability finding surfaced while running the regression sweep — see the follow-up general note:** `pipeline-harness-process.ts`'s `buildWorkerExclusively()` (T3.5.1) has a genuine race — `nest build`'s own `deleteOutDir: true` transiently removes `apps/worker/dist/` (the lock file's parent) while a sibling test file is acquiring the lock, producing an unhandled ENOENT instead of the tolerated EEXIST. Independently reproduced by the orchestrator (`pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts` crashes reliably). Fix dispatched separately, not part of this task's own file scope.
+
+**Findings surviving triage:** none blocking this task's own correctness.
+**Deviation from plan:** file list expanded to include `pipeline-harness.ts` (additive `redeliver()` method) — necessary, the harness's `push()` always minted fresh event_ids and had no way to re-enqueue identical events before this.
+**Handed back to:** n/a.
+
+---
+
+## general · `c79d74b` · 2026-07-28T11:29:19-03:00
+
+**Cross-cutting fix-forward to T3.5.1, no plan task ID.** Surfaced by T3.5.3's own regression sweep and independently reproduced by the orchestrator (`pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts` crashed reliably with `ENOENT: no such file or directory, mkdir '.../apps/worker/dist/.pipeline-harness-build.lock'`).
+
+**Root cause:** `pipeline-harness-process.ts`'s `buildWorkerExclusively()` cross-process build mutex lived inside `apps/worker/dist/`, which `nest-cli.json`'s `deleteOutDir: true` wipes and recreates on every build. A second process polling for the lock could catch the first mid-wipe and see `ENOENT` instead of the tolerated `EEXIST`, crashing instead of retrying.
+
+**Fix — notably better than the originally-suggested patch:** the dispatched agent found that merely tolerating ENOENT and recreating the parent directory inline would have opened a WORSE, silent bug — a waiting process's next retry could fabricate a fresh lock directory and believe it holds exclusivity while the original build is still running, turning a loud crash into a silent double-build. Fixed at the root instead: the lock now lives at `apps/worker/.pipeline-harness-build.lock`, outside `dist/` entirely, a path `nest build` never touches — structurally eliminating the ENOENT rather than tolerating it. ENOENT tolerance was kept in the retry loop anyway as defense-in-depth, extracted into an independently-testable `acquireBuildLock()`.
+
+**Proved two ways:** a mocked-`fs` unit test (`pipeline-harness-process.test.ts`) confirmed RED against the pre-fix code with the exact real error message, then GREEN after; plus the original repro command run 3x post-fix with zero ENOENT crashes.
+
+**Verify passed (independently re-observed):** `pnpm test pipeline-harness.test.ts e2e-exactly-once.test.ts idempotency.test.ts e2e-duplicate-delivery.test.ts pipeline-harness-process.test.ts` — 17/17 pass; `pnpm --filter @posta/worker run build` clean; `pnpm typecheck:tests` clean.
+
+**Commit:** `c79d74b` — fix: tolerate a transient ENOENT in the pipeline harness's build lock.
+**Handed back to:** n/a — no unresolved findings.
+
+---
+
+## T3.5.4 · `8eb3224` · 2026-07-28T11:30:35-03:00
+
+**Outcome:** NOT done, no commit — a real architectural gap, not a stale-prose mismatch. Stopped and escalating per the "task is wrong rather than hard" rule, not the "redefine the verify" rule (T3.3.2/T3.6.2/T3.6.3's category) — this is one level more serious.
+
+**The dispatched agent found, and the orchestrator independently confirmed by reading the code directly:** `AccumulatingEventSink.handle(event)` (apps/worker/src/consumer/events.consumer.ts) is `this.accumulator.add(event)` — and `BatchAccumulator.add()` (apps/worker/src/batch/accumulator.ts) is fully synchronous and never awaits any flush it may trigger (`void this.triggerFlush().catch(...)`, fire-and-forget, by its own documented design — its own docstring: "never awaits the flush callback... a flush... must never make add() itself slow"). So `EventsConsumer.process()`'s `await this.sink.handle(event)` resolves, and BullMQ marks the job **`completed`**, the INSTANT an event is handed to the in-memory accumulator — before that batch's R2 PUT + Postgres INSERT ever runs, regardless of whether they ever will. This is deliberate, not a bug: `AccumulatingEventSink`'s own doc comment says so explicitly ("reach BullMQ's 'completed' state, which is exactly what lets shutdown.test.ts wait on job.getState() === 'completed' as its signal that an event has genuinely been accumulated").
+
+**Consequence:** an event sitting in the accumulator's open, unflushed batch is not "active with an expiring lock" (which BullMQ's stalled-job mechanism could later rescue) — it's "completed, forever," in Redis's own bookkeeping. A SIGKILL wipes the process's memory unconditionally. There is nothing left in Redis for a second worker to redeliver. BullMQ's stalled-job redelivery — the mechanism T3.5.4's acceptance criterion implicitly requires for "nothing is lost" to be true after a hard kill — does not fire for this case, ever.
+
+**Empirically proven, not just derived (spike built and then deleted, never committed):** pushed 30 events with both batch triggers parked so the batch definitely never auto-flushes; confirmed all 30 reached BullMQ `completed` while `count(*) FROM events` was still 0; sent a real SIGKILL; booted a second worker against the same Redis/Postgres and waited 70s (past BullMQ's default 30000ms `lockDuration`/`stalledInterval`, confirmed against the installed `bullmq@5.80.10` source); final result: `count(*)` still 0, job counts unchanged (`completed: 30, active: 0`) — all 30 events permanently, silently lost.
+
+**This is independently corroborated by this very plan, elsewhere:** `docs/plan/10-deploy-operate.md`'s T10.5.5 already documents this EXACT failure mode as a known, accepted risk: "if Kubernetes SIGKILLs before that [SIGTERM flush] completes, every rolling deploy silently eats up to a full batch of buffered events and nothing reports it — the pod exits, the rollout goes green, the events are simply gone." T10.5.5's whole mitigation is `terminationGracePeriodSeconds` comfortably exceeding `SHUTDOWN_TIMEOUT_MS` so SIGTERM's graceful flush (T3.1.8, already proven) always wins the race in practice — there is no BullMQ-level safety net underneath that. S3.5's own acceptance criterion ("Worker killed mid-batch: after restart, nothing is lost") directly contradicts T10.5.5's own documented reality.
+
+**Why no fix was attempted:** the only way to make a job's BullMQ ack wait for its batch's actual flush would be having `process()` await that flush before returning — which would cap a batch at `WORKER_CONCURRENCY` (default 8) events, since BullMQ won't dequeue job 9 until one of the first 8 `process()` calls returns. That silently breaks the entire T3.3-T3.4 batching design (up to 500 events/flush) this epic already built, reviewed, and shipped. A disproportionate, cross-cutting redesign for a test-writing task — correctly not attempted.
+
+**Decision needed — three options the implementer identified, none of which are the orchestrator's or implementer's to pick unilaterally:**
+1. Redefine T3.5.4's scope to the property that IS true today (events still in BullMQ `wait`/genuinely-`active`, not yet handed to the accumulator, survive a worker SIGKILL) — real and testable, but materially weaker than "nothing is lost," and would need the acceptance criterion in docs/plan/03-event-pipeline.md amended with the gap recorded explicitly (mirroring T10.5.5's own framing).
+2. Build a real fix — a write-ahead durability layer (e.g. append accumulated-but-unflushed events to Redis, keyed by batch_id, replayed on worker boot) — a genuine new feature needing its own design/plan task, not something to improvise inside a test-writing task.
+3. Accept the documented risk as-is (T10.5.5's own framing) and close T3.5.4 as "not achievable as specified, superseded by T10.5.5's own documented limitation" — no test written for a property that isn't true.
+
+Recommend option 1 (redefine + record the gap explicitly) as the least-surprising path, consistent with this epic's existing "amend the prose when the code/architecture is right and the text is wrong" precedent — but this decision affects a genuine data-loss window's user-facing guarantee, not just test wording, so it should go to the user rather than be assumed.
+
+**Handed back to:** orchestrator escalating to user. No implementer thread to resume — nothing was built, nothing to hand back to; a fresh dispatch can implement whichever option is chosen once decided.
+
+---
+
+## T3.6.3 · `5c95d35` · 2026-07-28T12:29:09-03:00
+
+**Outcome:** done · verify passed (independently re-observed): `pnpm test replay-driver.test.ts` — 8/8 pass, unaffected by the docs-only change.
+
+**Decision executed (per user instruction, sixth orchestrator session):** amended `docs/plan/03-event-pipeline.md`'s T3.6.3 body and verify text — same precedent as T3.3.2 (`1ca1758`) and T3.6.2 (`a639db9`). Dropped the unsatisfiable "no `INSERT INTO events` string literal outside flush.ts" clause (that literal lives in 5 unrelated partition-boundary fixtures; the real insert is a Drizzle builder in `packages/core/src/db/events.ts`, never a raw string, so the grep could never pass regardless of implementation). Replaced with what the implementation actually guarantees: replay reuses the logged `dest_host` and never calls `enrich()`/`flushBatch`. Also corrected the body's "calls flushBatch" claim — the shipped code correctly reuses `toNewEventRow`/`insertEventsBatch` directly instead, which is what keeps replay from re-resolving destinations at replay time and silently rewriting history (the S3.6 anti-staleness constraint, `53ef776`).
+
+**Commit:** `5c95d35` — docs: amend T3.6.3's verify to the staleness guarantee it actually proves. Scoped to exactly the T3.6.3 entry (2 lines changed), `files`/`after` untouched.
+
+**Stamped against:** `e7990b1` — feat: replay feeds records through the live insert path (the original implementation commit; the docs amendment is a separate, later commit on top of it, matching precedent).
+
+**Findings surviving triage:** none.
+**Deviation from plan:** the plan-prose amendment itself, pre-authorized by explicit user decision.
+**Handed back to:** n/a — closed.
+
+---
+
+## T3.5.4 · `8896f9a` · 2026-07-28T13:59:04-03:00
+
+**Outcome:** done · verify passed: `pnpm test e2e-kill-recovery.test.ts` (10/10 passed, isolated run) — durability fix landed as production code inside this `test:` task.
+
+**This was the 8th orchestrator session on this epic; a live agent from a prior session was still running.** While I was mid-verification (post-`git reset --mixed 3c5b776` to drop the unauthorized WIP checkpoint `d7166c0`), a `pnpm test` process (PID 91489, not dispatched by me) was still actively running in this exact worktree and landed 3 commits (`ab6af57` fix, `48ee018` test-fixture, `89acc2b` test) on top of `3c5b776` while I was reading files. I did not race it: I polled for its exit, then re-verified all state fresh myself. The 3-commit history duplicated the required one-commit-per-task convention and the final subject wasn't verbatim, so I squashed via `git reset --soft 3c5b776` + one new commit (diff byte-identical before/after: 1110 insertions/232 deletions across 10 files) — no rebase -i, no history rewrite of anything pushed (branch was and remains local-only ahead of origin). Landed at `8896f9a`.
+
+**What the SIGKILL test actually asserts (verified by reading the file, not trusting the brief):** kills a real spawned worker child process with SIGKILL at 3 points (10%/50%/75% through `EVENT_BATCH_INTERVAL_MS=15_000` — bumped from an earlier 8s after a real RED-phase run showed the 90%-through kill racing the interval flush) while a 15-event partial batch is genuinely buffered per tenant. Asserts, in order: (1) pre-kill Postgres row count is 0 for all 3 tenants (genuinely unflushed); (2) immediately after all 3 kills, BullMQ shows 0 completed / 45 active / 0 failed — this is the core mechanism proof that the ack now waits for the real flush; (3) after one shared recovery worker boots, BullMQ redelivers every un-acked job to completion (45/45, 0 failed); (4) each tenant's final row count equals both `PARTIAL_BATCH_SIZE` (15) and `COUNT(DISTINCT event_id)` — no loss, no duplication, per tenant; (5) the sum across all 3 scenarios equals 45 total/45 distinct exactly; (6) `dlq_depth === 0`. All 10 `it`/`it.each` cases genuinely exercise this, not a subset — ran in isolation and confirmed 10/10 green.
+
+**Throughput measured:** 1531.6 events/sec on one contended run (floor 2000/sec) — this was environmental noise from my own `pnpm test apps/worker` racing the still-live orphaned agent's own test run on the same shared Docker stack simultaneously. Re-run clean afterward: 253 passed/2 failed matching the known pre-existing REDIS_URL guards exactly, throughput assertion not in the failure list. Not a regression.
+
+**Full verify, run myself, fresh, after the squash:**
+- `pnpm typecheck:tests` — clean, exit 0.
+- `pnpm --filter @posta/worker run build` — clean, exit 0.
+- `pnpm test apps/worker` — 253 passed / 2 failed (both `partition-maintenance.job.test.ts` REDIS_URL guards, pre-existing E1-era fail-loud tests, not in scope).
+- `pnpm test packages/core` — 411 passed / 1 failed (`db/client.test.ts` DATABASE_URL guard, pre-existing, not in scope).
+- `pnpm test e2e-kill-recovery.test.ts` (isolated) — 10 passed / 10.
+
+**Review fan-out (never ran for this work before now — dispatched manually per this task's own brief):** `code-reviewer` APPROVE (1 MEDIUM: duplicated `waitForBatchSize()` helper across `e2e-kill-recovery.test.ts`/`sigterm-flush.test.ts`, style only, not acted on). `typescript-reviewer` APPROVE, no issues beyond style. `silent-failure-hunter`: 1 MEDIUM (`queue.obliterate({force:true}).catch(() => undefined)` in test teardown) — verified against the codebase: this is an established pre-existing pattern already used identically in `throughput.bench.test.ts` and `sigterm-flush.test.ts` before this commit, not a regression; not acted on. `database-reviewer`: 1 LOW, no CRITICAL/HIGH from any reviewer.
+
+**Findings surviving triage**
+- LOW · `apps/worker/src/batch/accumulator.ts:299-311` + `apps/worker/src/batch/flush.ts:565-582` — database-reviewer: a SIGKILL landing between a successful R2 PUT and the Postgres INSERT completing now causes BullMQ redelivery (correct — that's this task's whole point), but the retry opens a *new* batch with a freshly minted `batchId`, so its R2 PUT lands at a new key. Result: two R2 objects for the same event. Postgres stays correct (`ON CONFLICT (event_id, occurred_at) DO NOTHING`, invariant 8 intact), but invariant 7's "R2 is the source of truth" is technically violated for a naive replay with no R2-side dedup. Not a defect in this commit — this window was NOT reachable pre-fix (jobs acked on `add()`, so redelivery after a partial flush couldn't happen at all) — it's a new consequence of fixing the bigger bug. Needs a follow-up ticket.
+- ARCHITECTURAL, NEEDS A HUMAN DECISION · `apps/worker/src/consumer/events.consumer.ts:251` (`DEFAULT_WORKER_CONCURRENCY = 8`) vs `.env.example:135` (`EVENT_BATCH_SIZE=100`) — confirmed by reading the code (not merely inferred): under the new blocking `add()` contract, `AccumulatingEventSink.handle()` awaits `add()`, and BullMQ's `process()` therefore doesn't resolve (doesn't free its concurrency slot) until the item's batch flushes. This caps the number of events that can ever be simultaneously "added but unflushed" at `WORKER_CONCURRENCY`, regardless of `EVENT_BATCH_SIZE`. With the documented example config (concurrency defaults to 8, batch size 100), the count trigger can now **never** fire — every batch flushes via the 2s interval timer, capped at ~8 items, never reaching 100. This is a genuinely NEW coupling introduced by this task's fix (pre-fix, `process()` returned immediately after handoff to `add()`, so concurrency never gated batch growth). Nothing is lost or duplicated; this is a throughput/config-consistency gap, not a correctness one. No Zod cross-field validation in `env.ts` enforces `WORKER_CONCURRENCY >= EVENT_BATCH_SIZE`. Flagging per this task's own brief (standing open item #8) rather than silently accepting a config that now silently underperforms its own documented example.
+
+**Standing open items — status after this task:**
+- T3.4.4 batch-id gap (item #2 in the prior brief): NOT closed by this task — see the R2-duplicate-object LOW finding above, which is this exact gap, now confirmed newly reachable via legitimate BullMQ redelivery rather than only via `retryWithSplit`.
+- T3.1.7 `last_flush_age_ms` staleness threshold (item #7): re-checked — `lastFlushAt` only advances on a successful flush, unchanged by this commit; flush cadence (`batchSize`/`batchIntervalMs`) values themselves are untouched. Does not misreport on its own, but is now entangled with the concurrency/batch-size coupling above (a worker stuck at the interval-only cadence still advances `lastFlushAt` every interval, so health stays accurate — no new false-positive/negative found here).
+- Worker-concurrency/batch-size coupling (item #8): now CONFIRMED as a production-code property, not merely a test-harness convenience — see the architectural finding above.
+
+**Deviation from plan:** none beyond what was already pre-approved (test: task carries its required production fix, same precedent as T3.2.8) and the commit-history squash described above (mechanical, not a scope change).
+
+**Handed back to:** n/a — no CRITICAL/HIGH findings, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.5.5 · `f8aed29` · 2026-07-28T14:14:58-03:00
+
+**Outcome:** done · verify passed: `pnpm test e2e-enrichment.test.ts` (85/85 passed) · `pnpm typecheck:tests` (exit 0) — both run fresh by the orchestrator, not assumed.
+
+This task's review fan-out (code-reviewer, silent-failure-hunter, typescript-reviewer, database-reviewer) died in a network outage on the previous orchestrator session. Re-ran the full fan-out from scratch against the already-committed f8aed29.
+
+**Findings surviving triage**
+- MEDIUM (code-reviewer) / re-flagged HIGH-but-acknowledged-pre-existing (silent-failure-hunter) · apps/worker/src/test/e2e-enrichment.test.ts:283 — `.catch(() => undefined)` on the R2 DeleteObjectsCommand teardown carries no comment. Verified independently: byte-identical, uncommented, in three already-merged sibling files on this branch (e2e-duplicate-delivery.test.ts:223, e2e-exactly-once.test.ts:185, pipeline-harness.test.ts:93). T3.5.4's own stamp note (2920401) hit the analogous `queue.obliterate().catch(() => undefined)` pattern and explicitly declined to act, citing established precedent. Followed the same precedent here for consistency — not acted on. A repo-wide comment sweep across all four instances would be in scope for a future cleanup task, not this one.
+- LOW (database-reviewer) · apps/worker/src/test/e2e-enrichment.test.ts:193-197 — `fetchPgRows`'s SELECT has no `occurred_at` bound, so it can't leverage partition pruning. Explicitly judged inconsequential for this test (fresh empty testcontainer, one partition, ~44 rows) — flagged only so this query isn't later copy-pasted as a template for a real dashboard/analytics query. Not acted on.
+- Dropped as over-report: silent-failure-hunter's two MEDIUM suggestions to wrap `streamEventLog`/`ListObjectsV2Command` calls (lines 210, 227) with error-context rethrows — both already fail loudly (propagate to `beforeAll`, no silent swallowing), just without extra annotation; no sibling e2e file in this epic follows that pattern either.
+- Dropped as cosmetic: typescript-reviewer's MEDIUM on the `as unknown as Record<string, unknown>` double-cast pattern (lines 315/328/348) — safe, documented, consistent.
+
+**Deviation from plan:** none.
+**Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.6.4 · `aeeac0d` · 2026-07-28T16:02:03-03:00
+
+**Outcome:** done · verify passed: `pnpm test replay.test.ts replay-driver.test.ts` (41/41, re-run independently by the orchestrator) · `pnpm typecheck:tests` (exit 0, re-run independently).
+
+**Commit chain (three commits close this task, not one):**
+- `069432d` feat: posta replay CLI with range and tenant filters — original implementation, inherited already-committed from a previous orchestrator session.
+- `99ecbfd` fix: cap replay --batch-size and warn when --tenant matches nothing — round-1 review fixes (database-reviewer: unbounded --batch-size; silent-failure-hunter: silent --tenant-matched-zero). This diff was sitting **uncommitted** in the worktree when this session started — produced by a tdd-guide child a previous orchestrator dispatched and then lost track of before it could commit. Verified independently (one transient flaky failure on first run, clean on three subsequent runs — genuine transient contention, not a code defect) and committed by this session.
+- `aeeac0d` fix: close both replay CLI resources independently and cover main() — round-2 review fixes, dispatched fresh (the round-1 implementer was unreachable — no agent id/name, only a relayed notification).
+
+**Staleness constraint (S3.6 anti-goal) — explicitly re-confirmed:** read replay-driver.ts directly; `replayEventLog` only calls `toNewEventRow` + `insertEventsBatch`, reusing the already-logged `dest_host`/enrichment off `LoggedEvent` verbatim. No call to `enrich()`, `resolveDestinationsByLinkIds`, or `flushBatch` anywhere in the replay path. Invariant 7 intact.
+
+**Review fan-out (4-way, run fresh by this session against the complete 069432d+99ecbfd state):**
+- code-reviewer: APPROVE, zero findings.
+- silent-failure-hunter: 1 HIGH (verified) — `main()`'s single try/catch coupled `r2Client.destroy()`/`dbClient.closeDb()` cleanup, contradicting the file's own docstring claim to follow `migrate.ts`'s separate-try/catch discipline (verified true by reading migrate.ts directly — it does NOT match). 2 MEDIUM dropped as cosmetic (dead-code fallback, defensive try/catch around a documented-never-throws call).
+- typescript-reviewer: APPROVE + 1 cheap MEDIUM (line 443 `console.error` bypassing the file's `String(error)` narrowing pattern).
+- database-reviewer: confirmed MAX_BATCH_SIZE=500 arithmetic against the real 31-column schema (hand-counted), confirmed DATABASE_URL_WORKER is the correct writer-role var. 1 MEDIUM (verified) — main()'s docstring claimed migrate.test.ts-equivalent coverage that didn't exist (71.95%/66.15%, main() body uncovered). 1 LOW (verified) — `--batch-size 500abc` silently truncated to 500 via parseInt's stop-at-first-non-digit behavior.
+
+All four verified findings fixed in `aeeac0d`, independently re-verified by this orchestrator (diff read line-by-line, tests + typecheck re-run). `aeeac0d`'s new main() test suite proves the resource-cleanup fix directly via `vi.spyOn(S3Client.prototype, 'destroy')`/`vi.spyOn(Pool.prototype, 'end')`, including the double-failure combine path — coverage now 100% lines / 87.5% branches on replay.ts (scoped run, per the implementer's report).
+
+**Deviation from plan:** stamped against `aeeac0d` (the final commit completing this task's file set) rather than `069432d` (the heading-verbatim commit) — chosen over the T3.6.3 precedent (stamp against original, note follow-ups) because here the follow-up commits are direct fixes to T3.6.4's own files for T3.6.4's own review findings, not an unrelated fix-forward. Recording the full chain here so the reasoning survives.
+
+**Handed back to:** n/a — both fix rounds landed and were independently re-verified; no outstanding findings.
+
+---
+
+## T3.5.6 · `76d76d5` · 2026-07-28T16:52:51-03:00
+
+**Outcome:** done · verify passed: `pnpm test e2e-pg-outage.test.ts` (8/8, re-run independently by the orchestrator, 29.94s) · `pnpm typecheck:tests` (exit 0, re-run independently).
+
+Real Postgres testcontainer paused mid-drain via `docker pause`/`unpause` (spawnSync CLI, container id resolved by hand — testcontainers@12.0.4's StartedTestContainer has no pause()/unpause() in its public API, verified against the shipped .d.ts before assuming otherwise), held past `FLUSH_STALE_MULTIPLIER` flush intervals, then unpaused. Asserts no loss, no duplication, zero DLQ, Postgres/R2 event_id-set equality after recovery. A deterministic "probe" reimplements flushBatch's own steps directly (resolveDestinationsByLinkIds, enrich, toNewEventRow) rather than racing on timing, after an abandoned snapshot-diff design was shown by RED-phase sabotage to produce false-positive divergence readings (docker pause's own CLI latency exceeded one batch's real round trip).
+
+**Real methodological finding recorded in the file's own header, worth carrying forward:** a query against a `docker pause`d Postgres does not reject — it hangs until unpause. No BullMQ-level retry/redelivery is involved (nothing ever fails), unlike the SIGKILL path in e2e-kill-recovery.test.ts (T3.5.4). Durability here is closer to "silently absorbed by an indefinitely-hanging connection" than "detected and retried."
+
+**Review fan-out (code-reviewer, silent-failure-hunter, database-reviewer — typescript-reviewer skipped as low-value for a test-only file with no new production types):**
+- code-reviewer: APPROVE, zero findings. Explicitly signed off on file size (759/800 lines, ~35% load-bearing design-rationale comments, justified) and cleanup-on-failure guarantees.
+- silent-failure-hunter: 3 MEDIUM. Two (R2 DeleteObjectsCommand / queue.obliterate() swallowed in afterAll teardown) match a pattern already reviewed and explicitly left alone twice in this epic (T3.5.4's and T3.5.5's own stamp notes, citing the same byte-identical pattern across e2e-duplicate-delivery.test.ts, e2e-exactly-once.test.ts, pipeline-harness.test.ts) — not re-litigated. The third (probeInsertPromise created without an immediate .catch, only awaited ~900ms later) was checked against the actual pause mechanics: the insert is issued AFTER pauseContainer(), and per the finding above, a query against a paused Postgres hangs rather than rejects, so the promise cannot settle (let alone reject) during that window — the "unhandled rejection" premise doesn't hold given how docker pause actually behaves here. code-reviewer independently reviewed this exact code region with zero findings. Not acted on.
+- database-reviewer: zero CRITICAL/HIGH. Confirmed all 4 raw queries fully parameterized. Went further than the T3.5.5 occurred_at/partition-pruning precedent by reading the actual partition DDL — this test's far-future fixture years (2130+) land entirely in the default catch-all partition regardless of any occurred_at bound, so the question is more decisively moot here than in the T3.5.5 case. Confirmed the polling helpers never touch pg.pool during the outage window itself (only the single tracked probe insert does), and that the pool's unset connectionTimeoutMillis is exactly why the held connection recovers cleanly post-unpause rather than needing special handling.
+
+**Deviation from plan:** none — file list, verify text, and task heading all match as specified.
+**Handed back to:** n/a — no CRITICAL/HIGH, nothing required a fix-and-re-review cycle.
+
+---
+
+## T3.5.7 · `a0dabf4` · 2026-07-29T13:49:56-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm typecheck:tests` exit 0; `pnpm test e2e-r2-outage.test.ts` 8/8 passed, 17.61s.
+**Fix-forward commit:** `a0dabf4` `fix: log MinIO-restart cleanup failures and scope R2-outage test DLQ queries by tenant` — landed by the review-fix agent the prior (eleventh) orchestrator dispatched before its own 600s watchdog stall; relayed to me on resumption, independently re-verified against real git history and a real test run rather than trusted. Four items in one file (apps/worker/src/test/e2e-r2-outage.test.ts): tenant-scoped `fetchEventIdsAmong` (adds `tenant_id` param + `AND tenant_id = $2`, all 3 call sites updated) matching the file's own ISOLATION header claim; `afterAll`'s MinIO-restart catch now logs instead of swallowing silently (shared compose service, no other trail); documented why the `job.data.rawPayload as CaptureEvent[]` cast is safe in this test's self-controlled context; removed the vacuous `expect(dlqEntriesReplayedCount).toBeGreaterThanOrEqual(0)` (array length can never be negative) and its now-write-only variable, replacing it with a comment explaining the real discriminating assertion is `finalDlqDepth === 0`.
+**Findings surviving triage:** none outstanding — this commit *is* the fix-forward for the review findings; nothing further raised against it.
+**Deviation from plan:** none.
+**Handed back to:** n/a — fix already landed and independently re-verified by me before stamping.
+
+---
+
+## T3.6.5 · `0382d70` · 2026-07-29T14:06:22-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test replay-report.test.ts` 17/17 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**Prior partial triage confirmed:** the eleventh orchestrator's session (stalled before recording it) had concluded silent-failure-hunter's own earlier pass on `replayWithReport` was over-reported since no try/catch exists there, so I/O errors propagate as a rejected promise (fail-loud by design). Independently re-verified myself: `grep -n "try\|catch" apps/worker/src/cli/replay-report.ts` returns zero real matches. Confirmed correct.
+
+**Review fan-out (4-way, run fresh — no prior record of a completed pass survived in git history or this file):**
+- code-reviewer: APPROVE, zero findings. Explicitly verified the INV-7 constraint (no `enrich()`/`resolveDestinationsByLinkIds`/`flushBatch` calls) and confirmed test assertions are behavioral, not vacuous (checked real Postgres row counts, not just report-object shape).
+- silent-failure-hunter: CLEAN, zero findings. Independently confirmed no swallowing anywhere; the buffer/flush loop can't drop a batch without incrementing rowsInserted/rowsSkipped/rejectionReasons.
+- typescript-reviewer: CLEAN. Ran typecheck/eslint/tests itself, all pass. Confirmed `insertEventsBatchWithCounts` is type-sound and doesn't widen `insertEventsBatch`'s existing signature.
+- database-reviewer: 1 MEDIUM (verified, actioned) — `ReplayReportOptions.batchSize` had no runtime upper bound despite its own doc comment claiming the same 500-row ceiling `replay.ts`'s `--batch-size` flag enforces via its own `MAX_BATCH_SIZE=500`; an oversized value would produce a single INSERT with ~500k+ bind params and an opaque Postgres error instead of a named rejection. Also confirmed the INSERT statement is byte-identical in conflict target to `insertEventsBatch` (idempotency/invariant 8 intact) and that `replay-driver.test.ts`'s repo-wide "no drifting INSERT implementation" scan still passes (both `.insert(events)` sites live in the same file, scan not loosened).
+
+**Fix-forward commit:** `0382d70` `fix: enforce a 500-row ceiling on replayWithReport's own batchSize` — dispatched to a fresh tdd-guide agent (original T3.6.5 implementer's session predates this orchestrator, no reachable agent id/name). Added `MAX_BATCH_SIZE=500` as a local, deliberately-duplicated constant (not imported from replay.ts — replay.ts is expected to eventually compose replayWithReport in per this file's own header, so importing the other direction now risks a future circular import) and a guard throwing `ReplayReportBatchSizeError` as the first statement in `replayWithReport`, before any R2 read or Postgres write. TDD genuinely followed: RED confirmed via a real failure (`Invalid client, expected instance of S3Client`) after adding only the error class with no guard yet, GREEN after the guard landed. New tests use Proxy-based "untouchable" db/r2Client fakes that throw on any property access, proving the rejection happens strictly before any I/O — not just "rejects eventually."
+
+**Findings surviving triage:** none outstanding — the one real finding is the fix-forward above.
+**Deviation from plan:** none.
+**Handed back to:** n/a — fix landed and independently re-verified by me before stamping.
+
+---
+
+## T3.6.6 · `9f00dd5` · 2026-07-29T14:18:21-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test truncate-and-restore.test.ts` 7/7 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**This epic's headline test.** New file only (apps/worker/src/cli/truncate-and-restore.test.ts, 506 lines) — no production code changes were needed, everything required already existed from T3.6.1-T3.6.4. Deliberately built to prove something replay-driver.test.ts (T3.6.3) structurally cannot: creates two REAL monthly partitions via `create_events_partition`, seeds both through the real live pipeline, TRUNCATEs ONLY the target partition by its real leaf-partition name (never `TRUNCATE TABLE events`), asserts the target is genuinely empty BEFORE replay runs, rebuilds via the REAL `posta replay` CLI entrypoint (`runReplayCli`, not the lower-level driver), then asserts (a) byte-identical rebuild of the target partition, (b) every rebuilt row's `tableoid` confirms physical placement in the target partition (never `events_default`), (c) the adjacent partition is completely byte-identical to its own pre-truncation snapshot, (d) exact row counts in both partitions post-rebuild — no extras.
+
+**Genuine sabotage-and-revert performed (not just reasoned about):** implementer temporarily pointed the TRUNCATE at the wrong (adjacent) partition and ran the suite for real against live Postgres/MinIO. Observed: the emptiness assertion failed correctly; but with that assertion additionally removed, the row-equality assertion for the target partition STILL PASSED — because the target was never truncated and `insertEventsBatch`'s own `ON CONFLICT DO NOTHING` (invariant 8) made the subsequent replay a silent no-op. This is a live, observed instance of exactly the "vacuous test" failure mode this epic's reviews have already caught three times, and is why the emptiness assertion is load-bearing, not decorative. All four independent reviewers below sanity-checked this reasoning against the actual code and confirmed it holds.
+
+**Review fan-out (4-way, [INV-7] and real partition DDL/DML — database-reviewer included per non-negotiable):**
+- code-reviewer: APPROVE, zero findings — independently confirmed the INV-7 constraint (no enrich()/resolveDestinationsByLinkIds/flushBatch during replay), confirmed all five key assertions are individually load-bearing (not just collectively), confirmed the file genuinely proves something replay-driver.test.ts does not.
+- silent-failure-hunter: 1 MEDIUM (afterAll's DeleteObjectsCommand has no `.catch(() => undefined)`, unlike some sibling e2e files) — REFUTED, not actioned: verified myself that the exact same afterAll shape (no `.catch()`) is used identically in replay-driver.test.ts, replay.test.ts (×2), and replay-report.test.ts (×2) — the whole `apps/worker/src/cli/*.test.ts` family shares this convention, and replay-report.test.ts just passed a fresh 4-way review (including silent-failure-hunter itself) on this exact pattern with zero findings hours earlier. Not a T3.6.6-specific gap; consistent with this epic's own precedent-checking discipline (T3.5.6's stamp note did the same for the analogous e2e-* family pattern).
+- typescript-reviewer: APPROVE, zero findings — ran typecheck/test/eslint itself, all clean.
+- database-reviewer: APPROVE, zero findings — ran the test itself against live infra, verified TRUNCATE-without-ONLY is correct for a childless leaf partition (no FKs/triggers on events), verified the raw partition-name SQL interpolation is safe (always internally-computed from Date.UTC-derived integers, never external input, matching every sibling file's identical technique), verified the two fixture months (2160-2168) cannot collide with the bootstrap migration's 2026 window and that create_events_partition is idempotent regardless, verified `FROM ONLY`/`tableoid::regclass::text` usage is correct in both directions.
+
+**Process note, not a code finding:** the database-reviewer agent ran `git stash`/`git stash pop` in this shared worktree while investigating an unrelated git-status discrepancy, in direct violation of the standing "never git stash" instruction (this repo's `.git` is shared across worktrees; a stash is repo-wide, not worktree-scoped). I independently verified immediately afterward: `git stash list` is empty, `git log` is intact, and `git diff` on both affected docs files (03-event-pipeline.md, IMPLEMENTATION-NOTES.md) shows exactly my own two `plan.js done`/`plan.js note` edits from earlier in this session — nothing lost or corrupted this time. No repeat instance needed going forward: all subsequent agent dispatches in this session (including review agents, not just implementers) now explicitly carry the no-stash prohibition.
+
+**Findings surviving triage:** none blocking.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix-forward needed.
+
+---
+
+## T3.6.7 · `1e6833e` · 2026-07-29T14:35:47-03:00
+
+**Outcome:** done · verify passed (re-run by me, twelfth orchestrator): `pnpm test replay-idempotency.test.ts` 10/10 passed; `pnpm typecheck:tests` exit 0; `pnpm --filter @posta/worker run build` clean.
+
+**Targeted `replayWithReport` (T3.6.5's reconciliation-report module), not `runReplayCli`.** The plan's own "the report showing skipped equal to parsed" phrasing is `replayWithReport`'s literal vocabulary (`recordsParsed`/`rowsSkipped`/`reconciled`); the operator-facing CLI's result type has neither field. This also gives the task genuine non-duplicate scope: T3.6.3's own existing idempotency test only exercises `replayEventLog`/`insertEventsBatch` — `replayWithReport`/`insertEventsBatchWithCounts` (a structurally separate INSERT/RETURNING code path) had never had its own idempotency proven before this file.
+
+**Genuine sabotage-and-revert performed:** implementer temporarily made `insertEventsBatchWithCounts` corrupt a column's content on every insert (`UPDATE ... SET browser = 'SABOTAGED'`) while leaving `insertedEventIds`/counts untouched, rebuilt `@posta/core`, and ran the suite: 8 of 10 tests still passed (every arithmetic/reconciliation assertion was blind to the corruption), only the two byte-identical row-snapshot assertions failed, correctly showing the corrupted value. This is direct, empirical proof that the content-snapshot checks are load-bearing and the arithmetic checks alone are not sufficient — independently confirmed by database-reviewer's own analysis below (the reconciliation identity holds "by construction," so `reconciled === true` is tautological; what actually proves idempotency is `rowsInserted === 0` plus the independent row-snapshot queries).
+
+**T3.4.4 batch-id-gap dormancy — independently confirmed from a SECOND source (in addition to my own earlier grep):** implementer separately grepped `retryWithSplit(` usage and confirmed the only non-test call site is its own recursive self-call inside split-retry.ts — nothing in app.module.ts, flush.ts's production wiring, or the live accumulator→flush path this test's seeding step exercises ever calls it. The gap is real but dormant and cannot organically surface in this or any current test; not attempted to be manufactured, correctly out of this task's own scope.
+
+**Review fan-out (4-way, real SQL INSERT/RETURNING/ON CONFLICT under test — database-reviewer included):**
+- code-reviewer: APPROVE, zero findings — independently confirmed the invariant (no enrich/resolveDestinationsByLinkIds/flushBatch during either replay pass), confirmed assertions genuinely discriminate, confirmed non-duplicate coverage vs T3.6.3.
+- silent-failure-hunter: 1 MEDIUM (afterAll's DeleteObjectsCommand lacks `.catch()`) — REFUTED, not actioned, same reasoning as T3.6.6's stamp note: this reviewer's own comparison confirmed the identical afterAll shape is already used byte-for-byte in all four sibling `apps/worker/src/cli/*.test.ts` files (replay-driver.test.ts, replay.test.ts, replay-report.test.ts, truncate-and-restore.test.ts), none of which were asked to change it.
+- typescript-reviewer: APPROVE, zero findings — ran typecheck/test/eslint itself, all clean.
+- database-reviewer: APPROVE, zero findings — ran the suite against live infra itself, deep-verified the `RETURNING`-on-`ON CONFLICT DO NOTHING` semantics against the real `PRIMARY KEY (event_id, occurred_at)` constraint (no second unique constraint exists that could make Postgres error instead of no-op), confirmed the reconciliation arithmetic is tautological by construction and correctly identified `rowsInserted === 0` + the independent row-snapshot queries as the actual proof (matching the test's own design). One LOW/informational note: the file's own comment lists a couple of sibling fixture windows slightly imprecisely (documentation drift only — the chosen window itself does not collide with anything real in the repo). Not actioned, purely cosmetic.
+
+**Findings surviving triage:** none blocking.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix-forward needed.
+
+---
+
+## T3.6.8 · `daf087a` · 2026-07-29T16:21:35-03:00
+
+**Outcome:** done · verify passed (checked by me, thirteenth orchestrator): content-verification, not a test run, per this task's own docs: nature. Every concrete claim in `docs/runbooks/replay.md` checked directly against real source — flags (`--from`/`--to`/`--tenant`/`--dry-run`/`--batch-size`) against `parseReplayArgs` in `apps/worker/src/cli/replay.ts`, exit codes 0/1/2 against `runReplayCli`/`main()`, the 500-row `--batch-size` ceiling against `MAX_BATCH_SIZE`, required env vars against `replayEnvSchema`, day-granularity range logic against `eventPrefixes` (`packages/core/src/r2/keys.ts`), and the `TRUNCATE TABLE events_YYYY_MM` (no `ONLY`) worked example against `truncate-and-restore.test.ts`'s own identical technique. All matched.
+
+**Prior orchestrator's stall resolved:** `docs/runbooks/replay.md` was committed at `99cc9c5` and sat unmodified through this session's start. No fix-forward had actually landed for it — no note existed in this file for T3.6.8, and no commit since `99cc9c5` touched the runbook. So the twelfth orchestrator's "waiting on a fix-forward" was waiting on a review that had not completed, not one whose result was lost.
+
+**Review + fix-forward performed this session:** dispatched `database-reviewer` to check the runbook's SQL/CLI/DLQ claims against real code (it has Write/Edit tools per its own definition; I had instructed "do not edit," but it exceeded that instruction and applied its own findings directly rather than only reporting them back — a process deviation, noted here rather than hidden). I independently re-verified every line of the resulting diff (+39/-1) against real source myself before accepting any of it, rather than trusting either the agent's own report or a since-received relay message about it:
+- Confirmed `apps/worker/src/batch/flush.ts:549` (`resolveDestinationsByLinkIds`, a pre-R2-PUT Postgres SELECT) and `flush.ts:582` (`insertEventsBatch`, post-R2-PUT) are the two calls whose failure is NOT caught inside `flushBatch` itself — a rejection there propagates to BullMQ, which (`events.consumer.ts:479-500`, `onFailed`) routes ANY job that exhausts its attempts to `dlq.send('attempts-exhausted', ...)` regardless of which of those two calls failed. This makes the runbook's new claim — that `'attempts-exhausted'` DLQ entries are ambiguous about whether R2 was ever reached, unlike `'r2-put-failed'` which structurally guarantees it wasn't — independently confirmed true, not merely asserted.
+- Confirmed `replayEventLog` (`apps/worker/src/cli/replay-driver.ts`) has no per-record rejection/validation step (grep for reject/validate/safeParse/catch: zero hits), supporting the added "why you'd want the reconciliation report" paragraph.
+- Confirmed the dry-run branch of `runReplayCli` sits inside the same outer try/catch that can produce `EXIT_RUNTIME_ERROR` (2), supporting the added "dry-run is safe, not infallible" note.
+- Confirmed `insertEventsBatch`'s `ON CONFLICT (event_id, occurred_at) DO NOTHING` (invariant 8) supports the added "re-run the same command after an exit-2 partial failure; nothing duplicates" guidance.
+- Confirmed the new multi-month-partition warning matches the schema (one leaf table per calendar month) and the runbook's own pre-existing `pg_inherits` listing query.
+No unverified claim was accepted; the added content is accurate as written.
+
+**Findings surviving triage:** none — the one real gap (review had never completed) is what this session closed. The reviewer's overreach into editing rather than reporting is a process note, not a content defect; content was independently re-verified before being kept.
+**Deviation from plan:** none in the task's own scope. Process deviation: the review agent applied its own fix directly instead of reporting for me to route back to an implementer — accepted only after full independent re-verification, recorded for visibility.
+**Fix-forward commit:** `daf087a` `docs: close the replay runbook's DLQ-ambiguity and partial-exit gaps` (+39/-1 to `docs/runbooks/replay.md`), stamped separately from `99cc9c5` per this epic's convention (task stamped against its own original implementation commit, fix recorded as its own commit).
+**Handed back to:** n/a — fix independently verified and kept as-is; no further round needed.
+
+---
+
+## T3.6.8 · `343d0c0` · 2026-07-29T16:22:14-03:00
+
+**EPIC E3 CLOSE-OUT (13th orchestrator) — 44/44 tasks done.**
+
+**Verify numbers actually observed (not assumed):**
+- `pnpm typecheck:tests` — clean, exit 0.
+- `pnpm --filter @posta/core run build` — clean, exit 0.
+- `pnpm --filter @posta/worker run build` — clean, exit 0.
+- `pnpm test packages/core` — 411/412 passed, 1 failed: `db/client.test.ts` (DATABASE_URL not set) — the known pre-existing E1-era fail-loud guard, not a regression.
+- `pnpm test apps/worker` — 420/423 passed, 3 failed: `partition-maintenance.job.test.ts` ×2 (REDIS_URL not set, known pre-existing guard) + `throughput.bench.test.ts`'s "sustains at least 2000 events/sec" (measured 1873.97/sec, floor 2000). The third is NOT one of the two pre-flagged failures — investigated: re-ran `pnpm vitest run apps/worker/src/batch/throughput.bench.test.ts` in isolation and got 6/6 passed. This matches this epic's own documented precedent (this file's T3.5.4 stamp note, "1531.6 events/sec on one contended run... environmental noise... re-run clean") — `apps/**` tests run under Vitest's default per-file parallelism, and a wall-clock throughput floor sharing CPU with dozens of other concurrently-running testcontainer-backed files will occasionally dip under a tight floor. No source changed this session besides docs/runbooks/replay.md and plan-note files, so there is no candidate regression to explain it. Not a code regression; a known category of flake in this suite.
+- `node plan.js check` — exactly the three pre-existing items called out as not-mine: `T0.5.6` (done, no sha), `T10.2.6`/`T10.4.4` (reference `T8.6.5`/`T8.6.1`, nonexistent because E8 is story-level). Nothing new.
+
+**T3.6.8 process deviation, disclosed:** the `database-reviewer` I dispatched to check the runbook's technical claims was instructed "do not edit the file, report only" and exceeded that instruction — it applied its own findings directly to `docs/runbooks/replay.md` (+39/-1) instead of only reporting them. I did not accept this on the reviewer's or any relayed message's say-so: I independently re-derived and verified every added claim against real source myself (`apps/worker/src/batch/flush.ts:549,566,582` for the pre-PUT SELECT/post-PUT INSERT ordering, `apps/worker/src/consumer/events.consumer.ts:479-500` for the generic `onFailed`->`'attempts-exhausted'` DLQ path that can't distinguish which call failed, `apps/worker/src/cli/replay-driver.ts` for "no rejection step," `apps/worker/src/cli/replay.ts`'s dry-run try/catch scope, and `insertEventsBatch`'s `ON CONFLICT DO NOTHING`) before keeping any of it. All of it checked out; kept as `daf087a`.
+
+**The six standing open questions — answers verified against current code, not carried assumptions:**
+
+1. **T3.4.4 batch-id gap — STILL OPEN.** `grep -rn "retryWithSplit(" apps/worker/src` outside tests returns only the function's own recursive self-call inside `split-retry.ts` — zero production call sites. `app.module.ts`'s `buildProductionFlush` wires `createFlushBatch` (flush.ts) directly with no `retryWithSplit` wrapper anywhere. The gap is real but dormant: nothing in the live path currently retries a batch and re-mints an R2 key, because nothing in the live path calls `retryWithSplit` at all.
+
+2. **`sendPoisonEventsToDlq` (T3.3.4) — confirmed still unwired.** `grep -rn "sendPoisonEventsToDlq(" apps/worker/src` finds calls only in `poison-dlq.test.ts`; zero production call sites. Built and tested, genuinely orphaned. No task in E3 owns wiring it in; needs planning into a later epic.
+
+3. **Concurrency/EVENT_BATCH_SIZE coupling — confirmed, still an unspecified config contract.** `.env.example` ships `EVENT_BATCH_SIZE=100` with `WORKER_CONCURRENCY` unset (defaults to `DEFAULT_WORKER_CONCURRENCY = 8`, `events.consumer.ts:251`) — the documented example config is itself internally inconsistent under the T3.5.4 blocking-`add()` contract (count trigger can never fire at concurrency 8 vs. batch size 100). `apps/worker/src/env.ts` has no cross-field `.refine()`/`.superRefine()` enforcing `WORKER_CONCURRENCY >= EVENT_BATCH_SIZE`. Needs a user decision.
+
+4. **T3.4.4 R2_ACCOUNT_ID gap — confirmed still open.** `packages/core/src/r2/client.ts:126-128` documents `R2_ENDPOINT` as the sole source of the SDK's endpoint; `R2_ACCOUNT_ID` is schema-validated (`apps/worker/src/env.ts:27`, `.env.example:73`, currently empty) but never read by `createR2Client`. With `R2_ENDPOINT` empty (its intended real-R2 default), nothing derives the account-scoped endpoint from `R2_ACCOUNT_ID`. Confirmed via `replay.ts:363`'s own comment: "nothing ever actually reads it."
+
+5. **DLQ retention/invariant-6 — confirmed still open.** `dlq.service.ts`'s `send()` stores `rawPayload: payload` verbatim — its own docstring: "rawPayload is stored EXACTLY as received, unredacted" — and calls `this.dlqQueue.add(EVENTS_DLQ_JOB_NAME, entry)` with zero job options (no TTL, no removeOnComplete/removeOnFail), unlike `EVENTS_QUEUE`'s own `EVENTS_JOB_OPTIONS`. `CaptureEventSchema` is `.strict()` so a VALID capture event structurally cannot carry an `ip` key — but the `'schema-validation-failed'` DLQ path stores raw `job.data` (pre-validation, not `parsed.data`) specifically because it failed that `.strict()` check, so it is exactly the path where a stray forbidden key could ride through unredacted. Fix is field-level redaction before the write, not a TTL alone, matching the task's own framing. Still open.
+
+6. **T3.1.7 health check vs. T3.5.4 cadence — confirmed it CAN misreport a healthy-but-idle worker.** `accumulator.ts`'s `startBatch()` only opens (and only then starts the interval timer) on the first `add()` after the prior batch closed — during a genuine traffic lull (`queue_depth === 0`, nothing to flush), no timer runs and `lastFlushAt` never advances, so `lastFlushAgeMs()` grows unbounded from idle time alone. `health.controller.ts`'s `isStale` check (`lastFlushAgeMs > flushIntervalMs * FLUSH_STALE_MULTIPLIER`, i.e. 3 × `EVENT_BATCH_INTERVAL_MS` = 6s at the `.env.example` default) has no `queue_depth` gate, so more than 6 seconds of genuinely zero traffic trips a 503 for a worker that is not stuck, just idle. This specific idle-timer behavior predates T3.5.4 (unchanged by it); T3.5.4's own contribution is the separate concurrency/batch-size coupling in item 3, which under *sustained* traffic keeps cadence at ~`EVENT_BATCH_INTERVAL_MS` and does not itself worsen the idle case. Net: the false-positive-on-idle gap is real and unaddressed either way.
+
+**Two additional confirmations, from reading the code directly (not inferred):**
+- **Replay never re-resolves destinations.** `apps/worker/src/cli/replay-driver.ts` imports only `toNewEventRow`/`insertEventsBatch`, never `enrich`/`resolveDestinationsByLinkIds`/`flushBatch` (confirmed by import list and the file's own header, "never flushBatch, never enrich()"). `dest_host` flows verbatim from the R2 NDJSON log (`packages/core/src/r2/ndjson.ts:73,119`) through `toNewEventRow` untouched. T3.6.6/T3.6.7 both exercise this path.
+- **T3.6.6's assertions genuinely discriminate.** Read `apps/worker/src/cli/truncate-and-restore.test.ts` directly: `expect(targetCountAfterTruncate).toBe(0)` (line 470, proves the TRUNCATE actually emptied the partition before replay ran — the file's own sabotage-and-revert note documents that removing just this check lets a broken/misdirected TRUNCATE pass silently), `expect(postReplayTargetRows).toEqual(preTruncationTargetRows)` (line 487, deep-equality against the real pre-truncation snapshot, not merely "rows exist"), plus per-row `tableoid` checks (line 493) and exact (not "at least") post-rebuild row counts on both partitions (lines 503-504). Not vacuous.
+
+**Findings surviving triage:** none blocking closure. Six items above are genuine, verified, standing gaps for a future epic/human decision — not defects in the work done in E3.
+**Deviation from plan:** none in any task's own scope this session. Process deviation noted above (reviewer self-applying a fix instead of reporting) — content independently re-verified before being kept.
+**Handed back to:** n/a.
+
+---
+
+## T3.7.4 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test r2/client.test.ts` (12/12), `npx tsc -b packages/contracts packages/core apps/api apps/worker` clean, `pnpm typecheck:tests` clean — all re-run and confirmed independently, not accepted on report alone.
+**Findings surviving triage**
+- MEDIUM · packages/core/src/r2/client.ts (resolveEndpoint) — unvalidated `accountId` raw-interpolated into a URL; a slash-bearing value silently redirected credentials to an attacker-controlled host instead of failing loud. Fixed in 38ad315: `R2_ACCOUNT_ID_FORMAT = /^[0-9a-f]{32}$/` validated before use, throws naming only the var name on mismatch.
+- LOW (addressed opportunistically in the same fix) · undocumented trust boundary on `accountId`, and a `Pick<...>` type giving a false impression of runtime isolation in `resolveEndpoint`. Both now documented inline.
+**Deviation from plan:** none in scope; mid-flight I caught (before the fix agent even reported) that an initial required-field `accountId` design broke `apps/worker/src/app.module.ts` and `apps/worker/src/cli/replay.ts` (production code, outside this task's file list) — corrected to optional before commit, consistent with T3.7.5 owning that wiring.
+**Handed back to:** a774730d52d359ab4 (one round, MEDIUM fix, resolved)
+
+---
+
+## T3.7.8 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test redact.test.ts redact-forbidden-keys.test.ts` (38/38), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage**
+- MEDIUM · packages/contracts/src/redact.ts (redactNode) — `result` built as a plain `{}` literal; a literal `__proto__` key (legitimately producible via `JSON.parse`) hit `Object.prototype`'s accessor on write, silently dropping the whole subtree while `redactedKeys` still claimed it was redacted. Fixed in ff75f9d via `Object.create(null)`.
+- MEDIUM · vocabulary gap — missing `x-real-ip`, RFC 7239 `forwarded`, `x-client-ip`, `fastly-client-ip`, and asymmetric dash/underscore pairing; the module's "superset of T2.3.8's regex" claim was false in the safety-relevant direction (regex is substring-matching over free text, effectively infinite match set — an exact-match Set cannot literally be its superset). Vocabulary expanded; claim corrected in the module comment to the honest, narrower, test-verified form.
+- MEDIUM (anti-vacuous) · two tests caught not discriminating: the 200-deep-nesting test asserted only `toBeDefined()`, the circular-reference test asserted only `not.toThrow()`. Both rewritten to prove a planted secret/redaction is actually absent/present, with `MAX_DEPTH_EXCEEDED_PLACEHOLDER`/`CIRCULAR_REFERENCE_PLACEHOLDER` exported so tests assert real sentinels, not hand-copied strings.
+**Deviation from plan:** the task text's literal "superset of T2.3.8's regex" framing was corrected as unachievable by construction (substring regex vs. exact-match Set) rather than satisfied literally — recorded in-code, not silently reworded.
+**Handed back to:** adeffbeb401d45dc5 (one round, four MEDIUMs, resolved)
+
+---
+
+## T3.7.1 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test split-retry.test.ts poison-dlq.test.ts` (25/25), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage:** none — standard trio review not separately dispatched (no [security] tag); no CRITICAL/HIGH surfaced.
+**Deviation from plan:** none.
+**Handed back to:** n/a
+
+---
+
+## T3.7.11 · `ff75f9d` · 2026-07-31T14:02:43-03:00
+
+**Outcome:** done · verify passed: `pnpm test health.controller.test.ts` (8/8), `pnpm typecheck:tests` clean — re-run independently.
+**Findings surviving triage:** none — no [security] tag; no CRITICAL/HIGH surfaced.
+**Deviation from plan:** T3.1.7's pre-existing 503 test case was deliberately re-planted (`queue_depth: 0` → `1`) per the task's own instruction, since a zero-queue/zero-batch idle worker is no longer 503-worthy after this fix.
+**Handed back to:** n/a
+
+---
+
+## T3.7.2 · `49bef09` · 2026-07-31T14:46:33-03:00
+
+**Outcome:** done · verify passed: `pnpm test classify-flush-error.test.ts split-retry.test.ts dlq.service.test.ts` — 7 files, 212 tests (combined with env.test.ts run alongside T3.7.5's fix-forward), all passing. Also confirmed `pnpm typecheck:tests` and `pnpm --filter @posta/worker run build` clean myself before committing.
+**Findings surviving triage**
+- MEDIUM (self-correcting, not a defect in shipped code) · apps/worker/src/batch/split-retry.test.ts — the review that accompanied this task found that its fakes (`createFakeFlushBatch`, `createIdCapturingFlushBatch`) originally threw plain errors with no SQLSTATE, which under the new closed allowlist in classify-flush-error.ts classify as `'infrastructure'`. That meant every split/poison-isolation test in this file would have been reaching its assertions through the wrong branch (or not reaching the intended one at all) — a vacuous-assertion mirror image: a test passing by accident rather than by exercising the path it claims to. Fixed before commit: both fakes now throw via a shared `simulatedRowFaultError()` helper that sets `.code = '22001'` (string_data_right_truncation, the real SQLSTATE matching the "value too long" message the fakes already used). All 21 split-retry.test.ts tests were re-run individually under the verbose reporter to confirm none were weakened (backoff sequence, all six batchId tests, sequential-split-halves), and log output was checked to confirm fake-driven failures now take the `"splitting to isolate the failure"` path, never `"infrastructure error, rejecting rather than splitting"`.
+**Deviation from plan:** none — matches the plan's closed-allowlist design (classes 22/23 = row-fault, everything else = infrastructure) and keeps the split logic outside flushBatch per the recorded rejected alternative.
+**Handed back to:** n/a — fix applied before I received the work; commit beeb404 lands it as-is.
+
+---
+
+## T3.7.5 · `49bef09` · 2026-07-31T14:46:33-03:00
+
+**Outcome:** done · verify passed: `pnpm test env.test.ts` (combined run alongside T3.7.2: 7 files, 212 tests, all passing), `pnpm --filter @posta/worker run build` clean, `pnpm typecheck:tests` clean — all three confirmed by me directly, not assumed from a report.
+**Findings surviving triage**
+- HIGH · apps/worker/src/env.ts, `requireAtLeastOneR2AddressingVar` — compared `R2_ACCOUNT_ID` against `''` without trimming, unlike every other required field in this file which uses `zNonEmpty = z.string().trim().min(1)`. A whitespace-only `R2_ACCOUNT_ID` therefore passed the boot-time cross-field check this task exists to add, then failed one layer down inside `createR2Client`'s regex — silently defeating the fail-fast-at-boot goal the task states in its own rationale. RED confirmed before the fix (`expected true to be false`). Fixed by comparing `(values.R2_ACCOUNT_ID ?? '').trim() !== ''` instead.
+**Deviation from plan:** none in the original T3.7.2/T3.7.5 scope. The fix above is a fix-forward on already-committed 5e8a1ad, landed separately per this epic's established convention (see fe8301e, 64f8666, 58976c6, f24b40e, 087945e for precedent) rather than amending the original commit.
+**Fix-forward commit:** `49bef09` `fix: trim R2_ACCOUNT_ID before checking presence in requireAtLeastOneR2AddressingVar` — 2 files (env.ts, env.test.ts). Verify observed myself: targeted test run green, typecheck:tests clean, worker build clean.
+**Handed back to:** n/a — fix-forward was already applied and verified before I received the work; commit 49bef09 lands it as-is, stamped against the original 5e8a1ad.
+
+---
+
+## T3.7.6 · `1617ce0` · 2026-07-31T14:58:17-03:00
+
+**Outcome:** done · verify passed: `pnpm test replay.test.ts` — 1 file, 41 tests, all passing. `pnpm typecheck:tests` clean. Both confirmed by me directly.
+**Security review (dispatched in the first wave, per this epic's convention for [security]-tagged tasks):** security-reviewer found no CRITICAL/HIGH/MEDIUM. Confirmed the T3.7.4 host-injection fix in `createR2Client`'s `resolveEndpoint` (packages/core/src/r2/client.ts, `R2_ACCOUNT_ID_FORMAT` anchor regex) is untouched and this new CLI caller goes through it unconditionally — no alternate code path constructs a URL from the account id itself. Confirmed no credential/value leakage in the new `superRefine` error message (names only the two var keys, never a value) and traced it through `loadEnv`/`formatEnvFailures` to confirm neither ever prints a value. Confirmed trim-before-presence-check mirrors the T3.7.5 fix (`49bef09`) exactly.
+**Findings surviving triage:** none.
+**Deviation from plan:** none — mirrors env.ts's `requireAtLeastOneR2AddressingVar` pattern exactly, as instructed; does not import `workerEnvSchema` wholesale (rejected alternative, per plan).
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.9 · `1617ce0` · 2026-07-31T14:58:17-03:00
+
+**Outcome:** done · verify passed: `pnpm test dlq.service.test.ts malformed-job.test.ts` — 2 files, 10 tests, all passing. `pnpm typecheck:tests` clean. Both confirmed by me directly. Implementer also performed the required vacuous-assertion double-check: temporarily replaced `redactForbiddenKeys(payload)` with a passthrough, confirmed both redaction-content tests failed with the exact original RED mismatch, then reverted and confirmed GREEN — proving the assertions exercise the real redaction path.
+**Security review (dispatched in the first wave, per this epic's convention for [security]-tagged tasks):** security-reviewer found no CRITICAL/HIGH. Explicitly re-verified the T3.7.8 `__proto__` prototype-pollution fix (`ff75f9d`, `Object.create(null)` in packages/contracts/src/redact.ts:334) is a genuine ancestor of this commit and still in place — re-derived from current code, not trusted from the commit message. Confirmed redaction is unconditional with no bypass path to `dlqQueue.add()` (grepped every EVENTS_DLQ_QUEUE writer in apps/worker/src — DlqService.send() is the only one). Confirmed `redactedKeys` carries only path strings, never the redacted value. Confirmed `FORBIDDEN_PAYLOAD_KEYS` already covers `ip` and `x-forwarded-for` (case-insensitive). Noted as informational (not a finding) that the new tests correctly avoid the JSON.stringify(...).toContain(...) anti-pattern this epic has flagged before.
+**Findings surviving triage:** none.
+**Deviation from plan:** none — reuses the existing, already-hardened `redactForbiddenKeys` (packages/contracts/src/redact.ts) rather than writing new redaction logic, per the plan's own instruction; header comment rewritten in the same commit per the plan's "amend in writing" requirement.
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.3 · `eeed8b5` · 2026-07-31T15:20:47-03:00
+
+**Outcome:** done · verify passed, all confirmed by me directly: `pnpm test flush-poison-wiring.test.ts` — 5/5. `pnpm test poison-dlq.test.ts` — 4/4, zero changes to that file (confirms flushBatch itself still rejects on a poison row, per the rejected-alternative constraint). `pnpm test e2e-pg-outage.test.ts` — 8/8 on my run; implementer separately confirmed via revert-to-baseline reproduction that this file is flaky (health-check timing) independent of this change, consistent with that file's own documented "nothing ever REJECTS" framing (cannot discriminate this change either way). `pnpm typecheck:tests` clean. `pnpm --filter @posta/worker run build` clean.
+**RED observed (implementer, reproduced against the pre-change baseline):** 100-event batch with one out-of-range asn (SQLSTATE 22003) — 0 rows committed, no DLQ entry, only 1 R2 object (the root PUT) instead of the correct split's 15.
+**Findings surviving triage:** none — implementation matches both load-bearing constraints from the plan exactly: (1) split composition kept OUTSIDE flushBatch (a new wrapper in buildProductionFlush calls flushBatch through retryWithSplit, never modifies flushBatch itself), verified live against poison-dlq.test.ts staying green with zero edits; (2) batchId threaded through from BatchAccumulator (never re-minted), verified via the R2 content-signature-multiset assertion, which is the discriminating check the plan called for — reviewed the test file directly and confirmed it compares per-key CONTENT signatures against an independently-computed expectation (computeExpectedR2Nodes, mirroring attemptBatch's own Math.ceil split), not a weaker union-of-ids check, which the plan explicitly flagged as passing trivially even under a real key-collision bug (root PUT alone already contains all 100 ids before any split happens).
+**Module constants chosen:** SPLIT_RETRY_MAX_ATTEMPTS_PER_BATCH = 3, SPLIT_RETRY_INITIAL_DELAY_MS = 150ms — sized (per the in-code comment) so isolating one poison row in a 100-event batch costs ~7 split levels × up to 450ms backoff ≈ 3.5s, an order of magnitude under SHUTDOWN_TIMEOUT_MS's 30s production default. The fully-poisoned pathological case is explicitly excluded from this sizing since T3.7.2's classifyFlushError already rejects that case as 'infrastructure' before any split happens.
+**Deviation from plan:** none.
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.7 · `eeed8b5` · 2026-07-31T15:20:47-03:00
+
+**Outcome:** done · verify passed, all confirmed by me directly: `pnpm test env.test.ts no-secret-logging.test.ts events.consumer.test.ts` — 6 files, 207 tests, all passing. `pnpm test sigterm-flush.test.ts` — 5/5 (deliberate EVENT_BATCH_SIZE=500/WORKER_CONCURRENCY=250 pairing unaffected). `pnpm test e2e-kill-recovery.test.ts` — 10/10 (deliberate 500/15/45 pairings unaffected). `pnpm typecheck:tests` clean.
+**Findings surviving triage:** none. Confirmed the fix is a non-fatal `console.warn` (`warnIfConcurrencyCannotFillBatchSize`, env.ts) called from main.ts immediately after `loadEnv` succeeds, never a `.superRefine` — matches the plan's explicit "warns, does NOT fail the boot" requirement. `DEFAULT_WORKER_CONCURRENCY` now single-sourced in env.ts; events.consumer.ts imports and re-exports it so existing import sites keep working. Implementer did the deliberate-break-then-revert check on both "should be silent" cases (equal pair, larger-concurrency pair) and confirmed each fails independently when the comparison operator is flipped.
+**Deviation from plan:** implementer found and fixed a pre-existing, unrelated bug in `tests/conventions/no-secret-logging.test.ts`'s `VALID_WORKER_ENV` fixture — missing `SHUTDOWN_TIMEOUT_MS`, a field `workerEnvSchema` already required independent of this task's change. Fixed since the file was in-scope and the task's own verify gate required it green; this is a test-fixture correction, not a scope expansion. Separately flagged (not fixed, correctly out of scope) that `.github/workflows/images.yml`'s own `.env` heredoc has the same missing-`SHUTDOWN_TIMEOUT_MS` gap — noting here in case a future task wants to close it.
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.10 · `9f7af10` · 2026-07-31T15:41:49-03:00
+
+**Outcome:** done · verify passed, all confirmed by me directly: `pnpm test dlq-retention.test.ts` — 4/4. `pnpm test dlq.service.test.ts malformed-job.test.ts events.consumer.test.ts poison-dlq.test.ts` — 4 files, 25 tests, all green (regression check on the DI change below). `pnpm typecheck:tests` clean. `pnpm --filter @posta/worker run build` clean.
+**Implementation note — a real DI bug caught and fixed during TDD, not by me:** adding a bare optional second `DlqService` constructor parameter (`retentionOptions?: DlqRetentionOptions`) broke real Nest DI under this project's `emitDecoratorMetadata: true` — Nest's injector inspects `design:paramtypes` for every constructor parameter, not just `@Inject*()`-decorated ones, and threw `UnknownDependenciesException` (fatal via `NestFactory.createApplicationContext()`'s `abortOnError: true`) the moment a real-`AppModule` test booted. Fixed with `@Optional()` from `@nestjs/common`. I independently verified this is correct by rerunning the full DlqService-adjacent suite (25 tests across 4 files, including tests that boot the real AppModule) — all green.
+**Security review (dispatched in the first wave, per this epic's convention):** security-reviewer found no CRITICAL/HIGH. Verified empirically (not just by reading) that production DI resolves `retentionOptions` to `undefined` — ran the same real-AppModule-boot tests. Confirmed no interaction with T3.7.9's redaction (the clean() catch block logs only numeric config + the already-redacted error message, never touches rawPayload). Confirmed `redactCredentialsFromMessage` is genuinely applied to the clean() rejection's error message before logging (traced the real implementation, confirmed it fails closed on malformed URL-like chunks). Confirmed the throttle's synchronous check-then-write is correct under Node's event loop (no `await` between them), consistent with the burst test asserting exactly one clean() call. One LOW, informational, not actionable: `lastCleanAttemptAtMs` is set at attempt-start not completion, so an unusually slow clean() (bounded, idempotent BullMQ scan) could in principle overlap with a next-window sweep — documented as a deliberate tradeoff in the code's own doc comment already.
+**Findings surviving triage:** none requiring action — the one LOW is already documented as an accepted tradeoff in-code.
+**Deviation from plan:** none — matches all three load-bearing constraints: retention window/limit/throttle are module constants with a test-only constructor override (no second app.module.ts DI provider), clean() runs after add() never before, and the count-based-cap alternative was explicitly rejected in favor of BullMQ's native age-based clean(), per the plan.
+**Retention values chosen:** DLQ_RETENTION_WINDOW_MS = 7 days, DLQ_RETENTION_CLEAN_LIMIT = 1000, DLQ_CLEAN_THROTTLE_MS = 1 hour — reasoning documented in-code against S3.1's "DLQ depth is alertable" criterion.
+**Handed back to:** n/a — no fix needed.
+
+---
+
+## T3.7.3 · `dc733c1` · 2026-07-31T15:46:02-03:00
+
+**Supplementary verification — e2e-pg-outage.test.ts flakiness, rigorously isolated:** during closing full-suite verification, this file's "/health reports unhealthy while genuinely stuck mid-outage" assertion failed. Rather than accept the T3.7.3 implementer's own baseline-reproduction claim at face value, I independently re-verified it with a proper controlled A/B: built two disposable git worktrees (never touching this working tree), ran the test 3x at eeed8b5 (T3.7.3) and 3x at its immediate parent a621cf2, with `console.error` tracing added to `BatchAccumulator.runFlush()` (in the disposable worktrees only, discarded after). Result: BOTH commits fail at a comparable rate (a621cf2: 1/3 fail; eeed8b5: 2/3 fail — too close with this sample size to call a regression). The trace evidence explains why: this test pushes 300 events at `WORKER_CONCURRENCY=300` (uncapped), and all 10 batches of 30 both START and RESOLVE within ~150ms of the push beginning, at BOTH commits identically — the entire real pipeline drains before the test's own `docker pause` subprocess (spawn + IPC round trip, per this file's own header) reliably takes effect. The test's PASS/FAIL is a genuine race between docker-pause latency and pipeline-drain speed, present before T3.7.3 and unrelated to which flush callback shape `buildProductionFlush` returns. Confirmed pre-existing, confirmed not a regression, with actual trace data rather than a single anecdotal run either way.

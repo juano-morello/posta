@@ -53,6 +53,75 @@ async function listEventsPartitions(handle: PgContainerHandle): Promise<string[]
   return result.rows.map((row) => row.relname);
 }
 
+/**
+ * Advances `date` by `months` and returns a NEW Date — always landing on
+ * the correct month/year regardless of `date`'s day-of-month.
+ *
+ * The two `it()`s below used to inline the naive version instead —
+ * `d.setUTCMonth(d.getUTCMonth() + months)` on a `new Date()` left at
+ * whatever day-of-month "today" happened to be — and it was correct
+ * 27+ days a month by pure luck: setUTCMonth() computes the day count of
+ * the TARGET month and, if the day it's currently holding overflows that
+ * count, silently rolls into the month AFTER the intended one instead of
+ * raising. July 31 + 2 months intends September (30 days), so the naive
+ * version landed on October 1 — which is exactly what happened when this
+ * suite ran on 2026-07-31: the job, told "now" was a month later than
+ * intended, correctly created 3 new partitions where the test still
+ * expected 2.
+ *
+ * Pinning the day to the 1st BEFORE the month arithmetic sidesteps the
+ * whole class of bug: day 1 exists in every month, so there is nothing
+ * left for setUTCMonth() to normalize away. Extracted to one place so
+ * both call sites share it instead of repeating the two-line pattern
+ * that broke the first time, and proved below against fixed,
+ * calendar-independent dates rather than relying on the day this suite
+ * happens to run.
+ */
+function addUtcMonths(date: Date, months: number): Date {
+  const pinned = new Date(date.getTime());
+  pinned.setUTCDate(1);
+  pinned.setUTCMonth(pinned.getUTCMonth() + months);
+  return pinned;
+}
+
+describe('addUtcMonths — month-end day overflow (regression, fixed dates only)', () => {
+  // Fixed inputs, not new Date(): the bug this guards against was
+  // invisible on every day of the month except the 3-4 where "today + N
+  // months" overflows a shorter target month, so a test that still
+  // derived its input from the real calendar would only catch a
+  // regression on those same few days. These cases pin the input date
+  // directly instead, so every branch (a 31-day month rolling into a
+  // 30-day target, and a leap-year 29th rolling into a 31-day target)
+  // runs on every single invocation, no matter what today is.
+
+  it('July 31 + 2 months lands in September, not October (the exact case that broke on 2026-07-31)', () => {
+    const july31 = new Date(Date.UTC(2026, 6, 31));
+
+    const result = addUtcMonths(july31, 2);
+
+    expect(result.getUTCFullYear()).toBe(2026);
+    expect(result.getUTCMonth()).toBe(8); // September — UTC month index 8
+  });
+
+  it('Feb 29 (leap year) + 1 month lands in March, not April', () => {
+    const leapFeb29 = new Date(Date.UTC(2024, 1, 29));
+
+    const result = addUtcMonths(leapFeb29, 1);
+
+    expect(result.getUTCFullYear()).toBe(2024);
+    expect(result.getUTCMonth()).toBe(2); // March — UTC month index 2
+  });
+
+  it('does not mutate the date it was given', () => {
+    const original = new Date(Date.UTC(2026, 6, 31));
+    const originalTime = original.getTime();
+
+    addUtcMonths(original, 2);
+
+    expect(original.getTime()).toBe(originalTime);
+  });
+});
+
 describe('createDefaultPartitionRowsGauge — both registry paths (coverage, S1.3 review batch)', () => {
   it('registers on the given registry when one is provided', () => {
     const registry = new Registry();
@@ -111,8 +180,7 @@ describe('processPartitionMaintenanceJob (T1.3.4)', () => {
     );
     expect(before).toHaveLength(4); // bootstrap: current + 3 (T1.3.3)
 
-    const twoMonthsFromNow = new Date();
-    twoMonthsFromNow.setUTCMonth(twoMonthsFromNow.getUTCMonth() + 2);
+    const twoMonthsFromNow = addUtcMonths(new Date(), 2);
     vi.useFakeTimers();
     vi.setSystemTime(twoMonthsFromNow);
 
@@ -130,8 +198,7 @@ describe('processPartitionMaintenanceJob (T1.3.4)', () => {
   });
 
   it('a second immediate run (same faked time) creates nothing new', async () => {
-    const twoMonthsFromNow = new Date();
-    twoMonthsFromNow.setUTCMonth(twoMonthsFromNow.getUTCMonth() + 2);
+    const twoMonthsFromNow = addUtcMonths(new Date(), 2);
     vi.useFakeTimers();
     vi.setSystemTime(twoMonthsFromNow);
 

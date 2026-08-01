@@ -103,6 +103,13 @@ jobs:
           REVALIDATE_SECRET=ci-only-placeholder-secret
           EVENT_BATCH_SIZE=100
           EVENT_BATCH_INTERVAL_MS=2000
+          # Both mirror .env.example. SHUTDOWN_TIMEOUT_MS is load-bearing:
+          # workerEnvSchema (T3.1.6) requires it with no default, so without
+          # it the worker container fails boot validation. WORKER_CONCURRENCY
+          # only defaults to 8 — T3.7.7 warns at boot when it sits below
+          # EVENT_BATCH_SIZE, which is 100 above. Don't trim either.
+          WORKER_CONCURRENCY=100
+          SHUTDOWN_TIMEOUT_MS=30000
           LINK_CACHE_TTL_SECONDS=3600
           REDIS_LOOKUP_TIMEOUT_MS=30
           MAX_INFLIGHT_ENQUEUES=1000

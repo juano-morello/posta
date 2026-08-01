@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { workerEnvSchema } from './env';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_WORKER_CONCURRENCY, warnIfConcurrencyCannotFillBatchSize, workerEnvSchema } from './env';
 
 // T0.3.6 — the worker's Zod env schema (S0.3). The worker is a BullMQ
 // consumer that drains Redis, enriches, and writes events to Postgres
@@ -27,6 +29,7 @@ const VALID_WORKER_ENV: Record<string, string> = {
   LOG_LEVEL: 'info',
   EVENT_BATCH_SIZE: '100',
   EVENT_BATCH_INTERVAL_MS: '2000',
+  SHUTDOWN_TIMEOUT_MS: '30000',
 };
 
 describe('workerEnvSchema', () => {
@@ -36,12 +39,19 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('coerces WORKER_PORT, EVENT_BATCH_SIZE and EVENT_BATCH_INTERVAL_MS to numbers', () => {
+  it('coerces WORKER_PORT, EVENT_BATCH_SIZE, EVENT_BATCH_INTERVAL_MS and SHUTDOWN_TIMEOUT_MS to numbers', () => {
     const result = workerEnvSchema.parse(VALID_WORKER_ENV);
 
     expect(result.WORKER_PORT).toBe(3002);
     expect(result.EVENT_BATCH_SIZE).toBe(100);
     expect(result.EVENT_BATCH_INTERVAL_MS).toBe(2000);
+    expect(result.SHUTDOWN_TIMEOUT_MS).toBe(30000);
+  });
+
+  it('rejects SHUTDOWN_TIMEOUT_MS that is not a positive integer', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, SHUTDOWN_TIMEOUT_MS: '0' });
+
+    expect(result.success).toBe(false);
   });
 
   it('accepts an empty R2_ENDPOINT (production leaves it empty to use the R2 default)', () => {
@@ -56,7 +66,107 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it.each(Object.keys(VALID_WORKER_ENV))(
+  // [T3.7.5] The at-least-one-of cross-field rule — createR2Client
+  // (packages/core/src/r2/client.ts, T3.7.4) needs one of R2_ENDPOINT /
+  // R2_ACCOUNT_ID to address R2/MinIO at all; this schema enforces that at
+  // boot, before a `.env` ever reaches createR2Client's own construction-
+  // time throw.
+  describe('the R2_ENDPOINT / R2_ACCOUNT_ID at-least-one-of rule', () => {
+    it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are empty, naming BOTH keys', () => {
+      const result = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        R2_ENDPOINT: '',
+        R2_ACCOUNT_ID: '',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(failingPaths).toContain('R2_ENDPOINT');
+        expect(failingPaths).toContain('R2_ACCOUNT_ID');
+
+        const messages = result.error.issues.map((issue) => issue.message).join(' ');
+        expect(messages).toContain('R2_ENDPOINT');
+        expect(messages).toContain('R2_ACCOUNT_ID');
+      }
+    });
+
+    it('rejects when both R2_ENDPOINT and R2_ACCOUNT_ID are omitted entirely', () => {
+      const { R2_ENDPOINT: _R2_ENDPOINT, R2_ACCOUNT_ID: _R2_ACCOUNT_ID, ...rest } = VALID_WORKER_ENV;
+      void _R2_ENDPOINT;
+      void _R2_ACCOUNT_ID;
+      const result = workerEnvSchema.safeParse(rest);
+
+      expect(result.success).toBe(false);
+    });
+
+    it('parses when only R2_ENDPOINT is set and R2_ACCOUNT_ID is empty', () => {
+      const result = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        R2_ENDPOINT: 'http://localhost:9000',
+        R2_ACCOUNT_ID: '',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('parses when only R2_ACCOUNT_ID is set and R2_ENDPOINT is empty', () => {
+      const result = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        R2_ENDPOINT: '',
+        R2_ACCOUNT_ID: 'a'.repeat(32),
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('parses when R2_ACCOUNT_ID is omitted entirely and R2_ENDPOINT is set', () => {
+      const { R2_ACCOUNT_ID: _R2_ACCOUNT_ID, ...rest } = VALID_WORKER_ENV;
+      void _R2_ACCOUNT_ID;
+      const result = workerEnvSchema.safeParse(rest);
+
+      expect(result.success).toBe(true);
+    });
+
+    // [security review, MEDIUM] A whitespace-only R2_ACCOUNT_ID (a
+    // plausible copy/paste or trailing-newline artifact in a `.env` file
+    // or k8s Secret) must NOT read as "set" — unlike zNonEmpty, which
+    // every other required field in this schema uses (z.string().trim()
+    // .min(1)), R2_ACCOUNT_ID's own z.string().optional() does no
+    // trimming, so this case has to be asserted explicitly rather than
+    // assumed to fall out of the '' check above. createR2Client
+    // (packages/core/src/r2/client.ts) would still safely reject this one
+    // level down (R2_ACCOUNT_ID_FORMAT), but this schema's own
+    // .superRefine exists specifically to fail LOUD at boot instead of
+    // downstream — a whitespace value sailing past this check defeats
+    // that purpose for this one input shape.
+    it('rejects a whitespace-only R2_ACCOUNT_ID with an empty R2_ENDPOINT, naming BOTH keys', () => {
+      const result = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        R2_ENDPOINT: '',
+        R2_ACCOUNT_ID: '   ',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+        expect(failingPaths).toContain('R2_ENDPOINT');
+        expect(failingPaths).toContain('R2_ACCOUNT_ID');
+
+        const messages = result.error.issues.map((issue) => issue.message).join(' ');
+        expect(messages).toContain('R2_ENDPOINT');
+        expect(messages).toContain('R2_ACCOUNT_ID');
+      }
+    });
+  });
+
+  // [T3.7.5] R2_ACCOUNT_ID is excluded from this generic "every key is
+  // required" sweep — it is the one key in VALID_WORKER_ENV that is now
+  // genuinely OPTIONAL: deleting it alone still parses, because
+  // VALID_WORKER_ENV's own R2_ENDPOINT stays non-empty and satisfies the
+  // at-least-one-of rule below. Its own required-ness (in combination with
+  // R2_ENDPOINT) is covered by the dedicated tests further down.
+  it.each(Object.keys(VALID_WORKER_ENV).filter((key) => key !== 'R2_ACCOUNT_ID'))(
     'produces a named error on schema for a missing %s',
     (missingKey) => {
       const rest = { ...VALID_WORKER_ENV };
@@ -77,6 +187,23 @@ describe('workerEnvSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  // [review round 2, database-reviewer finding] EVENT_BATCH_SIZE governs
+  // flushBatch's own single multi-row INSERT (apps/worker/src/batch/
+  // flush.ts, T3.3.2) — 31 bind params per row, so an unbounded value
+  // risks exceeding Postgres's own per-statement parameter ceiling with a
+  // cryptic runtime error instead of a loud, named one at boot.
+  it('accepts EVENT_BATCH_SIZE at the upper bound (500)', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, EVENT_BATCH_SIZE: '500' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects EVENT_BATCH_SIZE above the upper bound (501)', () => {
+    const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, EVENT_BATCH_SIZE: '501' });
+
+    expect(result.success).toBe(false);
+  });
+
   it('rejects a LOG_LEVEL that is not a recognized pino level', () => {
     const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, LOG_LEVEL: 'banana' });
 
@@ -91,6 +218,141 @@ describe('workerEnvSchema', () => {
       expect(result.success).toBe(true);
     },
   );
+
+  // [T3.7.7] WORKER_CONCURRENCY moves INTO this schema — see this file's
+  // own module header addendum below for why it wasn't here already
+  // (T3.5.4 originally left it in events.consumer.ts, the one place it
+  // was consumed) and why it's relocated now. It stays OPTIONAL, unlike
+  // every other numeric knob in this schema: an operator who never sets
+  // it gets the same DEFAULT_WORKER_CONCURRENCY (8) readWorkerConcurrency
+  // (events.consumer.ts) has always defaulted to — this schema field must
+  // not turn that long-standing "unset is fine" contract into a boot
+  // failure.
+  describe('WORKER_CONCURRENCY [T3.7.7]', () => {
+    it('defaults to DEFAULT_WORKER_CONCURRENCY (8) when unset', () => {
+      const result = workerEnvSchema.parse(VALID_WORKER_ENV);
+
+      expect(result.WORKER_CONCURRENCY).toBe(DEFAULT_WORKER_CONCURRENCY);
+      expect(DEFAULT_WORKER_CONCURRENCY).toBe(8);
+    });
+
+    it('coerces a numeric string to a number', () => {
+      const result = workerEnvSchema.parse({ ...VALID_WORKER_ENV, WORKER_CONCURRENCY: '16' });
+
+      expect(result.WORKER_CONCURRENCY).toBe(16);
+    });
+
+    it.each(['0', '-1', '3.5', 'banana', ''])(
+      'rejects a non-positive-integer value when explicitly present: %j',
+      (value) => {
+        const result = workerEnvSchema.safeParse({ ...VALID_WORKER_ENV, WORKER_CONCURRENCY: value });
+
+        expect(result.success).toBe(false);
+      },
+    );
+  });
+
+  // [T3.7.7] The bug: since T3.5.4, a BullMQ job stays "held open" until
+  // its own event's batch flushes, so at most WORKER_CONCURRENCY events
+  // can ever be in flight at once — if WORKER_CONCURRENCY is below
+  // EVENT_BATCH_SIZE, the accumulator's COUNT trigger can mathematically
+  // never fire, and every batch silently falls back to the
+  // EVENT_BATCH_INTERVAL_MS timer instead. That pairing is sometimes
+  // DELIBERATE (flush-on-interval-only, bounded-latency deployments —
+  // sigterm-flush.test.ts and e2e-kill-recovery.test.ts both rely on it
+  // on purpose), so this can never be a boot failure — only a loud,
+  // one-time warning. Deliberate-break-then-revert performed by hand for
+  // both "should be silent" cases below (equal, and above): flipping `<`
+  // to `<=` in the implementation made the "equal" case's
+  // `not.toHaveBeenCalled()` assertion fail as expected, and flipping `<`
+  // to a truthy no-op made both silent cases fail; reverted after
+  // confirming each — see this task's own report for the exact output.
+  describe('warnIfConcurrencyCannotFillBatchSize [T3.7.7]', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('warns exactly once, naming both variables and both values, when concurrency is below batch size', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '8',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0]?.join(' ') ?? '';
+      expect(message).toContain('WORKER_CONCURRENCY');
+      expect(message).toContain('8');
+      expect(message).toContain('EVENT_BATCH_SIZE');
+      expect(message).toContain('100');
+    });
+
+    it('does not throw, and env still parses, when concurrency is below batch size', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const parseResult = workerEnvSchema.safeParse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '8',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      expect(parseResult.success).toBe(true);
+      if (!parseResult.success) return;
+      expect(() => warnIfConcurrencyCannotFillBatchSize(parseResult.data)).not.toThrow();
+    });
+
+    it('is silent when WORKER_CONCURRENCY equals EVENT_BATCH_SIZE', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '100',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('is silent when WORKER_CONCURRENCY is greater than EVENT_BATCH_SIZE', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const env = workerEnvSchema.parse({
+        ...VALID_WORKER_ENV,
+        WORKER_CONCURRENCY: '200',
+        EVENT_BATCH_SIZE: '100',
+      });
+
+      warnIfConcurrencyCannotFillBatchSize(env);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // [T3.7.7] DEFAULT_WORKER_CONCURRENCY's own definition moved from
+  // events.consumer.ts to here — that file's readWorkerConcurrency() must
+  // now IMPORT it rather than define it locally, so the two "what does
+  // WORKER_CONCURRENCY default to" answers (this schema's own field
+  // default, and readWorkerConcurrency's fallback) can never drift apart
+  // again. Asserted here by reading events.consumer.ts's own source text,
+  // not just by comparing values — two independent `= 8` literals would
+  // make every VALUE assertion pass while leaving the exact drift risk
+  // this task exists to close.
+  describe('DEFAULT_WORKER_CONCURRENCY provenance [T3.7.7]', () => {
+    it('events.consumer.ts imports DEFAULT_WORKER_CONCURRENCY from env.ts rather than defining it locally', () => {
+      const consumerPath = path.join(
+        process.cwd(),
+        'apps/worker/src/consumer/events.consumer.ts',
+      );
+      const contents = readFileSync(consumerPath, 'utf8');
+
+      expect(contents).toMatch(
+        /import\s*\{[^}]*\bDEFAULT_WORKER_CONCURRENCY\b[^}]*\}\s*from\s*['"]\.\.\/env['"]/,
+      );
+      expect(contents).not.toMatch(/export\s+const\s+DEFAULT_WORKER_CONCURRENCY\s*=/);
+    });
+  });
 
   it('does not read DATABASE_URL — the worker uses the writer-role DATABASE_URL_WORKER', () => {
     expect(workerEnvSchema.shape).not.toHaveProperty('DATABASE_URL');
@@ -112,5 +374,82 @@ describe('workerEnvSchema', () => {
 
   it('does not include the avatars R2 bucket — the worker only writes events', () => {
     expect(workerEnvSchema.shape).not.toHaveProperty('R2_BUCKET_AVATARS');
+  });
+});
+
+/**
+ * Minimal `KEY=VALUE` parser for `.env.example`, hand-rolled rather than a
+ * `dotenv` dependency — apps/worker has no direct dependency on `dotenv`
+ * (only the repo root's `dotenv-cli`, used to launch `nest start`, not to
+ * parse), and this repo's `.env.example` never uses quoting, `export`
+ * prefixes, or multi-line values (verified by hand against the file this
+ * reads), so a full parser would be more machinery than the file's own
+ * shape needs. Comments (`#`) and blank lines are skipped; every other
+ * line is split on its first `=`.
+ */
+function parseDotEnvFile(contents: string): Record<string, string> {
+  const values: Record<string, string> = {};
+
+  for (const line of contents.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+
+    const equalsIndex = trimmed.indexOf('=');
+    if (equalsIndex === -1) continue;
+
+    const key = trimmed.slice(0, equalsIndex).trim();
+    const value = trimmed.slice(equalsIndex + 1).trim();
+    values[key] = value;
+  }
+
+  return values;
+}
+
+// [T3.7.5] Reads the REAL .env.example off disk (never a hand-typed copy
+// of its contents) and parses it against workerEnvSchema directly — this
+// is the assertion that would have FAILED before this task: the pre-T3.7.5
+// schema marked R2_ACCOUNT_ID zNonEmpty while .env.example ships it empty,
+// so a `.env` copied verbatim from the example failed the worker's own
+// boot validation with nothing catching it. Keeps the example honest
+// going forward: any future edit to either the schema or the example that
+// breaks a fresh copy's ability to boot fails this test, not a confused
+// operator at deploy time.
+describe('.env.example', () => {
+  it('parses cleanly against workerEnvSchema — a fresh copy must boot the worker', () => {
+    const envExamplePath = path.join(process.cwd(), '.env.example');
+    const contents = readFileSync(envExamplePath, 'utf8');
+    const parsed = parseDotEnvFile(contents);
+
+    const result = workerEnvSchema.safeParse(parsed);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      // Surface exactly which keys are wrong, rather than a bare boolean
+      // failure, if this ever regresses.
+      const failingPaths = result.error.issues.map((issue) => issue.path.join('.'));
+      expect(failingPaths).toEqual([]);
+    }
+  });
+
+  // [T3.7.7] .env.example used to ship EVENT_BATCH_SIZE=100 with
+  // WORKER_CONCURRENCY left UNSET (defaulting to 8) — exactly the broken
+  // pairing this task's warning exists to catch, shipped in the file
+  // meant to document a WORKING configuration. Reads the file from disk
+  // the same way the test above does (never a hand-typed copy) and runs
+  // it through the real warning check, so a future edit that
+  // reintroduces the mismatch fails this test instead of silently
+  // shipping again.
+  it('is a coherent WORKER_CONCURRENCY / EVENT_BATCH_SIZE pairing — the warning check stays silent', () => {
+    const envExamplePath = path.join(process.cwd(), '.env.example');
+    const contents = readFileSync(envExamplePath, 'utf8');
+    const parsed = parseDotEnvFile(contents);
+
+    const env = workerEnvSchema.parse(parsed);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warnIfConcurrencyCannotFillBatchSize(env);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

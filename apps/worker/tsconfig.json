@@ -12,7 +12,31 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"],
+  // src/test/** [T3.5.1] — everything under this directory is shared
+  // test-support code (pipeline-harness.ts and its three split-out
+  // modules), not just *.test.ts files themselves. It must never ship in
+  // the production Docker image (mirrors why *.test.ts is already
+  // excluded below), and one of those modules imports a TYPE from
+  // '@posta/core/testing' — a subpath this package's own package.json
+  // exposes ONLY through its "exports" map, with no top-level "types"
+  // field node10 resolution (this file's own moduleResolution) can see at
+  // all. Before this task, EVERY consumer of '@posta/core/testing' in this
+  // repo was itself a *.test.ts file, already excluded above — this is the
+  // first shared, non-*.test.ts test-support module living inside an app's
+  // src/ tree, so this gap was never hit until T3.5.1 added one. Excluding
+  // the whole directory (rather than fixing moduleResolution here, which
+  // would ALSO change how every production file resolves imports) is
+  // consistent with why *.test.ts is excluded in the first place: this is
+  // test-support code, not production code, so it belongs entirely outside
+  // this package's own composite `tsc -b` build. It still gets real
+  // type-checking coverage: the repo-root tsconfig.test.json extends the
+  // shared base directly (bypassing this file's own node10 override) and
+  // therefore inherits "bundler" resolution, which DOES understand
+  // "exports" maps — so once pipeline-harness.test.ts (a real
+  // apps/**/*.test.ts file, included by tsconfig.test.json) imports these
+  // modules, tsc's own import-graph walk type-checks them transitively,
+  // with the resolution mode that can actually see the subpath.
+  "exclude": ["src/**/*.test.ts", "src/test/**"],
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/contracts" }

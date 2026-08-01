@@ -7,3 +7,6 @@ export * from './client';
 export * from './tenant';
 export * from './sql-migrate';
 export * from './partitions';
+// T3.3.2 — insertEventsBatch, the worker flush path's one write to
+// `events` per batch. Same barrel pattern as every export above.
+export * from './events';

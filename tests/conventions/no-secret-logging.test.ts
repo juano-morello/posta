@@ -118,6 +118,7 @@ const VALID_WORKER_ENV: Record<string, string> = {
   LOG_LEVEL: 'info',
   EVENT_BATCH_SIZE: '100',
   EVENT_BATCH_INTERVAL_MS: '2000',
+  SHUTDOWN_TIMEOUT_MS: '30000',
 };
 
 // webServerEnvSchema is exercised directly here (loadEnv + the schema),

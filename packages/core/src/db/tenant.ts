@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import type { CachedLink } from '@posta/contracts';
@@ -246,4 +246,57 @@ export async function resolveLinkBySlug(
     tenant_id: row.tenantId,
     destination: row.destination,
   };
+}
+
+/** One resolved link's tenant + destination — the minimal shape
+ * {@link resolveDestinationsByLinkIds} hands back per `link_id`. */
+export interface LinkDestinationLookup {
+  readonly tenantId: string;
+  readonly destination: string;
+}
+
+// T3.3.2 — the worker flush path's (apps/worker/src/batch/flush.ts)
+// batched destination lookup: resolves EVERY event's CURRENT destination
+// with ONE SELECT per flush, keyed by `link_id`, rather than one query
+// per event. enrich.ts's own header names flush.ts as the caller
+// responsible for resolving this before calling enrich() — CaptureEvent
+// carries no `destination` field (E2 capture doesn't know it).
+//
+// NOT wrapped in forTenant(), and deliberately so — the same
+// chicken-and-egg shape resolveTenantByHandle documents above:
+// forTenant(tenantId) requires already knowing ONE tenant to scope by,
+// but a single flush batch legitimately spans MULTIPLE tenants (one
+// worker instance drains every tenant's events, never just one), so
+// there is no single tenantId this query could be scoped to. Matched by
+// `id` alone — links' PRIMARY KEY, a globally-unique ULID (T1.1.5) —
+// never `(tenant_id, id)`: a link_id can belong to at most one tenant,
+// ever, so id alone is already an unambiguous, safe lookup key.
+//
+// [security] The caller (flushBatch) still MUST compare the returned
+// `tenantId` against its own event's `tenant_id` before trusting the
+// destination — defense in depth against a CaptureEvent that crossed a
+// process boundary (BullMQ/Redis) carrying a `tenant_id`/`link_id`
+// pairing that doesn't actually match Postgres. This function itself
+// does not — and structurally cannot — enforce that: it has no
+// caller-supplied tenant_id to check each row against, only the
+// link_ids being looked up.
+//
+// Archived links are NOT filtered out (no `archivedAt IS NULL`, unlike
+// resolveLinkBySlug's redirect-time check): a flush enriches a
+// historical record of a click that already happened, not a live
+// redirect decision, so an event against a since-archived link still
+// deserves its real dest_host rather than a null someone has to explain
+// later.
+export async function resolveDestinationsByLinkIds(
+  db: NodePgDatabase,
+  linkIds: readonly string[],
+): Promise<Map<string, LinkDestinationLookup>> {
+  if (linkIds.length === 0) return new Map();
+
+  const rows = await db
+    .select({ id: links.id, tenantId: links.tenantId, destination: links.destination })
+    .from(links)
+    .where(inArray(links.id, [...linkIds]));
+
+  return new Map(rows.map((row) => [row.id, { tenantId: row.tenantId, destination: row.destination }]));
 }

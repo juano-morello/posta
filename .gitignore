@@ -27,6 +27,12 @@ playwright-report/
 blob-report/
 .playwright/
 
+# apps/worker/src/test/pipeline-harness-process.ts's cross-process build
+# mutex — deliberately outside dist/ (see that file's own comment on
+# BUILD_LOCK_PATH), so it needs its own explicit entry rather than
+# riding dist/'s blanket ignore above.
+.pipeline-harness-build.lock
+
 # --- data files ------------------------------------------------------------
 # GeoLite2 ASN database (S2.3) — downloaded at build time, MaxMind-licensed,
 # ~8MB binary. Never commit it.

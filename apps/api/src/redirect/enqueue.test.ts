@@ -1,4 +1,4 @@
-import { newId } from '@posta/core';
+import { EVENTS_QUEUE, newId } from '@posta/core';
 import { startRedisContainer, type RedisContainerHandle } from '@posta/core/testing';
 import type { CaptureEvent } from '@posta/contracts';
 import { Registry, register } from 'prom-client';
@@ -9,7 +9,6 @@ import {
   createEnqueueDroppedCounter,
   createEventsQueue,
   ENQUEUE_DROPPED_COUNTER_NAME,
-  EVENTS_QUEUE_NAME,
   type EnqueueQueue,
 } from './enqueue';
 
@@ -263,17 +262,22 @@ describe('createEventsQueue + createEnqueueCapture — real BullMQ (testcontaine
     await redis.stop();
   });
 
-  it('builds a queue named "events" with the bounded job-retention policy applied to every added job', async () => {
+  it('builds a queue named "events" with the shared EVENTS_JOB_OPTIONS policy applied to every added job', async () => {
     const queue = createEventsQueue(redis.url);
     try {
-      expect(queue.name).toBe(EVENTS_QUEUE_NAME);
+      expect(queue.name).toBe(EVENTS_QUEUE);
 
       const job = await queue.add(CAPTURE_JOB_NAME, CAPTURE_EVENT);
 
       expect(job.name).toBe(CAPTURE_JOB_NAME);
       expect(job.data).toEqual(CAPTURE_EVENT);
+      expect(job.opts.attempts).toBe(5);
+      expect(job.opts.backoff).toEqual({ type: 'exponential', delay: 1000 });
       expect(job.opts.removeOnComplete).toBe(1000);
-      expect(job.opts.removeOnFail).toBe(500);
+      // EVENTS_JOB_OPTIONS.removeOnFail is `false` (T3.1.1) — never
+      // auto-removed. See packages/core/src/queue/events-queue.ts's own
+      // header for why that supersedes T2.4.2's bounded 500.
+      expect(job.opts.removeOnFail).toBe(false);
     } finally {
       // Both real-Redis tests in this block share ONE Redis container
       // and therefore one 'events' keyspace — obliterate before closing

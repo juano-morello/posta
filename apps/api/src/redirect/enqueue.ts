@@ -1,4 +1,5 @@
 import { Queue } from 'bullmq';
+import { EVENTS_JOB_OPTIONS, EVENTS_QUEUE } from '@posta/core';
 import { redactCredentialsFromMessage, type CaptureEvent } from '@posta/contracts';
 import { Counter, type Registry } from 'prom-client';
 
@@ -60,49 +61,36 @@ import { Counter, type Registry } from 'prom-client';
 // internally, e.g. rate-limiting). Harmless either way: nothing on this
 // producer's own path (queue.add()) issues a blocking command.
 
-/** The name every producer (this file) and, eventually, every consumer
- * (apps/worker) must agree on. T3.1.1 (E3) promotes this to a shared
- * `packages/core` contract both apps import, so a name mismatch becomes
- * structurally impossible instead of a silent "producer enqueues
- * happily, consumer waits on an empty queue" bug — until that lands,
- * this is the one place the literal is spent. */
-export const EVENTS_QUEUE_NAME = 'events';
-
 /** The job name every enqueueCapture() call uses. Exported so tests can
  * assert against it instead of duplicating the literal. */
 export const CAPTURE_JOB_NAME = 'capture';
 
-// Bounded, deliberately never `true` (removes the job instantly on
-// settle — zero retention, no way to inspect a single failed job after
-// the fact) and never left unset (BullMQ's own default: keep every job
-// forever). Redis here also holds the TTL'd link/handle cache under
-// `volatile-lru` (spec §9) — un-TTL'd BullMQ job hashes are never
-// eviction candidates under that policy, so unbounded retention is a
-// real memory hazard for the WHOLE Redis instance, not just this queue.
-// A completed job has already done its job and carries little forensic
-// value, so a larger bound costs little; a failed job is what someone
-// will actually go looking at, so a smaller-but-nonzero bound keeps
-// enough recent history to debug without letting failures accumulate
-// unbounded the way `removeOnFail: false` would.
-const REMOVE_ON_COMPLETE = 1000;
-const REMOVE_ON_FAIL = 500;
-
 /**
  * Builds the `events` BullMQ Queue with its own dedicated connection
- * (see this file's header for why) and the bounded job-retention policy
- * above. Called exactly once, at boot (T2.4.3 wires the call into
+ * (see this file's header for why) and the shared job-retention/retry
+ * policy. Called exactly once, at boot (T2.4.3 wires the call into
  * main.ts) — never per request [INV-2].
+ *
+ * T3.1.1 [E3] — EVENTS_QUEUE (the queue name) and EVENTS_JOB_OPTIONS
+ * (attempts/backoff/removal policy) now live in `packages/core`
+ * (queue/events-queue.ts), not here: `core` is the one package both this
+ * producer (apps/api) and the eventual consumer (apps/worker, T3.1.3)
+ * import, so it is the only place a name or policy mismatch between the
+ * two sides becomes a type error instead of a silent "producer enqueues
+ * happily, consumer waits on an empty queue forever" bug. Before this,
+ * both were literals only this file knew about (T2.4.2) — that was fine
+ * with exactly one side, and stopped being fine the moment a second side
+ * needed to agree. See events-queue.ts's own header for the fuller
+ * reasoning behind EVENTS_JOB_OPTIONS.removeOnFail specifically flipping
+ * from T2.4.2's bounded `500` to `false`.
  */
 export function createEventsQueue(redisUrl: string): Queue<CaptureEvent> {
-  return new Queue<CaptureEvent>(EVENTS_QUEUE_NAME, {
+  return new Queue<CaptureEvent>(EVENTS_QUEUE, {
     connection: {
       url: redisUrl,
       maxRetriesPerRequest: null,
     },
-    defaultJobOptions: {
-      removeOnComplete: REMOVE_ON_COMPLETE,
-      removeOnFail: REMOVE_ON_FAIL,
-    },
+    defaultJobOptions: EVENTS_JOB_OPTIONS,
   });
 }
 
