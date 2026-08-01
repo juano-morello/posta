@@ -94,6 +94,7 @@ export default defineConfig({
             'apps/api/src/redirect/test/**',
             'apps/worker/src/test/e2e-*.test.ts',
             'apps/worker/src/test/pipeline-harness.test.ts',
+            'apps/worker/src/batch/throughput.bench.test.ts',
           ],
         },
       },
@@ -106,20 +107,23 @@ export default defineConfig({
       },
       // 'e2e' project (T3.5, E3) — split out of 'default' for the SAME
       // reason 'containers' and 'redirect-hot-path' are (see their own
-      // comments): these seven files don't just read and write MinIO like
-      // the ~20 other R2-backed files under 'default' now can (the main
-      // `ci` job writes a `.env` and starts the compose MinIO as of
-      // 9402a36) — they OPERATE it mid-run. e2e-r2-outage.test.ts calls
-      // `docker compose stop/start minio` directly, and every other file
-      // here shares that same compose MinIO through startPipelineHarness()
-      // /REAL_R2_CONFIG, so one file taking it down is a hard dependency
-      // the read/write-only files don't have and can't be mixed with. See
-      // this block's own `fileParallelism` paragraph below for the fuller
-      // account (the measured collision, and why it's `false` here).
+      // comments). That reason covers seven of this project's eight files;
+      // the eighth, throughput.bench.test.ts, is here on entirely different
+      // grounds and has its own paragraph further down. The seven don't just
+      // read and write MinIO like the ~20 other R2-backed files under
+      // 'default' now can (the main `ci` job writes a `.env` and starts the
+      // compose MinIO as of 9402a36) — they OPERATE it mid-run.
+      // e2e-r2-outage.test.ts calls `docker compose stop/start minio`
+      // directly, and every other one of the seven shares that same compose
+      // MinIO through startPipelineHarness()/REAL_R2_CONFIG, so one file
+      // taking it down is a hard dependency the read/write-only files don't
+      // have and can't be mixed with. See this block's own `fileParallelism`
+      // paragraph below for the fuller account (the measured collision, and
+      // why it's `false` here).
       // .github/workflows/ci.yml's `event-pipeline` job is what actually
       // runs this project, invoking `pnpm test --project e2e` against that
       // same compose stack. As with 'redirect-hot-path' below, 'default'
-      // excludes these same two globs, so this project is the ONLY one
+      // excludes these same three globs, so this project is the ONLY one
       // that ever runs these files — if that job is ever removed, they
       // silently stop running everywhere.
       //
@@ -148,13 +152,42 @@ export default defineConfig({
       // docker — the "docker compose build" in its neighbouring comment is
       // an analogy, not an invocation.
       //
-      // Timeouts, not left at Vitest's 5s/10s defaults: every file here
-      // already calls vi.setConfig() with its own (testTimeout 60_000,
-      // hookTimeout up to 900_000 in e2e-pg-outage/e2e-kill-recovery) and
-      // passes explicit per-hook timeouts on top, so these project-level
-      // values are the ceiling those files assume rather than a new
-      // policy — set here so a file added to this glob later inherits a
-      // workable budget instead of timing out at 10s inside a beforeAll
+      // apps/worker/src/batch/throughput.bench.test.ts (T3.3.6) is the ONE
+      // file here whose membership has nothing to do with MinIO — it reads
+      // and writes it exactly like the ~20 read/write-only files still under
+      // 'default', and never operates it. It is here because it asserts a
+      // HARD FLOOR of 2000 events/sec, and a throughput floor only measures
+      // throughput on a machine that isn't doing anything else. Until
+      // 9402a36 it was silently SKIPPED in CI: it died on connection-refused
+      // against a MinIO that did not exist, so the assertion never actually
+      // ran. Now that the main `ci` job writes a `.env` and starts the
+      // compose MinIO, it executes for real — competing with the other 149
+      // files that job's four projects collect (default + web + core +
+      // redirect-hot-path). Measured under exactly that load on one machine:
+      // 968, 1183 and 1380 events/sec across three separate runs, i.e. it
+      // fails there more often than it passes. Alone in this project it
+      // measures 3141-3147 events/sec, comfortably clear. This project's
+      // `fileParallelism: false` plus its own `event-pipeline` CI job is the
+      // quiet machine the floor was calibrated against.
+      //
+      // The 2000 events/sec assertion is NOT relaxed and the test file is
+      // NOT touched — this is a placement decision, not a weakening.
+      // T3.3.6's verify stands exactly as the plan writes it: if a 2-vCPU
+      // GitHub runner genuinely cannot sustain 2000 events/sec with this
+      // file running alone and serially, the test goes red, and that is a
+      // TRUE result worth having rather than one to tune away. Nobody
+      // should read this move as the threshold having been quietly lowered.
+      //
+      // Timeouts, not left at Vitest's 5s/10s defaults: every
+      // apps/worker/src/test/ file here already calls vi.setConfig() with
+      // its own (testTimeout 60_000, hookTimeout up to 900_000 in
+      // e2e-pg-outage/e2e-kill-recovery) and passes explicit per-hook
+      // timeouts on top (throughput.bench.test.ts passes only the latter —
+      // 180s on its beforeAll, 120s on its afterAll — which override these
+      // project values the same way), so these project-level values are the
+      // ceiling those files assume rather than a new policy — set here so a
+      // file added to this glob later inherits a workable budget instead of
+      // timing out at 10s inside a beforeAll
       // that boots containers, builds and spawns a worker, and waits on
       // STALL_REDELIVERY_TIMEOUT_MS (150s) for BullMQ's stalled-job
       // redelivery. Strictly above 'default', never below it.
@@ -167,10 +200,11 @@ export default defineConfig({
       // e2e-r2-outage.test.ts's whole method is `docker compose stop minio`
       // — which takes it down for every other process on the machine, not
       // just itself. Spread across 'default''s 83 files those seven rarely
-      // overlapped; alone in a 7-file project they are all in flight at
-      // once. Measured, not predicted: the first run of this project with
-      // parallelism left on failed exactly that way — 1 failed | 6 passed,
-      // e2e-pg-outage.test.ts dying on `connect ECONNREFUSED 127.0.0.1:9000`
+      // overlapped; alone in what was then a 7-file project they are all in
+      // flight at once. Measured, not predicted: the first run of this
+      // project with parallelism left on failed exactly that way, at
+      // 1 failed | 6 passed, with e2e-pg-outage.test.ts dying on
+      // `connect ECONNREFUSED 127.0.0.1:9000`
       // (and ::1:9000) mid-drain while e2e-r2-outage.test.ts had MinIO
       // stopped. Serialized, the same seven files pass 121/121. Cost is
       // ~88s wall-clock parallel versus ~182s serial (both measured on the
@@ -182,6 +216,9 @@ export default defineConfig({
           include: [
             'apps/worker/src/test/e2e-*.test.ts',
             'apps/worker/src/test/pipeline-harness.test.ts',
+            // Not a MinIO operator — here for an uncontended machine. See
+            // this block's own throughput.bench.test.ts paragraph above.
+            'apps/worker/src/batch/throughput.bench.test.ts',
           ],
           testTimeout: 60_000,
           hookTimeout: 900_000,
