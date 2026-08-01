@@ -1072,3 +1072,67 @@ No unverified claim was accepted; the added content is accurate as written.
 ## T3.7.3 · `dc733c1` · 2026-07-31T15:46:02-03:00
 
 **Supplementary verification — e2e-pg-outage.test.ts flakiness, rigorously isolated:** during closing full-suite verification, this file's "/health reports unhealthy while genuinely stuck mid-outage" assertion failed. Rather than accept the T3.7.3 implementer's own baseline-reproduction claim at face value, I independently re-verified it with a proper controlled A/B: built two disposable git worktrees (never touching this working tree), ran the test 3x at eeed8b5 (T3.7.3) and 3x at its immediate parent a621cf2, with `console.error` tracing added to `BatchAccumulator.runFlush()` (in the disposable worktrees only, discarded after). Result: BOTH commits fail at a comparable rate (a621cf2: 1/3 fail; eeed8b5: 2/3 fail — too close with this sample size to call a regression). The trace evidence explains why: this test pushes 300 events at `WORKER_CONCURRENCY=300` (uncapped), and all 10 batches of 30 both START and RESOLVE within ~150ms of the push beginning, at BOTH commits identically — the entire real pipeline drains before the test's own `docker pause` subprocess (spawn + IPC round trip, per this file's own header) reliably takes effect. The test's PASS/FAIL is a genuine race between docker-pause latency and pipeline-drain speed, present before T3.7.3 and unrelated to which flush callback shape `buildProductionFlush` returns. Confirmed pre-existing, confirmed not a regression, with actual trace data rather than a single anecdotal run either way.
+
+---
+
+## T4.1.1 · `11a4f74` · 2026-08-01T14:16:29-03:00
+
+**Outcome:** done · verify passed: `pnpm test events-classified.test.ts` (10/10, later 11/11 after T4.1.2)
+**Findings surviving triage:** none blocking. Rule order, why strings, and enumerated columns match spec §7.1 exactly; verified by reading the SQL file directly.
+**Deviation from plan:** implementer also fixed `packages/core/src/db/sql-migrate-down.test.ts` and `packages/core/src/db/migrate-down.test.ts` (both pre-existing, outside the task's file list). Adding the view made `DROP TABLE events` fail via FK/view dependency during down-migration tests, and shifted which migration `migrateDown()` picks as "newest with a .down.sql pair" from 002 to 006. Both fixes were necessary consequences of landing 006, not scope creep; re-ran both files myself and confirmed 13/13 pass.
+**Handed back to:** n/a (implementer: agent a4baea60289b3f2a5, tdd-guide)
+
+---
+
+## T4.2.1 · `11a4f74` · 2026-08-01T14:16:29-03:00
+
+**Outcome:** done · verify passed: `pnpm test no-raw-events.test.ts` (16/16)
+**Findings surviving triage:** none. Implementer found the actual worker batch-insert path is `packages/core/src/db/events.ts` (not `apps/worker/src/batch/batch-insert.ts` as the task text's example guessed) and the replay path is `apps/worker/src/cli/replay-driver.ts` (not `packages/core/src/replay/`). Confirmed both by grep before writing the allowlist. Current tree is clean — no violations found outside the three allowed paths.
+**Deviation from plan:** none of substance; allowlist paths corrected from the task's illustrative examples to the real file paths, which the task text itself anticipated might not match ("packages/core/migrations/sql/... the worker's batch insert (T3.3.2)... the replay insert path (T3.6.2)" — names, not literal paths).
+**Handed back to:** n/a (implementer: agent a317d92d3b4e61a6a, tdd-guide; resumed after a transient API disconnect, work verified intact on resume)
+
+---
+
+## T4.2.2 · `76fc0b2` · 2026-08-01T16:27:01-03:00
+
+**Outcome:** done · verify passed: `pnpm test roles.test.ts` (4/4), plus follow-up fix `pnpm test sql-migrate-down.test.ts` (9/9)
+**Findings surviving triage:** security-reviewer found the grant/role shape clean (no CRITICAL/HIGH) — password correctly deferred out-of-band, grant scope exactly matches the 9 CRUD tables, no privilege on `events`/`_posta_sql_migrations`, down-migration symmetric. One MEDIUM: 007's down-migration had no test coverage. Fixed in commit dd6ae67 (`fix: cover the posta_app down-migration and its GRANT-skip gap on re-apply`), which also surfaced and documents a real, separate structural gap (see below).
+**Deviation from plan:** none in the original task; the follow-up fix commit is outside T4.2.2's original file list (touches `packages/core/src/db/sql-migrate-down.test.ts`) but is a direct consequence of the review finding.
+**Migration-runner gap found while writing the down-migration test (needs a decision, not fixed here):** `runSqlMigrations` tracks "applied" per-file by checksum in `_posta_sql_migrations`. If `006_events_classified.sql` is ever downed-then-reapplied on its own (dropping and recreating the view as a new object), `007_roles_reader.sql`'s own tracking row is untouched — `runSqlMigrations` sees 007 as "already applied" (checksum unchanged) and skips re-running its GRANT, leaving the freshly recreated view with NO privilege for `posta_app` at all. This is the same class of gap `004_default_partition.sql`/`events` already documents elsewhere in this file (a table/view getting recreated without its dependent migrations re-running). Not exploitable in the normal deploy path (migrations only ever run forward in production; the down path is a dev/rollback tool), but worth a decision: either (a) accept it as a known dev-tooling limitation of the current down-migration runner (single-step revert was never meant to be composed arbitrarily), or (b) add a "re-run any migration whose dependencies were reverted" tracking rule to the migration runner itself. Recommend escalating to plan-refine as a possible new task under S1.5 (migration runner) or S4.2 (roles) rather than silently deciding here.
+**Handed back to:** n/a (implementer: agent a10547cb15914bb60, tdd-guide; fix verified directly by orchestrator)
+
+---
+
+## T4.2.3 · `76fc0b2` · 2026-08-01T16:27:01-03:00
+
+**Outcome:** done · verify passed: `pnpm test roles.test.ts` (9/9), `pnpm test migrate-down.test.ts` (14/14)
+**Findings surviving triage:** none blocking. Worker role grants exactly INSERT+SELECT on raw `events`, nothing on CRUD tables or events_classified/asn_datacenter. Regression check confirms posta_app (T4.2.2) still cannot insert into events.
+**Deviation from plan:** implementer also updated `packages/core/src/db/migrate-down.test.ts` (shifted "newest revertible migration" assertions from 007 to 008) — same pre-established pattern as T4.1.1/T4.2.2's own knock-on fixes, not scope creep.
+**Handed back to:** n/a
+
+---
+
+## T4.1.5 · `76fc0b2` · 2026-08-01T16:27:01-03:00
+
+**Outcome:** done · verify passed: `pnpm test view-pruning.test.ts` (5/5)
+**Findings surviving triage:** initial attempt (interrupted mid-work by a transient connection error) had two latent bugs, both fixed by the follow-up dispatch: (1) test asserted a hardcoded index name that only exists on the parent table's catalog entry — Postgres generates a distinct per-partition index name; fixed by resolving the real child index name via pg_inherits/pg_index/pg_class at runtime. (2) only 5 seeded rows gave the planner no cost incentive to prefer the 3-column (tenant_id, link_id, occurred_at) index over a cheaper 2-column one; fixed by seeding 300 decoy rows + ANALYZE.
+**Deviation from plan:** none of substance — fixes were corrections to the test's own setup, not scope changes.
+**Handed back to:** n/a
+
+---
+
+## T4.3.1 · `76fc0b2` · 2026-08-01T16:27:01-03:00
+
+**Outcome:** done · verify passed: `pnpm test --project core analytics/base.test.ts` (16/16), `pnpm typecheck:tests` clean
+**Findings surviving triage:** none. resolveRange('todo', ...) correctly returns a closed interval anchored at linkCreatedAt (never open/-infinity). humansOnlyPredicate defaults to classification='humano' unless includeNonHumans:true. tenantId required at type level, proven via @ts-expect-error under pnpm typecheck:tests.
+**Deviation from plan:** none.
+**Handed back to:** n/a
+
+---
+
+## T4.4.2 · `76fc0b2` · 2026-08-01T16:27:01-03:00
+
+**Outcome:** done · verify passed: `pnpm test corpus/golden.test.ts` (3/3), typecheck clean
+**Findings surviving triage:** none. Runner batches all mismatches instead of fail-fast (matches the plan's "readable in under a minute" acceptance bar). Deletes-then-reinserts each fixture's event row to avoid stale duplicates across replays since occurred_at=now() defeats the ON CONFLICT idempotency key on repeat runs.
+**Deviation from plan:** first attempt was cut off mid-work by a transient connection error before writing any file; re-dispatched fresh and completed cleanly.
+**Handed back to:** n/a

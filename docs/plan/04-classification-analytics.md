@@ -27,7 +27,7 @@
 
 **Tasks:**
 
-#### T4.1.1 · `feat: add events_classified view with classification and why` [INV-5]
+#### T4.1.1 · `feat: add events_classified view with classification and why` [INV-5] ✅ done (`c2ebcbd`)
 `CREATE VIEW events_classified AS SELECT <every events column, enumerated>, <classification CASE>, <why CASE> FROM events e LEFT JOIN asn_datacenter d ON d.asn = e.asn`. **Two parallel `CASE`s over the same predicates in the same order** — one returning the verdict, one the user-facing Spanish reason — because that is what makes the recibos stream free from this same view and keeps a rule change and its explanation impossible to desync.
 
 Rule order per spec §7.1: (1) `sec_purpose`/`purpose`/`x_purpose`/`x_moz` declaring `prefetch`/`preview` → `prefetch`; (2) UA matching the twelve known unfurlers → `unfurler`; (3) `http_method = 'HEAD'` → `unfurler`; (4) UA self-declaring automation → `bot`; (5) UA null or empty → `bot`; (6) `d.asn IS NOT NULL AND sec_ch_ua IS NULL` → `bot`; (7) no `accept_language` and no `sec_fetch_site` and no `sec_ch_ua` → `bot`; (8) else `humano`. `why` strings follow POSTA.md §6 — lowercase, direct, rioplatense: `preview de link · Purpose: prefetch`, `user-agent 'facebookexternalhit'`, `método HEAD`, `sin user-agent`, `ASN 16509 (Amazon) sin fingerprint de browser` (from `d.asn`/`d.name`), `sin accept-language ni fetch metadata`, `humano`.
@@ -37,23 +37,23 @@ Columns are enumerated rather than `e.*` because Postgres freezes a `*` at `CREA
 
 > The view ships whole in one commit rather than as verdict-then-reason. A view cannot gain a column without restating its body, so splitting it would mean editing an already-applied migration file — and "never edit an applied migration" (T1.5.6) is not a rule worth bending on the very first view.
 
-#### T4.1.2 · `test: assert every rule returns a distinct Spanish why`
+#### T4.1.2 · `test: assert every rule returns a distinct Spanish why` ✅ done (`e81a6f2`)
 Pure test, no migration change. Seeds one row per rule and asserts the `why` text exactly: `python-requests/2.31` → `user-agent 'python-requests'`, a `HEAD` request → `método HEAD`, a datacenter ASN → the `ASN <n> (<name>)` form built from the join. Asserts all eight `why` values are non-null and mutually distinct, so no two rules can collapse into the same explanation and leave a receipt that says nothing.
 → **files** `packages/core/src/analytics/events-classified.test.ts` · **verify** `pnpm test events-classified.test.ts` · **after** T4.1.1
 
-#### T4.1.3 · `feat: type events_classified as a read-only Drizzle model`
+#### T4.1.3 · `feat: type events_classified as a read-only Drizzle model` ✅ done (`4526c7f`)
 A `pgView('events_classified', { ... }).existing()` mirroring the view's columns plus `classification` and `why` as a union-typed text column, exported as `ClassifiedEventRow`. `.existing()` is what stops drizzle-kit from ever emitting DDL for it; the file is also excluded from the `drizzle.config.ts` schema glob for the same reason `events` is (T1.2.4). Every analytics query in S4.3 selects through this model.
 → **files** `packages/core/src/schema/events-classified.ts` · `packages/core/drizzle.config.ts` · `packages/core/src/schema/events-classified-types.test.ts` · **verify** `pnpm test events-classified-types.test.ts` asserts the Drizzle column set equals `information_schema.columns` for `events_classified` in both directions, and `pnpm db:generate` emits no new migration · **after** T4.1.2
 
-#### T4.1.4 · `test: adding a datacenter ASN reclassifies history with no rewrite` [INV-5]
+#### T4.1.4 · `test: adding a datacenter ASN reclassifies history with no rewrite` [INV-5] ✅ done (`15cfcf5`)
 Inserts an event from an ASN absent from `asn_datacenter`, asserts it reads `humano`, then `INSERT`s that ASN into `asn_datacenter` and asserts the **same, untouched row** now reads `bot` with `why` naming the ASN and its operator. This is the single test that proves the read-time-view thesis: the verdict changed, no event row was written.
 → **files** `packages/core/src/analytics/asn-reclassification.test.ts` · **verify** `pnpm test asn-reclassification.test.ts` asserts the verdict flips and that `xmin` on the event row is unchanged across the flip · **after** T4.1.2, T1.4.3
 
-#### T4.1.5 · `test: the view preserves partition pruning`
+#### T4.1.5 · `test: the view preserves partition pruning` ✅ done (`550f0a7`)
 `EXPLAIN (FORMAT JSON)` of a tenant + link + one-month `occurred_at` range query against `events_classified`, asserting the plan touches exactly the matching monthly partitions, uses the `(tenant_id, link_id, occurred_at DESC)` index from T1.2.3, and never appears as a materialised subquery. A view that blocks pruning turns every dashboard query into a full-history scan, and the failure is invisible until the table is large.
 → **files** `packages/core/src/analytics/view-pruning.test.ts` · **verify** `pnpm test view-pruning.test.ts` creates three monthly partitions, queries one month, and asserts exactly one partition relation and one Index Scan node in the plan · **after** T4.1.3
 
-#### T4.1.6 · `test: every raw events column passes through the view`
+#### T4.1.6 · `test: every raw events column passes through the view` ✅ done (`3261bc4`)
 Asserts `information_schema.columns` for `events_classified` equals the `events` column set plus exactly `classification` and `why`. Guards the enumerated column list in T4.1.1 against drift — a signal column added to `events` without being added to the view would be captured, stored, and then unqueryable, which reads as "the signal does nothing".
 → **files** `packages/core/src/analytics/view-column-parity.test.ts` · **verify** `pnpm test view-column-parity.test.ts` passes on the real schema and fails naming the column when the test adds `ALTER TABLE events ADD COLUMN sec_ch_ua_arch text` in a throwaway transaction · **after** T4.1.2
 
@@ -73,15 +73,15 @@ Asserts `information_schema.columns` for `events_classified` equals the `events`
 
 **Tasks:**
 
-#### T4.2.1 · `test: forbid FROM events outside the view, the writer and replay` [INV-5]
+#### T4.2.1 · `test: forbid FROM events outside the view, the writer and replay` [INV-5] ✅ done (`a0036d2`)
 Scans `apps/**/*.ts` and `packages/core/src/**/*.ts` for `from(events)`, `FROM events`, and `INTO events`, allowing exactly three paths: `packages/core/migrations/sql/`, the worker's batch insert (T3.3.2), and the replay insert path (T3.6.2). Fails naming file and line. Advice, not enforcement — T4.2.2 is the wall — but it fails in the pull request instead of in production.
 → **files** `packages/core/src/analytics/no-raw-events.test.ts` · **verify** `pnpm test no-raw-events.test.ts` passes on the current tree and fails with `file:line` when run against an inline fixture containing `db.select().from(events)` · **after** T4.1.1
 
-#### T4.2.2 · `feat: reader role with SELECT on events_classified only` [security]
+#### T4.2.2 · `feat: reader role with SELECT on events_classified only` [security] ✅ done (`bf62638`)
 `007_roles_reader.sql` creates the `posta_app` role, grants it `SELECT` on `events_classified` and full CRUD on the normal tables, and issues no grant whatsoever on `events`. This works because Postgres checks a view's base-table access as the **view owner**, not the caller — so `posta_app` reads the classified view fine and gets `42501` the moment anything reaches past it. That asymmetry is the entire control.
 → **files** `packages/core/migrations/sql/007_roles_reader.sql` · `packages/core/migrations/sql/007_roles_reader.down.sql` · `packages/core/src/db/roles.test.ts` · **verify** `pnpm test roles.test.ts` asserts `has_table_privilege('posta_app','events','SELECT')` is false, `has_table_privilege('posta_app','events_classified','SELECT')` is true, and that a session as `posta_app` running `SELECT * FROM events` raises SQLSTATE `42501` · **after** T4.1.2
 
-#### T4.2.3 · `feat: writer role for the worker and replay`
+#### T4.2.3 · `feat: writer role for the worker and replay` ✅ done (`2735cfb`)
 `008_roles_writer.sql` creates `posta_worker` with `INSERT` and `SELECT` on `events` (replay's reconciliation report in T3.6.4 has to count rows) and no privileges on the CRUD tables it has no business touching. Two roles rather than one is what lets the reader role be genuinely powerless over raw events without breaking the pipeline.
 → **files** `packages/core/migrations/sql/008_roles_writer.sql` · `packages/core/migrations/sql/008_roles_writer.down.sql` · `packages/core/src/db/roles.test.ts` · **verify** `pnpm test roles.test.ts` asserts `posta_worker` can insert into `events` and cannot `UPDATE links`, and that `posta_app` cannot insert into `events` · **after** T4.2.2
 
@@ -116,7 +116,7 @@ Runbook covering the two roles, what each may touch, the view-owner mechanism th
 
 **Tasks:**
 
-#### T4.3.1 · `feat: analytics query primitives — range, tenant scope, humans-only default` [INV-9][INV-10]
+#### T4.3.1 · `feat: analytics query primitives — range, tenant scope, humans-only default` [INV-9][INV-10] ✅ done (`0ca3051`)
 The seam every query in this story is built on: `AnalyticsRange = '7d' | '30d' | 'todo'`, `resolveRange()` returning explicit `timestamptz` bounds (`todo` resolves to the link's `created_at`, never an open lower bound, because an unbounded range prunes to every partition), a `humansOnly` predicate applied unless the caller passes `includeNonHumans: true`, mandatory `tenantId`, and `MAX_ROWS` / `MAX_PAGE_SIZE` constants so no query ships without a `LIMIT`. Making the default structural here is what stops [INV-10] from being seven separate places to get it wrong.
 → **files** `packages/core/src/analytics/base.ts` · `packages/core/src/analytics/base.test.ts` · **verify** `pnpm test analytics/base.test.ts` asserts `resolveRange('todo', link)` returns a closed interval starting at `created_at`, that omitting `includeNonHumans` emits `classification = 'humano'` in `.toSQL()`, and that `tenantId` is not optional at the type level · **after** T4.1.3
 
@@ -177,11 +177,11 @@ Enumerates the exported metric functions in `packages/core/src/analytics/` and a
 
 **Tasks:**
 
-#### T4.4.1 · `feat: corpus fixture format and Zod-validated loader`
+#### T4.4.1 · `feat: corpus fixture format and Zod-validated loader` ✅ done (`e8b1387`)
 The fixture shape — `{ id, signals: <every §5.1 capture column>, expect: { classification, why }, provenance, note? }` — and a loader that reads every `corpus/*.json`, validates against a Zod schema, and fails on a duplicate `id` or a missing `provenance`. `provenance` is **required**, not optional: a fixture nobody can trace back to a real request is a guess with a test around it.
 → **files** `packages/core/src/classification/corpus/schema.ts` · `packages/core/src/classification/corpus/load.ts` · `packages/core/src/classification/corpus/load.test.ts` · **verify** `pnpm test corpus/load.test.ts` asserts a fixture without `provenance` is rejected naming the id, that duplicate ids are rejected, and that an unknown `classification` value is rejected · **after** T4.1.2
 
-#### T4.4.2 · `test: golden runner replaying the corpus through the view`
+#### T4.4.2 · `test: golden runner replaying the corpus through the view` ✅ done (`76fc0b2`)
 Inserts every fixture as an `events` row into the testcontainer, reads them back from `events_classified`, and diffs both `classification` **and** `why`. A failure prints the fixture id, its UA and the headers that mattered, expected versus actual for both columns, and the rule number that actually fired — so a regression is a two-line read, not an afternoon. This is the test that makes "improving a rule" falsifiable; it runs on every view change because it queries the view.
 → **files** `packages/core/src/classification/corpus/golden.test.ts` · **verify** `pnpm test corpus/golden.test.ts` passes on the seeded corpus and, when a fixture's expectation is deliberately flipped, fails with the id, the rule number, and both expected/actual pairs · **after** T4.4.1, T1.1.2
 
