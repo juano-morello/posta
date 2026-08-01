@@ -10,12 +10,18 @@ import { runSqlMigrations } from './sql-migrate';
 // this suite proves the database itself refuses the raw table to that
 // role, against a real testcontainers Postgres, never a mock.
 //
-// This file is deliberately scoped to T4.2.2 only (posta_app's own
-// grant/no-grant shape). A later task (T4.2.3) extends this same suite —
-// keep additions here, don't fork a second roles file.
+// T4.2.3 extends this same suite with posta_worker
+// (packages/core/migrations/sql/008_roles_writer.sql) — the mirror-image
+// role: INSERT + SELECT on raw `events` (the batch flush and replay's
+// reconciliation row-count), nothing on the CRUD tables or the
+// classified view. Both roles share one file/one container on purpose —
+// a regression in one role's grants (e.g. posta_app accidentally gaining
+// INSERT on `events`) is exactly the kind of thing that should fail here,
+// next to the role it would silently widen past.
 const CONTAINER_TEST_TIMEOUT_MS = 120_000;
 const MIGRATIONS_DIR = path.join(__dirname, '..', '..', 'migrations', 'sql');
 const READER_ROLE = 'posta_app';
+const WRITER_ROLE = 'posta_worker';
 const INSUFFICIENT_PRIVILEGE = '42501';
 
 interface HasPrivilegeRow {
@@ -86,6 +92,95 @@ describe('posta_app reader role (T4.2.2)', () => {
       const result = await client.query('SELECT * FROM events_classified LIMIT 1');
 
       expect(result.rows).toEqual([]);
+    });
+
+    // T4.2.3 regression check — 008_roles_writer.sql grants posta_worker
+    // INSERT on `events`; this proves that grant landed on posta_worker
+    // only and did not somehow widen posta_app's own grants alongside it.
+    it('INSERT INTO events throws SQLSTATE 42501 (insufficient_privilege) — regression check (T4.2.3)', async () => {
+      await expect(
+        client.query(
+          `INSERT INTO events (event_id, occurred_at, tenant_id, link_id, slug)
+           VALUES ($1, now(), $2, $3, $4)`,
+          ['evt-reader-regression-t423', 'tenant-reader-regression', 'link-reader-regression', 'slug-reader-regression'],
+        ),
+      ).rejects.toMatchObject({ code: INSUFFICIENT_PRIVILEGE });
+    });
+  });
+});
+
+// T4.2.3 — posta_worker (packages/core/migrations/sql/008_roles_writer.sql):
+// the mirror-image role to posta_app above. INSERT + SELECT on raw
+// `events` (the batch flush and replay's reconciliation row-count), NO
+// grant on any CRUD table — the worker has no business touching `links`
+// et al. Own container/describe block, same reasoning as the reader
+// suite above: each role gets its own fully-migrated database rather than
+// sharing state across describe blocks.
+describe('posta_worker writer role (T4.2.3)', () => {
+  let handle: PgContainerHandle;
+
+  beforeAll(async () => {
+    handle = await startPgContainer();
+    await runSqlMigrations(handle.pool, { migrationsDir: MIGRATIONS_DIR });
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await handle.stop();
+  }, CONTAINER_TEST_TIMEOUT_MS);
+
+  it('HAS INSERT privilege on the raw events table', async () => {
+    const result = await handle.pool.query<HasPrivilegeRow>(
+      `SELECT has_table_privilege('${WRITER_ROLE}', 'events', 'INSERT') AS has_privilege`,
+    );
+
+    expect(result.rows[0]?.has_privilege).toBe(true);
+  });
+
+  it('has NO UPDATE privilege on links (CRUD tables are off-limits)', async () => {
+    const result = await handle.pool.query<HasPrivilegeRow>(
+      `SELECT has_table_privilege('${WRITER_ROLE}', 'links', 'UPDATE') AS has_privilege`,
+    );
+
+    expect(result.rows[0]?.has_privilege).toBe(false);
+  });
+
+  // Same dedicated-client-plus-per-test-transaction reasoning as the
+  // posta_app block above: SET ROLE is session-level, and the UPDATE
+  // test below deliberately errors, which would otherwise poison a
+  // shared transaction for every later query in it.
+  describe('querying as posta_worker (SET ROLE within a transaction)', () => {
+    let client: PoolClient;
+
+    beforeEach(async () => {
+      client = await handle.pool.connect();
+      await client.query('BEGIN');
+      await client.query(`SET ROLE ${WRITER_ROLE}`);
+    });
+
+    afterEach(async () => {
+      await client.query('ROLLBACK');
+      client.release();
+    });
+
+    it('INSERT INTO events succeeds', async () => {
+      await client.query(
+        `INSERT INTO events (event_id, occurred_at, tenant_id, link_id, slug)
+         VALUES ($1, now(), $2, $3, $4)`,
+        ['evt-writer-role-t423', 'tenant-writer-role', 'link-writer-role', 'slug-writer-role'],
+      );
+
+      const result = await client.query('SELECT event_id FROM events WHERE event_id = $1', [
+        'evt-writer-role-t423',
+      ]);
+      expect(result.rows).toEqual([{ event_id: 'evt-writer-role-t423' }]);
+    });
+
+    it('UPDATE links throws SQLSTATE 42501 (insufficient_privilege)', async () => {
+      await expect(
+        client.query(`UPDATE links SET slug = 'nope' WHERE id = 'nonexistent'`),
+      ).rejects.toMatchObject({
+        code: INSUFFICIENT_PRIVILEGE,
+      });
     });
   });
 });
